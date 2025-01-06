@@ -316,13 +316,19 @@ class RotaryEmbedding(torch.nn.Module):
             return self.freqs_cis[0:seqlen]
 
 class MLPRotaryEmbedding(torch.nn.Module):
-    def __init__(self, head_dim: int, n_heads: int, middle_dim: int, max_seqlen: int = 1024, theta: float = 10000.0):
+    def __init__(self, head_dim: int, n_heads: int, middle_dim: int, max_seqlen: int = 1024, theta: float = 10000.0, nonlinearity: str = "gelu"):
         super().__init__()
         self.head_dim = head_dim
         self.n_heads = n_heads
         self.dim = head_dim * n_heads
         self.max_seqlen = max_seqlen
         self.theta = theta
+        nonlinearities = dict(
+            relu=torch.nn.ReLU(),
+            gelu=torch.nn.GELU(),
+            silu=torch.nn.SiLU(),
+        )
+        self.nonlinearity = nonlinearities[nonlinearity]
         n_freqs = head_dim // 2
         assert n_freqs * 2 == head_dim, "head_dim must be divisible by 2"
 
@@ -384,8 +390,8 @@ class MLPRotaryEmbedding(torch.nn.Module):
         # q_emb = self.q2(self.q1(embs))
         # k_emb = self.k2(self.k1(embs))
 
-        q_emb = self.q2(self.q1(embs)) + embs
-        k_emb = self.k2(self.k1(embs)) + embs
+        q_emb = self.q2(self.nonlinearity(self.q1(embs))) + embs
+        k_emb = self.k2(self.nonlinearity(self.k1(embs))) + embs
 
         q_emb = q_emb.view(L, self.n_heads, nfreqs // self.n_heads, 2).repeat(1, 1, 1, 1)
         k_emb = k_emb.view(L, self.n_heads, nfreqs // self.n_heads, 2).repeat(1, 1, 1, 1)
@@ -649,7 +655,6 @@ class TransformerBlock(nn.Module):
                 middle_dim=128,
                 max_seqlen=args.max_seqlen,
                 theta=args.rope_theta,
-                rope_inv_freq_learnable=args.rope_inv_freq_learnable,
             )
 
         self.attention = Attention(
