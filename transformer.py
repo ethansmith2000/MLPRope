@@ -1,768 +1,616 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-
-from dataclasses import dataclass
-from enum import Enum
-from typing import Optional, Union, Tuple
+import math
+from typing import Literal
 
 import torch
-from torch import nn
-from torch.nn import functional as F
-
-#from xformers.ops import fmha, AttentionBias
+import torch.nn.functional as F
 from torch.nn.attention.flex_attention import (
     BlockMask,
+    create_block_mask,
     flex_attention,
-    _mask_mod_signature,
 )
 
-AttentionBias = None
-flex_attention_comp = torch.compile(flex_attention)
 
-#### adapted from additiverope by https://github.com/cccntu/lingua/tree/addrope
+PositionVariant = Literal[
+    "rope",
+    "add_rope",
+    "linear",
+    "low_rank",
+    "mlp_rope",
+    "inkling_table",
+    "inkling_cosnet",
+]
+AttentionImpl = Literal["sdpa", "flex"]
 
-
-class InitStdFactor(Enum):
-    DISABLED = "disabled"  # Init std is divided by 1.0
-    GLOBAL_DEPTH = "global_depth"  # Init std is divided by sqrt(2*n_layers)
-    CURRENT_DEPTH = "current_depth"  # Init std is divided by sqrt(2*depth)
-    DIM_RATIO = "dim_ratio"  # Init std is divided by model_dim/4096
-
-
-@dataclass
-class BaseTransformerArgs:
-    dim: int = 512
-    n_layers: int = 8
-    head_dim: Optional[int] = None
-    n_heads: Optional[int] = None
-    n_kv_heads: Optional[int] = None
-
-    ffn_dim_multiplier: Optional[float] = None
-
-    multiple_of: int = 256
-
-    norm_eps: float = 1e-5
-
-    rope_theta: float = 10000.0
-
-    init_base_std: Optional[float] = None
-    init_std_factor: str = "disabled"
-    rope_type: str = "original" # can be additive
-    rope_inv_freq_learnable: bool = False
-
-    max_seqlen: int = 1024
+POSITION_ONLY_VARIANTS = {"add_rope", "linear", "low_rank", "mlp_rope"}
+CONTENT_CONDITIONED_VARIANTS = {"inkling_table", "inkling_cosnet"}
+POSITION_VARIANTS = {"rope"} | POSITION_ONLY_VARIANTS | CONTENT_CONDITIONED_VARIANTS
 
 
-def cross_entropy(pred, target, **kwargs):
-    return F.nll_loss(
-        F.log_softmax(pred.flatten(end_dim=-2).float(), -1),
-        target.flatten(end_dim=-1),
-        **kwargs,
-    )
+def causal_mask(batch_idx, head_idx, query_idx, key_value_idx):
+    del batch_idx, head_idx
+    return query_idx >= key_value_idx
 
 
-def repeat_kv(x: torch.Tensor, n_rep: int, dim: int) -> torch.Tensor:
-    """torch.repeat_interleave(x, dim=2, repeats=n_rep)"""
-    assert dim == 2, "Only dim=2 is supported. Check the implementation for other dims."
-    bs, slen, n_kv_heads, head_dim = x.shape
-    if n_rep == 1:
-        return x
-    return (
-        x[:, :, :, None, :]
-        .expand(bs, slen, n_kv_heads, n_rep, head_dim)
-        .reshape(bs, slen, n_kv_heads * n_rep, head_dim)
-    )
+def sinusoidal_basis(
+    extent: int,
+    feature_dim: int,
+    theta: float,
+) -> torch.Tensor:
+    """Return interleaved cosine/sine features for non-negative distances."""
+    if feature_dim % 2 != 0:
+        raise ValueError("Position-bias feature_dim must be even.")
+    half = feature_dim // 2
+    frequencies = torch.arange(half, dtype=torch.float32)
+    inverse_frequencies = 1.0 / (theta ** (frequencies / half))
+    distances = torch.arange(extent, dtype=torch.float32)
+    angles = torch.outer(distances, inverse_frequencies)
+    return torch.stack((angles.cos(), angles.sin()), dim=-1).flatten(-2)
 
 
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0):
-    """
-    Precompute the frequency tensor for complex exponentials (cis) with given dimensions.
+class PositionBias(torch.nn.Module):
+    """Base interface for position-only per-head relative-bias curves."""
 
-    This function calculates a frequency tensor with complex exponentials using the given dimension 'dim'
-    and the end index 'end'. The 'theta' parameter scales the frequencies.
-    The returned tensor contains complex values in complex64 data type.
-
-    Args:
-        dim (int): Dimension of the frequency tensor.
-        end (int): End index for precomputing frequencies.
-        theta (float, optional): Scaling factor for frequency computation. Defaults to 10000.0.
-
-    Returns:
-        torch.Tensor: Precomputed frequency tensor with complex exponentials.
-    """
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-    t = torch.arange(end, device=freqs.device)
-    freqs = torch.outer(t, freqs).float()
-
-    cos, sin = freqs.cos(), freqs.sin()
-
-    return torch.stack((cos, -sin, sin, cos), dim=-1).view(*freqs.size(), 2, 2)
-
-
-def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor, seq_dim: int, add_rope=False):
-    """
-    Reshape frequency tensor for broadcasting it with another tensor.
-
-    This function reshapes the frequency tensor to have the same shape as the target tensor 'x'
-    for the purpose of broadcasting the frequency tensor during element-wise operations.
-
-    Args:
-        freqs_cis (torch.Tensor): Frequency tensor to be reshaped.
-        x (torch.Tensor): Target tensor for broadcasting compatibility.
-        seq_dim (int): Sequence dimension index.
-
-    Returns:
-        torch.Tensor: Reshaped frequency tensor.
-    """
-    ndim = x.ndim
-    assert 0 <= seq_dim < ndim
-    if not add_rope:
-        assert freqs_cis.shape == (
-            x.shape[seq_dim],
-            x.shape[-3],
-            2,
-            2,
-        ), f"freqs_cis vs x: {(freqs_cis.shape, x.shape)}"
-        shape = [
-            d if i == seq_dim or i == ndim - 3 else 1 for i, d in enumerate(x.shape[:-2])
-        ] + [2, 2]
-    else:
-        assert freqs_cis.shape == (
-            x.shape[seq_dim],
-            x.shape[-3],
-            x.shape[-2],
-            2,
-        ), f"freqs_cis vs x: {(freqs_cis.shape, x.shape)}"
-        #shape = [
-        #    d if i == seq_dim or i == ndim - 3 else 1 for i, d in enumerate(x.shape[:-1])
-        #] + [2]
-        # impl note:
-        # original rope is same across head
-        # additive rope is different for each head and both q and k
-
-    return freqs_cis.view(*x.shape[1:])
-
-
-def apply_rotary_emb(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    seq_dim: int,
-    freqs_cis: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    # xq & xk: bsz, seq_len, self.n_heads, self.head_dim
-    xq_ = xq.reshape(*xq.shape[:-1], -1, 1, 2)  # B S H D -> B S H D/2 1 2
-    xk_ = xk.reshape(*xk.shape[:-1], -1, 1, 2)  # B S H D -> B S H D/2 1 2
-    freqs_cis = reshape_for_broadcast(
-        freqs_cis, xq_, seq_dim
-    ).float()  # S D/2 2 2 -> 1 S 1 D/2 2 2
-
-    # impl note:
-    #return torch.stack((cos, -sin, sin, cos), dim=-1).view(
-        #pos.shape[0], self.n_heads, self.head_dim//2, 2, 2
-    #)
-    # outupt =
-    # cos x - sin y
-    # sin x + cos y
-    xq_out = (xq_ * freqs_cis).sum(5).flatten(3)
-    xk_out = (xk_ * freqs_cis).sum(5).flatten(3)
-    return xq_out.type_as(xq), xk_out.type_as(xk)
-
-
-def apply_additive_rotary_emb(
-    xq: torch.Tensor,
-    xk: torch.Tensor,
-    seq_dim: int,
-    freqs_cis: Tuple[torch.Tensor],
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    # xq & xk: bsz, seq_len, self.n_heads, self.head_dim
-    # freqs_cis:
-    # torch.stack((cos, sin), dim=-1).view(
-    #        pos.shape[0], self.n_heads, self.head_dim//2, 2
-    #    )
-    xq_ = xq.reshape(*xq.shape[:-1], -1, 2)  # B S H D -> B S H D/2 2
-    xk_ = xk.reshape(*xk.shape[:-1], -1, 2)  # B S H D -> B S H D/2 2
-
-    q_emb, k_emb = freqs_cis
-    assert q_emb.dtype == torch.float32, "q_emb should be float32"
-    assert k_emb.dtype == torch.float32, "k_emb should be float32"
-    q_emb = reshape_for_broadcast(q_emb, xq_, seq_dim, add_rope=True)
-    k_emb = reshape_for_broadcast(k_emb, xk_, seq_dim, add_rope=True)
-
-    # Additive version instead of multiplicative
-    xq_out = (xq_ + q_emb).flatten(3)
-    xk_out = (xk_ + k_emb).flatten(3)
-
-    return xq_out.type_as(xq), xk_out.type_as(xk)
-
-
-def causal_mask(b, h, q_idx, kv_idx):
-    return q_idx >= kv_idx
-
-
-def lengths_to_start_ids(lengths):
-    doc_start = lengths.cumsum(0)
-    doc_start = doc_start.roll(1)
-    doc_start[0] = 0
-    return doc_start
-
-
-def lengths_to_local_ids(lengths):
-    assert lengths.ndim == 1
-    nb_seqs = lengths.size(0)
-    total_seqlen = lengths.sum()
-    # This gives the document id of each token
-    doc_id = torch.repeat_interleave(lengths)
-    # Compute document start for each document
-    doc_start = lengths_to_start_ids(lengths)
-    # Compute document start for each token
-    doc_start = doc_start[doc_id]
-    # Compute the position of each token within each document
-    tok_id = torch.arange(total_seqlen, device=lengths.device) - doc_start
-
-    return doc_id, tok_id
-
-
-def generate_doc_mask_mod(
-    mask_mod: _mask_mod_signature,
-    lengths: torch.Tensor,
-    kv_lengths: Optional[torch.Tensor] = None,
-) -> _mask_mod_signature:
-    """Generates mask mods that apply to inputs to flex attention in the sequence stacked
-    format.
-
-    Args:
-        mask_mod: The mask mod to apply to the documents
-        lengths: Lengths of each document
-
-    Note:
-        What is the sequence stacked format? When assembling batches of inputs, we
-        take multiple sequences and stack them together to form 1 large sequence. We then
-        use masking to ensure that the attention scores are only applied to tokens within
-        the same document.
-
-    Example:
-
-    - Square mask
-      doc_mask         lengths
-      a a b b b c c    2 3 2
-    a 1 0 0 0 0 0 0
-    a 1 1 0 0 0 0 0
-    b 0 0 1 0 0 0 0
-    b 0 0 1 1 0 0 0
-    b 0 0 1 1 1 0 0
-    c 0 0 0 0 0 1 0
-    c 0 0 0 0 0 1 1
-
-    """
-    kv_lengths = kv_lengths if kv_lengths is not None else lengths
-    q_document_id, q_token_id = lengths_to_local_ids(lengths)
-    kv_document_id, kv_token_id = lengths_to_local_ids(kv_lengths)
-    q_max_idx = lengths.sum() - 1
-    kv_max_idx = kv_lengths.sum() - 1
-
-    def doc_mask_mod(b, h, q_idx, kv_idx):
-        q_idx_cap = torch.minimum(q_max_idx, q_idx)
-        kv_idx_cap = torch.minimum(kv_max_idx, kv_idx)
-        valid_idx = (q_idx <= q_max_idx) & (kv_idx <= kv_max_idx)
-        same_doc = q_document_id[q_idx_cap] == kv_document_id[kv_idx_cap]
-        q_logical = q_token_id[q_idx_cap]
-        kv_logical = kv_token_id[kv_idx_cap]
-        inner_mask = mask_mod(b, h, q_logical, kv_logical)
-        return same_doc & inner_mask & valid_idx
-
-    return doc_mask_mod
-
-
-# Rotary embedding as in xformer, see if torchtrain implementation is not better. Also might be usefull to make it work with batch*seqlen collapsed.
-class RotaryEmbedding(torch.nn.Module):
-    """
-    RotaryEmbedding Module
-    """
-
-    def __init__(self, theta: float, head_dim: int, max_seqlen: int = 1024):
+    def __init__(
+        self,
+        heads: int,
+        feature_dim: int,
+        rel_extent: int,
+        theta: float,
+    ):
         super().__init__()
-
-        self.theta = theta
-        self.head_dim = head_dim
-        self.max_seqlen = max_seqlen
-
+        self.heads = heads
+        self.feature_dim = feature_dim
+        self.rel_extent = rel_extent
         self.register_buffer(
-            "freqs_cis",
-            precompute_freqs_cis(dim=head_dim, end=max_seqlen, theta=theta),
+            "basis",
+            sinusoidal_basis(rel_extent, feature_dim, theta),
             persistent=False,
         )
 
-    def reset_parameters(self):
-        self.freqs_cis[...] = precompute_freqs_cis(
-            dim=self.head_dim, end=self.max_seqlen, theta=self.theta
+    def _basis(self) -> torch.Tensor:
+        parameter = next(self.parameters())
+        return self.basis.to(dtype=parameter.dtype)
+
+    def reset_output_parameters(self) -> None:
+        raise NotImplementedError
+
+
+class AddRoPEBias(PositionBias):
+    """Per-head affine weighting of the fixed sinusoidal frequency basis."""
+
+    def __init__(self, heads, feature_dim, rel_extent, theta):
+        super().__init__(heads, feature_dim, rel_extent, theta)
+        self.scale = torch.nn.Parameter(torch.zeros(heads, feature_dim))
+        self.offset = torch.nn.Parameter(torch.zeros(heads, feature_dim))
+
+    def forward(self) -> torch.Tensor:
+        basis = self._basis()
+        curves = torch.einsum("rd,hd->hr", basis, self.scale)
+        curves = curves + self.offset.mean(dim=-1, keepdim=True)
+        return curves / math.sqrt(self.feature_dim)
+
+    def reset_output_parameters(self) -> None:
+        torch.nn.init.zeros_(self.scale)
+        torch.nn.init.zeros_(self.offset)
+
+
+class LinearPositionBias(PositionBias):
+    """Per-head full linear transform of the sinusoidal basis."""
+
+    def __init__(self, heads, feature_dim, rel_extent, theta):
+        super().__init__(heads, feature_dim, rel_extent, theta)
+        self.weight = torch.nn.Parameter(
+            torch.empty(heads, feature_dim, feature_dim)
         )
-
-    def forward(
-        self, seqlen: Optional[int] = None, tok_idx: Optional[torch.Tensor] = None
-    ):
-        """
-        Return freqs_cis corresponding to consecutive seqlen positions or the corresponding tok_idx positions
-        Args:
-            seqlen (int): Contiguous sequence length
-            tok_idx (torch.Tensor[int]): Position indices of each token this overrides seqlen
-
-        Returns:
-            Tuple(torch.Tensor, torch.Tensor): Embedded input tensor and freqs_cis
-        """
-        test = (seqlen is not None) or (tok_idx is not None)
-        assert test, "Should provide atleast seqlen or tok_idx"
-        if tok_idx is not None:
-            return self.freqs_cis[tok_idx]
-        elif seqlen is not None:
-            return self.freqs_cis[0:seqlen]
-
-class MLPRotaryEmbedding(torch.nn.Module):
-    def __init__(self, head_dim: int, n_heads: int, middle_dim: int, max_seqlen: int = 1024, theta: float = 10000.0, nonlinearity: str = "gelu"):
-        super().__init__()
-        self.head_dim = head_dim
-        self.n_heads = n_heads
-        self.dim = head_dim * n_heads
-        self.max_seqlen = max_seqlen
-        self.theta = theta
-        nonlinearities = dict(
-            relu=torch.nn.ReLU(),
-            gelu=torch.nn.GELU(),
-            silu=torch.nn.SiLU(),
-        )
-        self.nonlinearity = nonlinearities[nonlinearity]
-        n_freqs = head_dim // 2
-        assert n_freqs * 2 == head_dim, "head_dim must be divisible by 2"
-
-        self.q1 = nn.Linear(head_dim * n_heads, middle_dim, bias=True)
-        self.q2 = nn.Linear(middle_dim, head_dim * n_heads, bias=False)
-        self.k1 = nn.Linear(head_dim * n_heads, middle_dim, bias=True)
-        self.k2 = nn.Linear(middle_dim, head_dim * n_heads, bias=False)
-
-        # self.q1 = nn.Linear(head_dim, middle_dim, bias=True)
-        # self.q2 = nn.Linear(middle_dim, head_dim, bias=False)
-        # self.k1 = nn.Linear(head_dim, middle_dim, bias=True)
-        # self.k2 = nn.Linear(middle_dim, head_dim, bias=False)
-
-        self.register_buffer('inv_freq', self.compute_inv_freq(), persistent=False)
-        assert self.inv_freq.dtype == torch.float32, "inv_freq should be float32"
-        # Precompute inverse frequencies
-
-    def compute_inv_freq(self):
-        inv_freq = 1.0 / (self.theta ** (torch.arange(0, self.dim // 2, dtype=torch.float32) / (self.dim // 2)))
-        return inv_freq
-
-    def forward(self, seqlen: Optional[int] = None, tok_idx: Optional[torch.Tensor] = None):
-        """
-        Compute rotary embeddings for query and key tensors.
-
-        Args:
-            seqlen (Optional[int]): Length of sequence for consecutive positions
-            tok_idx (Optional[torch.Tensor]): Position indices for each token
-
-        Returns:
-            torch.Tensor: Positional embeddings tensor
-        """
-        assert (seqlen is not None) or (tok_idx is not None), "Must provide either seqlen or tok_idx"
-
-        if tok_idx is not None:
-            pos = tok_idx
-            assert torch.all(pos < self.max_seqlen), f"Token indices must be less than max_seqlen ({self.max_seqlen})"
-        else:
-            assert seqlen <= self.max_seqlen, f"seqlen ({seqlen}) must be <= max_seqlen ({self.max_seqlen})"
-            pos = torch.arange(seqlen or self.max_seqlen, device=self.inv_freq.device)
-
-        inv_freq = self.inv_freq
-        L = pos.size(0) # seq_len
-        nfreqs = inv_freq.size(0) # n_freqs
-
-        # [seq_len, 1, 1]
-        pos = pos.view(L, 1, 1)
-        # [1, 1, n_freqs]
-        inv_freq = inv_freq.view(1, 1, nfreqs)
-
-        # [seq_len, 1, n_freqs]
-        x = pos.float() * inv_freq
-
-        sin = x.sin()
-        cos = x.cos()
-
-        embs = torch.stack((cos, sin), dim=-1).view(L, 1, nfreqs * 2)
-
-        # q_emb = self.q2(self.q1(embs))
-        # k_emb = self.k2(self.k1(embs))
-
-        q_emb = self.q2(self.nonlinearity(self.q1(embs))) + embs
-        k_emb = self.k2(self.nonlinearity(self.k1(embs))) + embs
-
-        q_emb = q_emb.view(L, self.n_heads, nfreqs // self.n_heads, 2).repeat(1, 1, 1, 1)
-        k_emb = k_emb.view(L, self.n_heads, nfreqs // self.n_heads, 2).repeat(1, 1, 1, 1)
-
-        return q_emb, k_emb
-
-    def reset_parameters(self):
-        nn.init.zeros_(self.q_phase)
-        nn.init.zeros_(self.k_phase)
-        nn.init.ones_(self.q_weight)
-        nn.init.ones_(self.k_weight)
-        self.inv_freq[...] = self.compute_inv_freq().to(self.inv_freq.device)
-
-class RMSNorm(nn.Module):
-    """
-    Initialize the RMSNorm normalization layer.
-
-    Args:
-        dim (int): The dimension of the input tensor.
-        eps (float, optional): A small value added to the denominator for numerical stability. Default is 1e-6.
-
-    Attributes:
-        eps (float): A small value added to the denominator for numerical stability.
-        weight (nn.Parameter): Learnable scaling parameter.
-
-    """
-
-    def __init__(self, dim: int, eps: float = 1e-6):
-        super().__init__()
-        self.eps = eps
-        self.weight = nn.Parameter(torch.ones(dim))
-
-    def _norm(self, x: torch.Tensor):
-        return x * torch.rsqrt((x * x).mean(-1, keepdim=True) + self.eps)
-
-    def forward(self, x: torch.Tensor):
-        output = self._norm(x.float())
-        return (output * self.weight.float()).type_as(x)
-
-    def reset_parameters(self):
-        torch.nn.init.ones_(self.weight)  # type: ignore
-
-
-class Attention(nn.Module):
-    def __init__(
-        self,
-        dim: int,
-        head_dim: int,
-        n_heads: int,
-        n_kv_heads: int,
-        rope_theta: float,
-        #rope_type: str, rope is defined out of the attention class, but the rotation will be passed in the forward function
-    ):
-        super().__init__()
-
-        self.dim = dim
-        self.head_dim = head_dim
-        self.rope_theta = rope_theta
-
-        self.n_heads = n_heads
-        self.n_kv_heads = n_kv_heads
-        self.heads_per_group = self.n_heads // self.n_kv_heads
-
-        self.wq = nn.Linear(
-            dim,
-            n_heads * head_dim,
-            bias=False,
-        )
-        self.wk = nn.Linear(
-            dim,
-            n_kv_heads * head_dim,
-            bias=False,
-        )
-        self.wv = nn.Linear(
-            dim,
-            n_kv_heads * head_dim,
-            bias=False,
-        )
-
-        self.wo = nn.Linear(
-            n_heads * head_dim,
-            dim,
-            bias=False,
-        )
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        freq_cis: torch.Tensor,
-        tok_idx: Optional[torch.Tensor] = None,
-        mask: Optional[Union[BlockMask, "AttentionBias", str]] = None,
-        attn_impl: str = "sdpa",
-        rope_type: str = "original",
-    ) -> torch.Tensor:
-        # B S D
-        bsz, seq_len, dim = x.shape
-        xq = self.wq(x.view_as(x))
-        xk = self.wk(x.view_as(x))
-        xv = self.wv(x.view_as(x))
-
-        output_shape = xq.shape
-        # B S D -> B S H D
-        xq = xq.view(bsz, seq_len, self.n_heads, self.head_dim)
-        xk = xk.view(bsz, seq_len, self.n_kv_heads, self.head_dim)
-        xv = xv.view(bsz, seq_len, self.n_kv_heads, self.head_dim)
-
-        if rope_type == "original":
-            xq, xk = apply_rotary_emb(xq, xk, 1, freq_cis[0:seq_len])
-        elif rope_type == "additive":
-            # freq_cis is a tuple of (freq_cis, inv_freq_cis)
-            xq, xk = apply_additive_rotary_emb(xq, xk, 1, freq_cis)
-        else:
-            raise ValueError(f"Unsupported rotary type: {rope_type}")
-
-        # This condition helps us be easily compatible
-        # with inference by adding a pluggable KVCache
-        if hasattr(self, "kv_cache"):
-            xk, xv = self.kv_cache.update(xk, xv, tok_idx)
-
-        xk = repeat_kv(xk, self.heads_per_group, dim=2)
-        xv = repeat_kv(xv, self.heads_per_group, dim=2)
-
-        if attn_impl == "flex_attention":
-            assert mask is None or isinstance(mask, BlockMask)
-            xq, xk, xv = map(lambda e: e.transpose(1, 2), (xq, xk, xv))
-            output = flex_attention_comp(xq, xk, xv, block_mask=mask)
-            output = output.transpose(1, 2).contiguous()  # B H S D -> B S H D
-
-        elif attn_impl == "fmha":
-            assert mask is None or isinstance(mask, AttentionBias)
-            output = fmha.memory_efficient_attention(xq, xk, xv, attn_bias=mask)
-            # This uses B S H D instead of B H S D of pytorch
-
-        elif attn_impl == "sdpa":
-            xq, xk, xv = map(lambda e: e.transpose(1, 2), (xq, xk, xv))
-            assert mask is None or isinstance(mask, (str, torch.Tensor))
-            is_causal = (mask == "causal") if isinstance(mask, str) else False
-            mask = mask if isinstance(mask, torch.Tensor) else None
-            output = F.scaled_dot_product_attention(
-                xq,
-                xk,
-                xv,
-                is_causal=is_causal,
-                attn_mask=mask,
-            )
-            output = output.transpose(1, 2).contiguous()  # B H S D -> B S H D
-        else:
-            raise NotImplementedError(
-                f"Attention implementation {attn_impl} not supported"
-            )
-
-        output = self.wo(output.reshape(output_shape))
-
-        return output
-
-    def reset_parameters(self, init_std=None, factor=1.0):
-        init_std = init_std or (self.dim ** (-0.5))
-
-        for w in [self.wq, self.wk, self.wv]:
-            nn.init.trunc_normal_(
-                w.weight,
-                mean=0.0,
-                std=init_std,
-                a=-3 * init_std,
-                b=3 * init_std,
-            )
-
-        nn.init.trunc_normal_(
-            self.wo.weight,
-            mean=0.0,
-            std=init_std / factor,
-            a=-3 * init_std,
-            b=3 * init_std,
-        )
-
-
-class FeedForward(nn.Module):
-    def __init__(
-        self,
-        dim: int,
-        hidden_dim: int,
-        multiple_of: int,
-        ffn_dim_multiplier: Optional[float],
-        mp_size: int = 1,
-    ):
-        super().__init__()
-
-        hidden_dim = int(2 * hidden_dim / 3)
-        if ffn_dim_multiplier is not None:
-            hidden_dim = int(ffn_dim_multiplier * hidden_dim)
-        hidden_dim = multiple_of * ((hidden_dim + multiple_of - 1) // multiple_of)
-        assert hidden_dim % mp_size == 0
-
-        self.dim = dim
-        self.hidden_dim = hidden_dim
-
-        self.w1 = nn.Linear(
-            dim,
-            hidden_dim,
-            bias=False,
-        )
-        self.w3 = nn.Linear(
-            dim,
-            hidden_dim,
-            bias=False,
-        )
-        self.w2 = nn.Linear(
-            hidden_dim,
-            dim,
-            bias=False,
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # B S D
-        x1 = self.w1(x.view_as(x))
-        x3 = self.w3(x.view_as(x))
-        output = self.w2(F.silu(x1) * x3)
-        return output
-
-    def reset_parameters(self, init_std=None, factor=1.0):
-        in_init_std = init_std or (self.dim ** (-0.5))
-        out_init_std = init_std or (self.hidden_dim ** (-0.5))
-        in_init_std = in_init_std
-        out_init_std = out_init_std / factor
-        for w in [self.w1, self.w3]:
-            nn.init.trunc_normal_(
-                w.weight,
-                mean=0.0,
-                std=in_init_std,
-                a=-3 * in_init_std,
-                b=3 * in_init_std,
-            )
-        nn.init.trunc_normal_(
-            self.w2.weight,
-            mean=0.0,
-            std=out_init_std,
-            a=-3 * out_init_std,
-            b=3 * out_init_std,
-        )
-
-
-class TransformerBlock(nn.Module):
-    def __init__(self, args: BaseTransformerArgs):
-        super().__init__()
-
-        assert (args.head_dim is not None) or (
-            args.n_heads is not None
-        ), "Should specify at least head_dim or n_heads"
-        self.head_dim = args.head_dim or args.dim // args.n_heads
-        self.n_heads = args.n_heads or args.dim // args.head_dim
-        self.n_kv_heads = args.n_kv_heads or self.n_heads
-        self.rope_type = args.rope_type
-
-        assert args.n_heads % self.n_kv_heads == 0
-        assert args.dim % args.n_heads == 0
-
-        if args.rope_type == "additive":
-            self.rope_embeddings = MLPRotaryEmbedding(
-                head_dim=self.head_dim,
-                n_heads=self.n_heads,
-                middle_dim=128,
-                max_seqlen=args.max_seqlen,
-                theta=args.rope_theta,
-            )
-
-        self.attention = Attention(
-            dim=args.dim,
-            head_dim=self.head_dim,
-            n_heads=self.n_heads,
-            n_kv_heads=self.n_kv_heads,
-            rope_theta=args.rope_theta,
-            #rope_type=args.rope_type,
-        )
-        self.feed_forward = FeedForward(
-            dim=args.dim,
-            hidden_dim=4 * args.dim,
-            multiple_of=args.multiple_of,
-            ffn_dim_multiplier=args.ffn_dim_multiplier,
-        )
-        self.attention_norm = RMSNorm(args.dim, eps=args.norm_eps)
-        self.ffn_norm = RMSNorm(args.dim, eps=args.norm_eps)
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        freq_cis: torch.Tensor,
-        tok_idx: Optional[torch.Tensor] = None,
-        mask: Optional[Union[BlockMask, AttentionBias, str]] = None,
-        attn_impl: str = "sdpa",
-    ) -> torch.Tensor:
-        # For additive RoPE, compute freq_cis here
-        if hasattr(self, 'rope_embeddings'):
-            freq_cis = self.rope_embeddings(
-                seqlen=x.size(1) if tok_idx is None else None,
-                tok_idx=tok_idx
-            )
-
-        h = x + self.attention(
-            self.attention_norm(x),
-            freq_cis,
-            tok_idx=tok_idx,
-            mask=mask,
-            attn_impl=attn_impl,
-            rope_type=self.rope_type,
-        )
-        out = h + self.feed_forward(self.ffn_norm(h))
-        return out
-
-    def init_weights(self, init_std=None, factor=1.0):
-        self.attention.reset_parameters(init_std, factor)
-        self.attention_norm.reset_parameters()
-
-        self.feed_forward.reset_parameters(init_std, factor)
-        self.ffn_norm.reset_parameters()
-        if hasattr(self, 'rope_embeddings'):
-            self.rope_embeddings.reset_parameters()
-
-
-class BaseTransformer(nn.Module):
-    def __init__(self, args: BaseTransformerArgs):
-        super().__init__()
-        self.dim = args.dim
-        self.init_base_std = args.init_base_std
-        self.init_std_factor = InitStdFactor(args.init_std_factor)
-        self.max_seqlen = args.max_seqlen
-
-        # Only create RoPE embeddings in parent for original version
-        if args.rope_type == "original":
-            self.rope_embeddings = RotaryEmbedding(
-                theta=args.rope_theta,
-                head_dim=args.head_dim or args.dim // args.n_heads,
-                max_seqlen=args.max_seqlen,
-            )
-
-        self.layers = nn.ModuleList()
-        for _ in range(args.n_layers):
-            self.layers.append(TransformerBlock(args))
-
-    def forward(
-        self,
-        h,
-        tok_idx: Optional[torch.Tensor] = None,
-        mask: Optional[Union[BlockMask, AttentionBias, str]] = None,
-        attn_impl: str = "sdpa",
-    ):
-        # Compute freq_cis once for original RoPE
-        if hasattr(self, 'rope_embeddings'):
-            freq_cis = self.rope_embeddings(
-                seqlen=h.size(1) if tok_idx is None else None,
-                tok_idx=tok_idx
-            )
-        else:
-            freq_cis = None  # Will be computed per-layer for additive RoPE
-
-        for layer in self.layers:
-            h = layer(h, freq_cis, tok_idx=tok_idx, mask=mask, attn_impl=attn_impl)
-        return h
-
-    def reset_parameters(self):
-        # Either use fixed base std or sqrt model dim
-        if hasattr(self, 'rope_embeddings'):
-            self.rope_embeddings.reset_parameters()
-
-    def init_weights(self):
+        self.bias = torch.nn.Parameter(torch.zeros(heads, feature_dim))
+        self.readout = torch.nn.Parameter(torch.zeros(heads, feature_dim))
+        self.readout_bias = torch.nn.Parameter(torch.zeros(heads))
         self.reset_parameters()
-        for depth, layer in enumerate(self.layers):
-            factor = {
-                InitStdFactor.CURRENT_DEPTH: (2 * (depth + 1)) ** 0.5,
-                InitStdFactor.GLOBAL_DEPTH: (2 * (len(self.layers) + 1)) ** 0.5,
-                InitStdFactor.DIM_RATIO: self.dim / 4096,
-                InitStdFactor.DISABLED: 1.0,
-            }[self.init_std_factor]
 
-            layer.init_weights(self.init_base_std, factor)
+    def reset_parameters(self) -> None:
+        for weight in self.weight:
+            torch.nn.init.xavier_normal_(weight)
+        torch.nn.init.zeros_(self.bias)
+        self.reset_output_parameters()
+
+    def forward(self) -> torch.Tensor:
+        basis = self._basis()
+        transformed = torch.einsum("rd,hde->hre", basis, self.weight)
+        transformed = transformed + self.bias[:, None, :]
+        curves = torch.einsum("hre,he->hr", transformed, self.readout)
+        return curves + self.readout_bias[:, None]
+
+    def reset_output_parameters(self) -> None:
+        torch.nn.init.zeros_(self.readout)
+        torch.nn.init.zeros_(self.readout_bias)
+
+
+class LowRankPositionBias(PositionBias):
+    """Per-head nonlinear feature_dim -> rank -> scalar bias mapping."""
+
+    def __init__(self, heads, feature_dim, rel_extent, theta, rank):
+        super().__init__(heads, feature_dim, rel_extent, theta)
+        if rank <= 0:
+            raise ValueError("pos_rank must be positive.")
+        self.rank = rank
+        self.down = torch.nn.Parameter(torch.empty(heads, feature_dim, rank))
+        self.down_bias = torch.nn.Parameter(torch.zeros(heads, rank))
+        self.up = torch.nn.Parameter(torch.zeros(heads, rank))
+        self.up_bias = torch.nn.Parameter(torch.zeros(heads))
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        for weight in self.down:
+            torch.nn.init.xavier_normal_(weight)
+        torch.nn.init.zeros_(self.down_bias)
+        self.reset_output_parameters()
+
+    def forward(self) -> torch.Tensor:
+        basis = self._basis()
+        hidden = torch.einsum("rd,hdk->hrk", basis, self.down)
+        hidden = F.gelu(hidden + self.down_bias[:, None, :])
+        curves = torch.einsum("hrk,hk->hr", hidden, self.up)
+        return curves + self.up_bias[:, None]
+
+    def reset_output_parameters(self) -> None:
+        torch.nn.init.zeros_(self.up)
+        torch.nn.init.zeros_(self.up_bias)
+
+
+class MLPRoPEBias(PositionBias):
+    """Per-head MLP with a sinusoidal residual and zero-initialized readout."""
+
+    def __init__(
+        self,
+        heads,
+        feature_dim,
+        rel_extent,
+        theta,
+        hidden_dim,
+    ):
+        super().__init__(heads, feature_dim, rel_extent, theta)
+        if hidden_dim <= 0:
+            raise ValueError("pos_mlp_hidden must be positive.")
+        self.hidden_dim = hidden_dim
+        self.in_weight = torch.nn.Parameter(
+            torch.empty(heads, feature_dim, hidden_dim)
+        )
+        self.in_bias = torch.nn.Parameter(torch.zeros(heads, hidden_dim))
+        self.out_weight = torch.nn.Parameter(
+            torch.empty(heads, hidden_dim, feature_dim)
+        )
+        self.out_bias = torch.nn.Parameter(torch.zeros(heads, feature_dim))
+        self.readout = torch.nn.Parameter(torch.zeros(heads, feature_dim))
+        self.readout_bias = torch.nn.Parameter(torch.zeros(heads))
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        for weight in self.in_weight:
+            torch.nn.init.xavier_normal_(weight)
+        for weight in self.out_weight:
+            # Keep the nonlinear branch a small perturbation of the raw basis.
+            torch.nn.init.normal_(weight, mean=0.0, std=1.0e-3)
+        torch.nn.init.zeros_(self.in_bias)
+        torch.nn.init.zeros_(self.out_bias)
+        self.reset_output_parameters()
+
+    def forward(self) -> torch.Tensor:
+        basis = self._basis()
+        hidden = torch.einsum("rd,hdm->hrm", basis, self.in_weight)
+        hidden = F.gelu(hidden + self.in_bias[:, None, :])
+        delta = torch.einsum("hrm,hmd->hrd", hidden, self.out_weight)
+        enriched = basis[None, :, :] + delta + self.out_bias[:, None, :]
+        curves = torch.einsum("hrd,hd->hr", enriched, self.readout)
+        return curves + self.readout_bias[:, None]
+
+    def reset_output_parameters(self) -> None:
+        torch.nn.init.zeros_(self.readout)
+        torch.nn.init.zeros_(self.readout_bias)
+
+
+def make_position_bias(
+    variant: PositionVariant,
+    heads: int,
+    feature_dim: int,
+    rel_extent: int,
+    theta: float,
+    rank: int,
+    mlp_hidden: int,
+) -> PositionBias | None:
+    common = (heads, feature_dim, rel_extent, theta)
+    if variant == "rope":
+        return None
+    if variant == "add_rope":
+        return AddRoPEBias(*common)
+    if variant == "linear":
+        return LinearPositionBias(*common)
+    if variant == "low_rank":
+        return LowRankPositionBias(*common, rank=rank)
+    if variant == "mlp_rope":
+        return MLPRoPEBias(*common, hidden_dim=mlp_hidden)
+    if variant in CONTENT_CONDITIONED_VARIANTS:
+        raise NotImplementedError(
+            f"pos_variant={variant!r} is scaffolded for Phase 2 but not implemented."
+        )
+    raise ValueError(f"Unknown pos_variant: {variant!r}")
+
+
+class Attention(torch.nn.Module):
+    def __init__(
+        self,
+        dim,
+        heads,
+        is_causal=True,
+        use_rope=True,
+        rope_theta=10000.0,
+        max_seq_len=2048,
+        qk_norm=True,
+        pos_variant: PositionVariant = "rope",
+        rel_extent: int | None = None,
+        pos_rank: int = 32,
+        pos_mlp_hidden: int = 128,
+        attn_impl: AttentionImpl = "sdpa",
+    ):
+        super().__init__()
+        self.dim = dim
+        self.heads = heads
+        self.is_causal = is_causal
+        self.use_rope = use_rope
+        self.head_dim = dim // heads
+        self.rope_theta = rope_theta
+        self.max_seq_len = max_seq_len
+        self.pos_variant = pos_variant
+        self.rel_extent = rel_extent or max_seq_len
+        self.attn_impl = attn_impl
+        self._prepared_block_mask: BlockMask | None = None
+        self._prepared_query_length: int | None = None
+
+        if dim % heads != 0:
+            raise ValueError("dim must be divisible by heads.")
+        if not use_rope:
+            raise ValueError("These experiments keep RoPE enabled as the geometric prior.")
+        if self.head_dim % 2 != 0:
+            raise ValueError("RoPE requires an even head dimension.")
+        if pos_variant not in POSITION_VARIANTS:
+            raise ValueError(f"Unknown pos_variant: {pos_variant!r}")
+        if attn_impl not in ("sdpa", "flex"):
+            raise ValueError(f"Unknown attn_impl: {attn_impl!r}")
+        if pos_variant != "rope" and attn_impl != "flex":
+            raise ValueError(
+                "Learned position-bias variants require attn_impl='flex'. "
+                "Use pos_variant='rope' for the SDPA baseline."
+            )
+        if self.rel_extent <= 0:
+            raise ValueError("rel_extent must be positive.")
+
+        # Split projections match the other experimental Transformer.
+        self.to_q = torch.nn.Linear(dim, dim, bias=False)
+        self.to_k = torch.nn.Linear(dim, dim, bias=False)
+        self.to_v = torch.nn.Linear(dim, dim, bias=False)
+        self.to_out = torch.nn.Linear(dim, dim, bias=True)
+
+        self.position_bias = make_position_bias(
+            pos_variant,
+            heads,
+            self.head_dim,
+            self.rel_extent,
+            rope_theta,
+            pos_rank,
+            pos_mlp_hidden,
+        )
+
+        if qk_norm:
+            self.q_norm = torch.nn.LayerNorm(self.head_dim)
+            self.k_norm = torch.nn.LayerNorm(self.head_dim)
+        else:
+            self.q_norm = torch.nn.Identity()
+            self.k_norm = torch.nn.Identity()
+
+        half = self.head_dim // 2
+        freqs = torch.arange(half, dtype=torch.float32)
+        inv_freq = 1.0 / (self.rope_theta ** (freqs / half))
+        positions = torch.arange(max_seq_len, dtype=torch.float32)
+        angles = torch.outer(positions, inv_freq)
+        self.register_buffer("rope_sin", angles.sin(), persistent=False)
+        self.register_buffer("rope_cos", angles.cos(), persistent=False)
+
+    def _apply_rope(self, q, k):
+        seq_len = q.shape[-2]
+        if seq_len > self.max_seq_len:
+            raise ValueError(
+                f"Sequence length {seq_len} exceeds RoPE cache length {self.max_seq_len}"
+            )
+        half = q.shape[-1] // 2
+        sin = self.rope_sin[:seq_len].to(dtype=q.dtype)[None, None, :, :]
+        cos = self.rope_cos[:seq_len].to(dtype=q.dtype)[None, None, :, :]
+
+        def rotate(x):
+            x1, x2 = x[..., :half], x[..., half:]
+            return torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
+
+        return rotate(q), rotate(k)
+
+    def _split_heads(self, x):
+        batch, sequence, _ = x.shape
+        return x.view(batch, sequence, self.heads, self.head_dim).transpose(1, 2)
+
+    def prepare_flex_mask(
+        self,
+        query_length: int,
+        device: torch.device | str,
+    ) -> None:
+        if self.attn_impl != "flex":
+            return
+        self._prepared_block_mask = create_block_mask(
+            causal_mask,
+            B=None,
+            H=None,
+            Q_LEN=query_length,
+            KV_LEN=query_length,
+            device=device,
+        )
+        self._prepared_query_length = query_length
+
+    def _block_mask(self, q: torch.Tensor) -> BlockMask:
+        query_length = q.shape[-2]
+        if (
+            self._prepared_block_mask is not None
+            and self._prepared_query_length == query_length
+        ):
+            return self._prepared_block_mask
+        return create_block_mask(
+            causal_mask,
+            B=None,
+            H=None,
+            Q_LEN=query_length,
+            KV_LEN=query_length,
+            device=q.device,
+        )
+
+    def _flex_attention(self, q, k, v):
+        block_mask = self._block_mask(q)
+        if self.position_bias is None:
+            return flex_attention(q, k, v, block_mask=block_mask)
+
+        bias_curves = self.position_bias().to(dtype=q.dtype)
+        rel_extent = self.rel_extent
+
+        def score_mod(score, batch_idx, head_idx, query_idx, key_value_idx):
+            del batch_idx
+            distance = query_idx - key_value_idx
+            in_range = (distance >= 0) & (distance < rel_extent)
+            distance = distance.clamp(0, rel_extent - 1)
+            bias = bias_curves[head_idx, distance]
+            return score + torch.where(in_range, bias, 0.0)
+
+        return flex_attention(
+            q,
+            k,
+            v,
+            score_mod=score_mod,
+            block_mask=block_mask,
+        )
+
+    def forward(self, x):
+        q = self._split_heads(self.to_q(x))
+        k = self._split_heads(self.to_k(x))
+        v = self._split_heads(self.to_v(x))
+
+        q = self.q_norm(q)
+        k = self.k_norm(k)
+        q, k = self._apply_rope(q, k)
+        if self.attn_impl == "flex":
+            attn = self._flex_attention(q, k, v)
+        else:
+            attn = F.scaled_dot_product_attention(
+                q,
+                k,
+                v,
+                is_causal=self.is_causal,
+            )
+        attn = attn.transpose(1, 2).contiguous().view(x.shape[0], x.shape[1], -1)
+        return self.to_out(attn)
+
+
+class GeGLU(torch.nn.Module):
+    def __init__(
+        self,
+        dim,
+        hidden_dim=None,
+        align_multiple=64,
+    ):
+        super().__init__()
+        hidden_dim = hidden_dim or math.ceil(dim * 8 / 3)
+        if align_multiple is not None and align_multiple > 1:
+            hidden_dim = math.ceil(hidden_dim / align_multiple) * align_multiple
+        self.proj_in = torch.nn.Linear(dim, hidden_dim * 2, bias=True)
+        self.proj_out = torch.nn.Linear(hidden_dim, dim, bias=True)
+        self.act = torch.nn.GELU()
+
+    def forward(self, x):
+        value, gate = self.proj_in(x).chunk(2, dim=-1)
+        return self.proj_out(value * self.act(gate))
+
+
+class TransformerBlock(torch.nn.Module):
+    def __init__(
+        self,
+        dim,
+        heads,
+        ff_hidden_dim,
+        is_causal=True,
+        use_rope=True,
+        rope_theta=10000.0,
+        max_seq_len=2048,
+        qk_norm=True,
+        pos_variant: PositionVariant = "rope",
+        rel_extent: int | None = None,
+        pos_rank: int = 32,
+        pos_mlp_hidden: int = 128,
+        attn_impl: AttentionImpl = "sdpa",
+    ):
+        super().__init__()
+        self.attn = Attention(
+            dim,
+            heads,
+            is_causal=is_causal,
+            use_rope=use_rope,
+            rope_theta=rope_theta,
+            max_seq_len=max_seq_len,
+            qk_norm=qk_norm,
+            pos_variant=pos_variant,
+            rel_extent=rel_extent,
+            pos_rank=pos_rank,
+            pos_mlp_hidden=pos_mlp_hidden,
+            attn_impl=attn_impl,
+        )
+        self.ff = GeGLU(dim, hidden_dim=ff_hidden_dim)
+        self.norm1 = torch.nn.LayerNorm(dim)
+        self.norm2 = torch.nn.LayerNorm(dim)
+
+    def forward(self, x):
+        x = self.attn(self.norm1(x)) + x
+        x = self.ff(self.norm2(x)) + x
+        return x
+
+
+class Transformer(torch.nn.Module):
+    def __init__(
+        self,
+        dim,
+        depth,
+        heads,
+        ff_mult,
+        vocab_size,
+        max_seq_len,
+        gradient_checkpointing=False,
+        use_rope=True,
+        rope_theta=10000.0,
+        qk_norm=True,
+        pos_variant: PositionVariant = "rope",
+        rel_extent: int | None = None,
+        pos_rank: int = 32,
+        pos_mlp_hidden: int = 128,
+        attn_impl: AttentionImpl = "sdpa",
+    ):
+        super().__init__()
+
+        self.token_embedding = torch.nn.Embedding(vocab_size, dim)
+        self.gradient_checkpointing = gradient_checkpointing
+        self.blocks = torch.nn.ModuleList([
+            TransformerBlock(
+                dim,
+                heads,
+                dim * ff_mult,
+                is_causal=True,
+                use_rope=use_rope,
+                rope_theta=rope_theta,
+                max_seq_len=max_seq_len,
+                qk_norm=qk_norm,
+                pos_variant=pos_variant,
+                rel_extent=rel_extent,
+                pos_rank=pos_rank,
+                pos_mlp_hidden=pos_mlp_hidden,
+                attn_impl=attn_impl,
+            )
+            for _ in range(depth)
+        ])
+        self.in_proj = torch.nn.Sequential(
+            torch.nn.LayerNorm(dim),
+            torch.nn.Linear(dim, dim, bias=True),
+        )
+        self.out_proj = torch.nn.Sequential(
+            torch.nn.LayerNorm(dim),
+            torch.nn.Linear(dim, vocab_size, bias=True),
+        )
+        self._init_weights(dim)
+
+    def _init_weights(self, dim):
+        embed_std = dim ** -0.5
+        lm_head_std = 0.02
+        with torch.no_grad():
+            for module in self.modules():
+                if isinstance(module, torch.nn.Embedding):
+                    torch.nn.init.normal_(module.weight, mean=0.0, std=embed_std)
+                elif isinstance(module, torch.nn.Linear):
+                    torch.nn.init.xavier_normal_(module.weight)
+                    if module.bias is not None:
+                        torch.nn.init.zeros_(module.bias)
+                elif isinstance(module, torch.nn.LayerNorm):
+                    torch.nn.init.ones_(module.weight)
+                    torch.nn.init.zeros_(module.bias)
+            lm_head = self.out_proj[1]
+            torch.nn.init.normal_(lm_head.weight, mean=0.0, std=lm_head_std)
+            if lm_head.bias is not None:
+                torch.nn.init.zeros_(lm_head.bias)
+            for module in self.modules():
+                if isinstance(module, PositionBias):
+                    module.reset_output_parameters()
+
+    def prepare_flex_masks(
+        self,
+        query_length: int,
+        device: torch.device | str,
+    ) -> None:
+        for block in self.blocks:
+            block.attn.prepare_flex_mask(query_length, device)
+
+    def forward(self, input_ids, targets=None):
+        x = self.in_proj(self.token_embedding(input_ids))
+        for block in self.blocks:
+            if self.gradient_checkpointing:
+                x = torch.utils.checkpoint.checkpoint(
+                    block,
+                    x,
+                    preserve_rng_state=False,
+                    use_reentrant=False,
+                    determinism_check="none",
+                )
+            else:
+                x = block(x)
+        logits = self.out_proj(x)
+        if targets is None:
+            return logits
+        return F.cross_entropy(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1))
+
+    def resize_token_embeddings(self, new_size: int):
+        old_weight = self.token_embedding.weight
+        new_emb = torch.nn.Embedding(
+            new_size,
+            old_weight.shape[1],
+            device=old_weight.device,
+            dtype=old_weight.dtype,
+        )
+        with torch.no_grad():
+            num_tokens = min(old_weight.shape[0], new_size)
+            new_emb.weight[:num_tokens] = old_weight[:num_tokens]
+        self.token_embedding = new_emb
+        return self.token_embedding
+
+
+def count_parameters(model: torch.nn.Module) -> dict[str, int]:
+    total = sum(parameter.numel() for parameter in model.parameters())
+    embed = sum(parameter.numel() for parameter in model.token_embedding.parameters())
+    head = sum(parameter.numel() for parameter in model.out_proj.parameters())
+    position = sum(
+        parameter.numel()
+        for module in model.modules()
+        if isinstance(module, PositionBias)
+        for parameter in module.parameters(recurse=False)
+    )
+    return {
+        "total": total,
+        "embeddings": embed,
+        "lm_head": head,
+        "position_bias": position,
+        "non_embed": total - embed - head,
+    }
+
+
+def suggest_matched_baselines(cfg: dict) -> dict:
+    """Placeholder for position-variant parameter/wallclock matching."""
+    del cfg
+    raise NotImplementedError(
+        "Matched-baseline helper deferred. Match pos_rank / pos_mlp_hidden or "
+        "override ff_mult manually for now."
+    )

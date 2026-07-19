@@ -167,3 +167,11 @@ Do not mix in entropy-calibration experiments during any of these phases.
 - The MLPRoPE code we started from has a shape bug (see the review): `nfreqs // n_heads` produces a per-head output smaller than `head_dim`. When porting to add-to-logits, this shape issue disappears (output is now bias-shaped, not Q-shaped), but flag it if it comes back.
 - Content-conditioning at inference breaks a small nice property of RoPE: `relative_states` depends on the query's hidden state, so it recomputes per generation step. This is fine but affects wall-clock comparisons.
 - The `+ embs` residual pattern from the original MLPRoPE code is a good idea and should be preserved in any position-only variant that has capacity to fail — always fall back to a known-good baseline at init.
+
+## Remaining TODOs
+
+- Implement Phase 2's `inkling_table` and `inkling_cosnet` variants. Their config and model dispatch points are scaffolded, but deliberately raise until the content-conditioned path is implemented.
+- Implement `suggest_matched_baselines`: match position variants by parameter count (`pos_rank`, MLP width, or FFN width) and add a short timing probe for wallclock matching.
+- Add the planned diagnostics: per-layer/per-head bias histograms, content-routing statistics, representative distance profiles, attention entropy, and length-extrapolation evaluation.
+- Add the add-to-Q/K version as a later ablation against the primary add-to-logits implementation.
+- If Phase 2 wins, run the Phase 3 ablation that removes RoPE under content-conditioning and compare shared versus per-layer profile banks.
