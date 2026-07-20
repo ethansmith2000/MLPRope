@@ -6,8 +6,11 @@ import torch.nn.functional as F
 from torch.nn.attention.flex_attention import (
     BlockMask,
     create_block_mask,
-    flex_attention,
+    flex_attention as _flex_attention,
 )
+
+# Fuse FlexAttention kernels even when the outer module isn't compiled yet.
+flex_attention = torch.compile(_flex_attention)
 
 
 PositionVariant = Literal[
@@ -555,7 +558,8 @@ class Transformer(torch.nn.Module):
         for block in self.blocks:
             block.attn.prepare_flex_mask(query_length, device)
 
-    def forward(self, input_ids, targets=None):
+    def forward(self, input_ids, targets=None, *, return_logits: bool = False):
+        """Training path returns loss only so torch.compile need not keep vocab logits live."""
         x = self.in_proj(self.token_embedding(input_ids))
         for block in self.blocks:
             if self.gradient_checkpointing:
@@ -571,7 +575,14 @@ class Transformer(torch.nn.Module):
         logits = self.out_proj(x)
         if targets is None:
             return logits
-        return F.cross_entropy(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1))
+        # CE in fp32 under bf16 autocast; default path drops logits from the return.
+        loss = F.cross_entropy(
+            logits.reshape(-1, logits.shape[-1]).float(),
+            targets.reshape(-1),
+        )
+        if return_logits:
+            return loss, logits
+        return loss
 
     def resize_token_embeddings(self, new_size: int):
         old_weight = self.token_embedding.weight

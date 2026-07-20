@@ -32,18 +32,22 @@ REPO_DIR = Path(__file__).resolve().parent
 WORKSPACE_DIR = Path(os.environ.get("WORKSPACE", REPO_DIR.parent))
 CACHE_DIR = WORKSPACE_DIR / ".cache"
 
-# Keep HF / compile caches on the workspace volume (shared with noble_research).
+# Keep HF / compile / wandb caches on the workspace volume.
 os.environ.setdefault("HF_HOME", str(WORKSPACE_DIR / ".hf_home"))
 os.environ.setdefault(
     "HF_DATASETS_CACHE",
     str(Path(os.environ["HF_HOME"]) / "datasets"),
 )
+os.environ.setdefault("WANDB_HOME", str(WORKSPACE_DIR / ".wandb_home"))
+os.environ.setdefault("WANDB_DIR", str(WORKSPACE_DIR / ".wandb_home"))
 os.environ.setdefault("TRITON_CACHE_DIR", str(CACHE_DIR / "triton"))
 os.environ.setdefault("TORCHINDUCTOR_CACHE_DIR", str(CACHE_DIR / "torchinductor"))
 os.environ.setdefault("TMPDIR", str(CACHE_DIR / "tmp"))
 for cache_path in (
     Path(os.environ["HF_HOME"]),
     Path(os.environ["HF_DATASETS_CACHE"]),
+    Path(os.environ["WANDB_HOME"]),
+    Path(os.environ["WANDB_DIR"]),
     Path(os.environ["TRITON_CACHE_DIR"]),
     Path(os.environ["TORCHINDUCTOR_CACHE_DIR"]),
     Path(os.environ["TMPDIR"]),
@@ -51,6 +55,8 @@ for cache_path in (
     cache_path.mkdir(parents=True, exist_ok=True)
 tempfile.tempdir = os.environ["TMPDIR"]
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+os.environ.setdefault("HF_DATASETS_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 
 def _safe_getsourcelines(obj):
@@ -82,7 +88,7 @@ logger = get_logger(__name__)
 
 DEFAULT_CONFIG = {
     "dataset_name": "Skylion007/openwebtext",
-    "dataset_config_name": "plain_text",
+    "dataset_config_name": None,
     "train_file": None,
     "validation_file": None,
     "validation_split_percentage": 5,
@@ -90,7 +96,10 @@ DEFAULT_CONFIG = {
     "tokenizer_name": None,
     "use_slow_tokenizer": False,
     "hf_cache_dir": os.environ["HF_DATASETS_CACHE"],
-    "tokenized_dataset_path": None,
+    # Shared on-disk cache so parallel gpu-claim jobs don't re-tokenize.
+    "tokenized_dataset_path": str(
+        WORKSPACE_DIR / ".cache" / "mlprope_openwebtext_gpt2_bs1024_ids"
+    ),
     "preprocessing_num_workers": min(8, os.cpu_count() or 1),
     "overwrite_cache": False,
     "block_size": 1024,
@@ -112,12 +121,19 @@ DEFAULT_CONFIG = {
     "with_tracking": False,
     "report_to": "wandb",
     "wandb_project": "mlprope-position-bias",
+    "wandb_entity": "ethansmith2000",
     "wandb_group": None,
     "mixed_precision": "bf16",
-    "num_workers": min(8, os.cpu_count() or 1),
+    # Sized for packing many single-GPU jobs on one node (not one job hogging all CPUs).
+    "num_workers": 4,
+    "persistent_workers": True,
+    "prefetch_factor": 2,
+    "non_blocking": True,
     "num_validation_batches": 25,
-    "validate_every": 500,
-    "log_every_n_steps": 10,
+    "validate_every": 1000,
+    "log_every_n_steps": 50,
+    # CUDA-event stage timings (data / forward / backward / optimizer).
+    "profile_every_n_steps": 10,
     "dry_run": False,
     "print_model": False,
     # Model
@@ -216,6 +232,20 @@ def load_config(cli_args):
     if cli_args.print_model:
         cfg["print_model"] = True
 
+    # Learned logit biases require FlexAttention; keep SDPA only for pure RoPE.
+    if cfg["pos_variant"] != "rope" and cfg["attn_impl"] != "flex":
+        cfg["attn_impl"] = "flex"
+
+    # Keep the shared tokenized cache keyed by block size when using the default path.
+    default_tok_prefix = str(WORKSPACE_DIR / ".cache" / "mlprope_openwebtext_gpt2_bs")
+    if (
+        isinstance(cfg["tokenized_dataset_path"], str)
+        and cfg["tokenized_dataset_path"].startswith(default_tok_prefix)
+    ):
+        cfg["tokenized_dataset_path"] = (
+            f"{default_tok_prefix}{cfg['block_size']}_ids"
+        )
+
     model_tag = f"h{cfg['hidden_size']}d{cfg['depth']}"
     variant_tag = cfg["pos_variant"]
     if cfg["pos_variant"] == "low_rank":
@@ -261,6 +291,71 @@ def checkpoint_step(checkpoint_path):
         return int(name.split("_", 1)[1])
     except ValueError as exc:
         raise ValueError(f"Checkpoint directory must be named step_N, got {name!r}") from exc
+
+
+def _interval_due(interval, step: int) -> bool:
+    return bool(interval) and step > 0 and step % int(interval) == 0
+
+
+class CudaStageTimer:
+    """Time data-load (host) + forward/backward/optimizer (CUDA events)."""
+
+    def __init__(self, enabled: bool):
+        self.enabled = bool(enabled and torch.cuda.is_available())
+        self.data_ms = 0.0
+        self.forward_ms = 0.0
+        self.backward_ms = 0.0
+        self.optimizer_ms = 0.0
+        self._active = False
+        self._data_t0 = 0.0
+        if self.enabled:
+            self._events = {
+                name: (
+                    torch.cuda.Event(enable_timing=True),
+                    torch.cuda.Event(enable_timing=True),
+                )
+                for name in ("forward", "backward", "optimizer")
+            }
+
+    def begin_step(self) -> None:
+        if not self.enabled:
+            self._active = False
+            return
+        torch.cuda.synchronize()
+        self._data_t0 = time.perf_counter()
+        self._active = True
+
+    def mark_data_end(self) -> None:
+        if self._active:
+            self.data_ms = (time.perf_counter() - self._data_t0) * 1e3
+
+    def range_start(self, name: str) -> None:
+        if self._active:
+            self._events[name][0].record()
+
+    def range_end(self, name: str) -> None:
+        if self._active:
+            self._events[name][1].record()
+
+    def finish_step(self) -> dict[str, float] | None:
+        if not self._active:
+            return None
+        torch.cuda.synchronize()
+        self.forward_ms = self._events["forward"][0].elapsed_time(self._events["forward"][1])
+        self.backward_ms = self._events["backward"][0].elapsed_time(self._events["backward"][1])
+        self.optimizer_ms = self._events["optimizer"][0].elapsed_time(
+            self._events["optimizer"][1]
+        )
+        self._active = False
+        return {
+            "time/data_ms": self.data_ms,
+            "time/forward_ms": self.forward_ms,
+            "time/backward_ms": self.backward_ms,
+            "time/optimizer_ms": self.optimizer_ms,
+            "time/step_ms": (
+                self.data_ms + self.forward_ms + self.backward_ms + self.optimizer_ms
+            ),
+        }
 
 
 def make_model(args, vocab_size):
@@ -339,12 +434,14 @@ def _load_tokenized_datasets(args, tokenizer):
         concatenated = {k: list(chain(*tokenized[k])) for k in tokenized}
         total_length = len(concatenated["input_ids"])
         total_length = (total_length // block_size) * block_size
-        result = {
-            k: [values[i:i + block_size] for i in range(0, total_length, block_size)]
-            for k, values in concatenated.items()
+        # Keep only input_ids; train loop derives targets via a causal shift.
+        # Dropping attention_mask / duplicate labels halves on-disk cache size.
+        input_ids = concatenated["input_ids"]
+        return {
+            "input_ids": [
+                input_ids[i:i + block_size] for i in range(0, total_length, block_size)
+            ],
         }
-        result["labels"] = result["input_ids"].copy()
-        return result
 
     lm_datasets = raw.map(
         tokenize_and_group,
@@ -378,26 +475,27 @@ def evaluate(args, model, eval_dataloader, accelerator, step):
     model.eval()
     losses = []
     for idx, batch in enumerate(eval_dataloader):
-        input_ids = batch["input_ids"].to(accelerator.device, non_blocking=True)[:, :-1]
-        targets = batch["labels"].to(accelerator.device, non_blocking=True)[:, 1:]
+        input_ids = batch["input_ids"][:, :-1]
+        targets = batch["input_ids"][:, 1:]
         loss = model(input_ids=input_ids, targets=targets)
         losses.append(accelerator.gather_for_metrics(loss.detach().float()))
         if args.num_validation_batches is not None and idx + 1 >= args.num_validation_batches:
             break
     eval_loss = torch.cat([loss.reshape(-1) for loss in losses]).mean()
-    perplexity = math.exp(eval_loss.item()) if eval_loss.item() < 20 else float("inf")
-    logger.info("step %s: eval_loss %.4f perplexity %.4f", step, eval_loss.item(), perplexity)
+    eval_loss_value = eval_loss.item()
+    perplexity = math.exp(eval_loss_value) if eval_loss_value < 20 else float("inf")
+    logger.info("step %s: eval_loss %.4f perplexity %.4f", step, eval_loss_value, perplexity)
     if accelerator.is_main_process:
         metrics = {
             "step": int(step),
-            "eval_loss": eval_loss.item(),
+            "eval_loss": eval_loss_value,
             "perplexity": perplexity if math.isfinite(perplexity) else None,
             "timestamp": time.time(),
         }
         with open(os.path.join(args.output_dir, "metrics.jsonl"), "a") as f:
             f.write(json.dumps(metrics, sort_keys=True) + "\n")
     if args.with_tracking:
-        accelerator.log({"eval_loss": eval_loss.item(), "perplexity": perplexity}, step=step)
+        accelerator.log({"eval_loss": eval_loss_value, "perplexity": perplexity}, step=step)
     model.train()
 
 
@@ -418,6 +516,19 @@ def save_model(args, model, tokenizer, accelerator, completed_steps, max_train_s
                 )
                 f.write("\n")
         logger.info("saved model to %s", args.output_dir)
+
+
+def pin_cuda_early() -> None:
+    """Occupy the visible GPU immediately so unaware jobs see it on nvidia-smi.
+
+    Exclusivity still comes from gpu-claim's lifetime flock; this is visibility only.
+    """
+    if not torch.cuda.is_available():
+        return
+    torch.cuda.set_device(0)
+    pin = torch.empty(1, device="cuda", dtype=torch.float32)
+    pin.fill_(0)
+    del pin
 
 
 def main():
@@ -448,6 +559,7 @@ def main():
         )
         return
 
+    pin_cuda_early()
     config = AutoConfig.from_pretrained(args.model_name_or_path, cache_dir=args.hf_cache_dir)
     tokenizer = AutoTokenizer.from_pretrained(
         args.tokenizer_name or args.model_name_or_path,
@@ -471,13 +583,13 @@ def main():
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
-        dataloader_config=DataLoaderConfiguration(non_blocking=True),
+        dataloader_config=DataLoaderConfiguration(non_blocking=bool(args.non_blocking)),
         **accelerator_kwargs,
     )
     logger.info(accelerator.state, main_process_only=False)
     if accelerator.is_local_main_process:
         datasets.utils.logging.set_verbosity_warning()
-        transformers.utils.logging.set_verbosity_info()
+        transformers.utils.logging.set_verbosity_warning()
     else:
         datasets.utils.logging.set_verbosity_error()
         transformers.utils.logging.set_verbosity_error()
@@ -497,8 +609,9 @@ def main():
         "pin_memory": torch.cuda.is_available(),
     }
     if args.num_workers > 0:
-        loader_kwargs["persistent_workers"] = True
-        loader_kwargs["prefetch_factor"] = 4
+        loader_kwargs["persistent_workers"] = bool(args.persistent_workers)
+        if args.prefetch_factor is not None:
+            loader_kwargs["prefetch_factor"] = max(1, int(args.prefetch_factor))
 
     train_generator = torch.Generator()
     train_generator.manual_seed(args.seed if args.seed is not None else 0)
@@ -559,7 +672,12 @@ def main():
         logger.info("Resumed from %s at optimizer step %s", resume_checkpoint, completed_steps)
 
     if args.with_tracking:
-        wandb_init = {"name": args.run_name}
+        wandb_init = {
+            "name": args.run_name,
+            "dir": os.environ.get("WANDB_DIR", str(WORKSPACE_DIR / ".wandb_home")),
+        }
+        if args.wandb_entity:
+            wandb_init["entity"] = args.wandb_entity
         if args.wandb_group:
             wandb_init["group"] = args.wandb_group
         accelerator.init_trackers(
@@ -574,8 +692,7 @@ def main():
 
     progress_bar = tqdm(range(max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.update(min(completed_steps, max_train_steps))
-    train_loss_accum = 0.0
-    train_loss_updates = 0
+    stage_timer = CudaStageTimer(enabled=bool(args.profile_every_n_steps))
 
     for epoch in range(starting_epoch, num_train_epochs):
         if completed_steps >= max_train_steps:
@@ -585,38 +702,81 @@ def main():
             active_dataloader = accelerator.skip_first_batches(train_dataloader, resume_batch)
         else:
             active_dataloader = train_dataloader
-        for batch in active_dataloader:
+        train_iter = iter(active_dataloader)
+        while True:
+            profile_this_step = _interval_due(
+                args.profile_every_n_steps, completed_steps + 1
+            )
+            if profile_this_step:
+                # Sync so the following next() wait is true data stall, not GPU overlap.
+                stage_timer.begin_step()
+            try:
+                batch = next(train_iter)
+            except StopIteration:
+                break
+            if profile_this_step:
+                stage_timer.mark_data_end()
+
+            # accelerator.prepare already placed batches on device (non_blocking).
+            input_ids = batch["input_ids"][:, :-1]
+            targets = batch["input_ids"][:, 1:]
             with accelerator.accumulate(model):
-                input_ids = batch["input_ids"].to(accelerator.device, non_blocking=True)[:, :-1]
-                targets = batch["labels"].to(accelerator.device, non_blocking=True)[:, 1:]
+                stage_timer.range_start("forward")
                 loss = model(input_ids=input_ids, targets=targets)
-                train_loss_accum += accelerator.gather_for_metrics(loss.detach().float()).mean().item()
-                train_loss_updates += 1
+                stage_timer.range_end("forward")
+
+                stage_timer.range_start("backward")
                 accelerator.backward(loss)
+                stage_timer.range_end("backward")
+
+                stage_timer.range_start("optimizer")
                 if accelerator.sync_gradients and args.max_grad_norm is not None:
                     accelerator.clip_grad_norm_(model.parameters(), args.max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
+                stage_timer.range_end("optimizer")
 
-            if accelerator.sync_gradients:
-                completed_steps += 1
-                progress_bar.update(1)
-                logs = {
-                    "train_loss": train_loss_accum / max(train_loss_updates, 1),
-                    "lr": lr_scheduler.get_last_lr()[0],
-                }
-                progress_bar.set_postfix(loss=f"{logs['train_loss']:.4f}", lr=f"{logs['lr']:.2e}")
-                if args.with_tracking and completed_steps % args.log_every_n_steps == 0:
+            if not accelerator.sync_gradients:
+                continue
+
+            completed_steps += 1
+            progress_bar.update(1)
+
+            timing_logs = stage_timer.finish_step() if profile_this_step else None
+
+            log_loss = _interval_due(args.log_every_n_steps, completed_steps)
+            if log_loss or timing_logs is not None:
+                logs = {"lr": lr_scheduler.get_last_lr()[0]}
+                if log_loss:
+                    synced_loss = loss.detach().float()
+                    if accelerator.num_processes > 1:
+                        synced_loss = accelerator.gather(synced_loss.reshape(1)).mean()
+                    logs["train_loss"] = synced_loss.item()
+                if timing_logs is not None:
+                    logs.update(timing_logs)
+                postfix = {}
+                if "train_loss" in logs:
+                    postfix["loss"] = f"{logs['train_loss']:.4f}"
+                if timing_logs is not None:
+                    postfix["fwd"] = f"{timing_logs['time/forward_ms']:.1f}"
+                    postfix["bwd"] = f"{timing_logs['time/backward_ms']:.1f}"
+                    postfix["opt"] = f"{timing_logs['time/optimizer_ms']:.1f}"
+                    postfix["data"] = f"{timing_logs['time/data_ms']:.1f}"
+                if postfix:
+                    progress_bar.set_postfix(**postfix)
+                if args.with_tracking:
                     accelerator.log(logs, step=completed_steps)
-                if args.checkpointing_steps and str(args.checkpointing_steps).isdigit():
-                    interval = int(args.checkpointing_steps)
-                    if completed_steps % interval == 0:
-                        accelerator.save_state(os.path.join(args.output_dir, f"step_{completed_steps}"))
-                if completed_steps % args.validate_every == 0:
-                    evaluate(args, model, eval_dataloader, accelerator, completed_steps)
-                if completed_steps >= max_train_steps:
-                    break
+
+            if args.checkpointing_steps and str(args.checkpointing_steps).isdigit():
+                if _interval_due(int(args.checkpointing_steps), completed_steps):
+                    accelerator.save_state(
+                        os.path.join(args.output_dir, f"step_{completed_steps}")
+                    )
+            if _interval_due(args.validate_every, completed_steps):
+                evaluate(args, model, eval_dataloader, accelerator, completed_steps)
+            if completed_steps >= max_train_steps:
+                break
 
     evaluate(args, model, eval_dataloader, accelerator, completed_steps)
     if args.with_tracking:
