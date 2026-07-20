@@ -114,6 +114,7 @@ DEFAULT_CONFIG = {
     "seed": 123,
     "max_grad_norm": 1.0,
     "checkpointing_steps": None,
+    "save_final_model": False,
     "resume_from_checkpoint": None,
     "output_dir": None,
     "base_output_dir": str(REPO_DIR / "model-output"),
@@ -501,21 +502,28 @@ def evaluate(args, model, eval_dataloader, accelerator, step):
 
 def save_model(args, model, tokenizer, accelerator, completed_steps, max_train_steps):
     accelerator.wait_for_everyone()
+    if not accelerator.is_main_process:
+        return
+    os.makedirs(args.output_dir, exist_ok=True)
+    with open(os.path.join(args.output_dir, "training_config.json"), "w") as f:
+        json.dump(vars(args), f, indent=2)
+    if completed_steps >= max_train_steps:
+        with open(os.path.join(args.output_dir, "COMPLETED"), "w") as f:
+            json.dump(
+                {"completed_at": time.time(), "completed_steps": completed_steps},
+                f,
+            )
+            f.write("\n")
+    if not args.save_final_model:
+        logger.info(
+            "skipping weight save (save_final_model=false); markers in %s",
+            args.output_dir,
+        )
+        return
     unwrapped = accelerator.unwrap_model(model)
-    if accelerator.is_main_process:
-        os.makedirs(args.output_dir, exist_ok=True)
-        accelerator.save(unwrapped.state_dict(), os.path.join(args.output_dir, "pytorch_model.bin"))
-        tokenizer.save_pretrained(args.output_dir)
-        with open(os.path.join(args.output_dir, "training_config.json"), "w") as f:
-            json.dump(vars(args), f, indent=2)
-        if completed_steps >= max_train_steps:
-            with open(os.path.join(args.output_dir, "COMPLETED"), "w") as f:
-                json.dump(
-                    {"completed_at": time.time(), "completed_steps": completed_steps},
-                    f,
-                )
-                f.write("\n")
-        logger.info("saved model to %s", args.output_dir)
+    accelerator.save(unwrapped.state_dict(), os.path.join(args.output_dir, "pytorch_model.bin"))
+    tokenizer.save_pretrained(args.output_dir)
+    logger.info("saved model to %s", args.output_dir)
 
 
 def pin_cuda_early() -> None:

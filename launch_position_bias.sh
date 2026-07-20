@@ -107,6 +107,8 @@ write_common_config() {
   "log_every_n_steps": ${LOG_EVERY},
   "profile_every_n_steps": ${PROFILE_EVERY},
   "validate_every": ${VALIDATE_EVERY},
+  "checkpointing_steps": null,
+  "save_final_model": false,
   "wandb_project": "${WANDB_PROJECT}",
   "wandb_entity": "${WANDB_ENTITY}",
   "with_tracking": ${WITH_TRACKING},
