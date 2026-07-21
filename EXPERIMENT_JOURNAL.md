@@ -8,10 +8,13 @@ results when the interpretation or code changes.
 
 As of 2026-07-21:
 
-- Phase-1 and Phase-1b are both complete at 10k steps.
+- Phase-1 and Phase-1b are complete at 10k steps.
 - Best overall remains Phase-1 **linear logit bias** (4.076 / 58.9).
-- Corrected low-rank and bottleneck-MLP logit biases nearly match linear.
-- Q/K phase residuals help much less than logit bias; MLP phase is ~tied with RoPE.
+- **Bug fix:** `qk.apply="add"` is now true AddRoPE (`q+e`, no multiplicative
+  RoPE). Previously it incorrectly did `RoPE(q+e)` with a zeroed addend.
+- Phase-1c (true AddRoPE family) **queued** 2026-07-21 ~09:01 UTC via
+  `EXPERIMENT_FAMILY=phase1c`, `GPU_SELECTOR=any`, `--wait` (box was full).
+  Jobs: identity, add_rope affine, linear, low_rank, mlp.
 
 ## 2026-07-20 — Phase 1: position-only logit biases
 
@@ -108,7 +111,9 @@ Each channel independently selects:
 
 The Q/K channel additionally selects:
 
-- `add`: add a zero-initialized position vector before standard RoPE.
+- `add`: true AddRoPE — add `e(p)` to Q/K and **skip** multiplicative RoPE
+  (see Jonathan Chang's Additive Rotary Embedding). Feature maps extend the
+  addend: identity/add_rope ≈ blog; residual maps ≈ `cis + f(cis)`.
 - `phase_residual`: predict a phase delta and compose it with standard RoPE.
   A zero phase delta converts to the identity rotation.
 
@@ -175,6 +180,19 @@ pursuing richer Q/K phase maps alone. Natural follow-ups: content-conditioned
 logit bias (Inkling), param-matched FFN controls, and optionally
 `logit linear + qk phase linear` together.
 
+## 2026-07-21 — Fix: true AddRoPE for `qk.apply=add`
+
+Two bugs in the prior Q/K `add` path relative to the intended
+[AddRoPE](https://jonathanc.net/blog/additive-rotary-embedding) design:
+
+1. Multiplicative RoPE still ran after the addend (`RoPE(q+e)`).
+2. A zero-initialized readout erased the sinusoid addend at step 0.
+
+Fix: `apply=add` uses the feature-map output directly as `e(p)`, adds it to Q/K,
+and disables multiplicative RoPE. Phase residual is unchanged. Phase-1b only
+ran `phase_residual`, so completed numbers are unaffected. Next sweep:
+`EXPERIMENT_FAMILY=phase1c` (identity, add_rope affine, linear, low_rank, mlp).
+
 ## Intended future work
 
 The following were deliberately out of scope for the dual-channel refactor, but
@@ -183,16 +201,15 @@ we intend to pursue them:
 1. **Inkling / content-conditioned banks**
    - Query-dependent mixtures over learned relative-distance profiles.
    - Table and CosNet/function-parameterized versions.
-2. **Content-conditioned Q/K residual**
-   - Explore a cheap residual such as
-     `x + low_rank_MLP(concat(x, rope_features))`.
-3. **Parameter-matched wider-FFN controls**
+2. **Parameter-matched wider-FFN controls**
    - Spend the position module's extra parameters in the baseline FFN to test
      whether gains come from mechanism or parameter count.
-4. **Replacing RoPE entirely**
-   - Current phase residuals are zero-initialized deltas on top of standard RoPE.
-   - Later experiments should test learned phase/position mechanisms without
-     the fixed RoPE prior.
+3. **Separate Q/K AddRoPE banks**
+   - Blog AddRoPE uses distinct `weight_q` / `weight_k`; current AddRoPE shares
+     one addend across Q and K.
+4. **Content-conditioned Q/K residual**
+   - Explore a cheap residual such as
+     `x + low_rank_MLP(concat(x, rope_features))` (on top of RoPE or AddRoPE).
 
 Additional later analyses:
 

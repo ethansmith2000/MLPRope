@@ -21,9 +21,11 @@ LOG_DIR="${SCRIPT_DIR}/logs"
 CONFIG_DIR="${SCRIPT_DIR}/sweep_configs"
 WANDB_PROJECT="${WANDB_PROJECT:-mlprope-position-bias}"
 WANDB_ENTITY="${WANDB_ENTITY:-ethansmith2000}"
-EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | phase1b | individual family | all
+EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | phase1b | phase1c | individual | all
 if [[ "${EXPERIMENT_FAMILY}" == "phase1b" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1b"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase1c" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1c"
 else
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1"
 fi
@@ -213,6 +215,13 @@ want_phase1b_family() {
     || "${EXPERIMENT_FAMILY}" == "${family}" ]]
 }
 
+want_phase1c_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "all" \
+    || "${EXPERIMENT_FAMILY}" == "phase1c" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
 echo "MLPROPE_QUEUE_STARTED $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "family=${EXPERIMENT_FAMILY} model='${MODEL_CONFIG}' submit=${SUBMIT_JOBS} dry_run=${DRY_RUN} parallel=${PARALLEL}"
 echo "gpu-claim=${GPU_CLAIM_BIN} selector=${GPU_SELECTOR}"
@@ -265,6 +274,45 @@ if want_phase1b_family "qk_phase_mlp"; then
     "qk-phase-mlp-m${POS_MLP_HIDDEN}-${POS_SHARING}-h${HIDDEN_SIZE}d${DEPTH}" \
     "sdpa" \
     "{\"enabled\": true, \"feature_map\": \"mlp\", \"sharing\": \"${POS_SHARING}\", \"apply\": \"phase_residual\", \"rank\": ${POS_RANK}, \"mlp_hidden\": ${POS_MLP_HIDDEN}}" \
+    "${LOGIT_DISABLED}"
+fi
+
+# Direction 1c: true AddRoPE (replace multiplicative RoPE with q + f(cis)).
+# See https://jonathanc.net/blog/additive-rotary-embedding — extended with our
+# feature-map taxonomy. RoPE baseline from Phase 1 remains the anchor.
+if want_phase1c_family "qk_add_identity"; then
+  emit_channel_variant \
+    "qk-addrope-identity-${POS_SHARING}-h${HIDDEN_SIZE}d${DEPTH}" \
+    "sdpa" \
+    "{\"enabled\": true, \"feature_map\": \"identity\", \"sharing\": \"${POS_SHARING}\", \"apply\": \"add\", \"rank\": ${POS_RANK}, \"mlp_hidden\": ${POS_MLP_HIDDEN}}" \
+    "${LOGIT_DISABLED}"
+fi
+if want_phase1c_family "qk_add_add_rope"; then
+  emit_channel_variant \
+    "qk-addrope-add_rope-${POS_SHARING}-h${HIDDEN_SIZE}d${DEPTH}" \
+    "sdpa" \
+    "{\"enabled\": true, \"feature_map\": \"add_rope\", \"sharing\": \"${POS_SHARING}\", \"apply\": \"add\", \"rank\": ${POS_RANK}, \"mlp_hidden\": ${POS_MLP_HIDDEN}}" \
+    "${LOGIT_DISABLED}"
+fi
+if want_phase1c_family "qk_add_linear"; then
+  emit_channel_variant \
+    "qk-addrope-linear-${POS_SHARING}-h${HIDDEN_SIZE}d${DEPTH}" \
+    "sdpa" \
+    "{\"enabled\": true, \"feature_map\": \"linear\", \"sharing\": \"${POS_SHARING}\", \"apply\": \"add\", \"rank\": ${POS_RANK}, \"mlp_hidden\": ${POS_MLP_HIDDEN}}" \
+    "${LOGIT_DISABLED}"
+fi
+if want_phase1c_family "qk_add_low_rank"; then
+  emit_channel_variant \
+    "qk-addrope-low_rank-r${POS_RANK}-${POS_SHARING}-h${HIDDEN_SIZE}d${DEPTH}" \
+    "sdpa" \
+    "{\"enabled\": true, \"feature_map\": \"low_rank\", \"sharing\": \"${POS_SHARING}\", \"apply\": \"add\", \"rank\": ${POS_RANK}, \"mlp_hidden\": ${POS_MLP_HIDDEN}}" \
+    "${LOGIT_DISABLED}"
+fi
+if want_phase1c_family "qk_add_mlp"; then
+  emit_channel_variant \
+    "qk-addrope-mlp-m${POS_MLP_HIDDEN}-${POS_SHARING}-h${HIDDEN_SIZE}d${DEPTH}" \
+    "sdpa" \
+    "{\"enabled\": true, \"feature_map\": \"mlp\", \"sharing\": \"${POS_SHARING}\", \"apply\": \"add\", \"rank\": ${POS_RANK}, \"mlp_hidden\": ${POS_MLP_HIDDEN}}" \
     "${LOGIT_DISABLED}"
 fi
 

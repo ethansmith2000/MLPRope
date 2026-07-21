@@ -67,11 +67,11 @@ dot product receives a learned distance bias.
 
 | Axis | Q/K channel | Logit-bias channel |
 | --- | --- | --- |
-| Output | Vector added to Q/K, or `D/2` phase deltas | Scalar curve over relative distance |
+| Output | AddRoPE addend (`head_dim`), or `D/2` phase deltas | Scalar curve over relative distance |
 | `shared_head` | One vector/phase bank broadcast to all heads | One feature map and readout shared across heads |
 | `per_head` | Independent vector/phase bank per head | Independent feature map and readout per head |
 | `full_dim` | Joint map in model dimension, reshaped into heads | Joint full-dimension map, then per-head scalar readout |
-| Identity initialization | Zero additive delta or zero phase delta | Zero scalar readout |
+| Identity initialization | AddRoPE: sinusoid addend (no `R`); phase: zero `δ` ⇒ `R=I` | Zero scalar readout |
 
 `feature_map` and `sharing` therefore have channel-local consequences even
 though both channels use the same vocabulary.
@@ -93,8 +93,10 @@ Let the sinusoidal basis at a position or distance be `x ∈ R^D`.
 
 Biases are enabled in affine layers and initialized to zero. Residual output
 layers are zero-initialized so low-rank and MLP feature maps begin as identity.
-Channel output layers are also zero-initialized so every learned channel has
-zero effect at step 0.
+Logit-channel readouts and Q/K phase readouts are zero-initialized so those
+channels have zero effect at step 0. True AddRoPE (`qk.apply=add`) has **no**
+zero readout: the feature map *is* the addend, so identity/residual maps start
+as sinusoids.
 
 This taxonomy keeps output shape fixed while varying the feature map. In
 particular, low-rank and bottleneck MLP are separate ablations.
@@ -104,30 +106,28 @@ particular, low-rank and bottleneck MLP are separate ablations.
 The Q/K channel consumes absolute-position sinusoidal features and emits a
 vector-valued transform.
 
-### Additive Q/K residual
+### Additive Q/K (true AddRoPE)
 
-For the shared Q/K embedding `e(p)`:
-
-```text
-q'(p) = RoPE(q(p) + e(p), p)
-k'(p) = RoPE(k(p) + e(p), p)
-```
-
-The final projection producing `e` is zero-initialized, so this is exactly
-standard RoPE at initialization.
-
-This channel introduces content-position cross terms:
+`qk.apply="add"` **replaces** multiplicative RoPE, following
+[Additive Rotary Embedding](https://jonathanc.net/blog/additive-rotary-embedding):
 
 ```text
-(q + e_q) · (k + e_k)
-  = q·k + q·e_k + e_q·k + e_q·e_k
+q'(p) = q(p) + e(p)
+k'(p) = k(p) + e(p)
 ```
 
-Those terms cannot be reproduced by a position-only scalar logit bias.
+with no `R(θ)q`. Here `e(p)` is the Q/K feature-map output over absolute-position
+sinusoids (`cis(θ·p)` in real interleaved form). That is the blog baseline when
+`feature_map=identity` or `add_rope` (learned per-frequency scale/offset, identity
+at init), and the intended extension when `e = f(cis)` or `e = cis + f(cis)` via
+linear / low-rank / bottleneck / MLP maps.
+
+This is **not** `RoPE(q + e)`. An earlier bug composed the addend under still-on
+RoPE and zeroed the addend at init; both are fixed.
 
 ### Phase residual
 
-The phase path predicts `δ(p) ∈ R^(D/2)` and composes it with standard RoPE:
+The phase path keeps multiplicative RoPE and predicts `δ(p) ∈ R^(D/2)`:
 
 ```text
 q'(p) = R(theta(p) + delta(p)) q(p)
@@ -140,6 +140,15 @@ conversion to a rotation, not a zero rotation matrix.
 
 Standard RoPE uses the same frequencies for every head. The sharing axis tests
 whether learned geometry should preserve that constraint or specialize by head.
+
+This channel introduces content-position cross terms under AddRoPE:
+
+```text
+(q + e_q) · (k + e_k)
+  = q·k + q·e_k + e_q·k + e_q·e_k
+```
+
+Those terms cannot be reproduced by a position-only scalar logit bias.
 
 ## Logit-bias channel
 
@@ -185,6 +194,20 @@ Takeaways: factorized linear nearly matches full linear on the logit channel;
 bottleneck nonlinearity adds nothing; Q/K phase residuals underperform scalar
 logit bias, and MLP phase does not beat RoPE.
 
+## Direction 1c: true AddRoPE (replace multiplicative RoPE)
+
+Phase 1c tests the AddRoPE family as a **replacement** for RoPE, not a residual
+under it:
+
+| Variant | Meaning |
+| --- | --- |
+| `qk.apply=add`, `feature_map=identity` | Blog AddRoPE: `q + cis(θp)` |
+| `feature_map=add_rope` | Blog affine: learned scale/offset on `cis` |
+| `feature_map=linear` | `q + Linear(cis)` |
+| `feature_map=low_rank` / `mlp` | `q + cis + f(cis)` (residual; starts as AddRoPE) |
+
+Anchor: Phase-1 RoPE baseline. Launcher family: `EXPERIMENT_FAMILY=phase1c`.
+
 ## Direction 2: content-conditioned relative bias
 
 The Inkling hypothesis remains: query content can select different
@@ -224,5 +247,6 @@ head-specialized structure while nonlinear maps learn noisy or redundant curves.
 - Inkling table and CosNet implementation.
 - Parameter-matched wider-FFN controls.
 - The content-conditioned `x + MLP(concat(x, rope))` Q/K residual.
-- Replacing RoPE entirely; current phase experiments are residuals on top of it.
+- Replacing RoPE entirely via multiplicative alternatives other than AddRoPE;
+  Phase 1c covers the AddRoPE replacement family.
 - Full Cartesian sweeps across channel, feature map, and sharing.

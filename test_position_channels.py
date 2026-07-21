@@ -18,6 +18,8 @@ FEATURE_MAPS = (
     "mlp",
 )
 SHARING_MODES = ("shared_head", "per_head", "full_dim")
+# Feature maps that start as (scaled) sinusoids for true AddRoPE.
+ADDROPE_SINUSOID_MAPS = ("identity", "add_rope", "low_rank", "bottleneck_mlp", "mlp")
 
 
 class PositionChannelTest(unittest.TestCase):
@@ -39,32 +41,45 @@ class PositionChannelTest(unittest.TestCase):
                     self.assertEqual(curves.shape, (4, 16))
                     self.assertEqual(torch.count_nonzero(curves).item(), 0)
 
-    def test_qk_contract_and_zero_init(self):
+    def test_qk_phase_zero_init_and_add_sinusoid_init(self):
         for sharing in SHARING_MODES:
             for feature_map in FEATURE_MAPS:
-                for apply in ("add", "phase_residual"):
-                    with self.subTest(
-                        sharing=sharing,
+                with self.subTest(sharing=sharing, feature_map=feature_map, apply="phase"):
+                    phase = QKPositionChannel(
                         feature_map=feature_map,
-                        apply=apply,
-                    ):
-                        channel = QKPositionChannel(
-                            feature_map=feature_map,
-                            sharing=sharing,
-                            apply=apply,
-                            heads=4,
-                            head_dim=8,
-                            extent=16,
-                            theta=10_000.0,
-                            rank=4,
-                            mlp_hidden=12,
-                        )
-                        output = channel(9)
-                        output_dim = 8 if apply == "add" else 4
-                        self.assertEqual(output.shape, (4, 9, output_dim))
-                        self.assertEqual(torch.count_nonzero(output).item(), 0)
+                        sharing=sharing,
+                        apply="phase_residual",
+                        heads=4,
+                        head_dim=8,
+                        extent=16,
+                        theta=10_000.0,
+                        rank=4,
+                        mlp_hidden=12,
+                    )
+                    output = phase(9)
+                    self.assertEqual(output.shape, (4, 9, 4))
+                    self.assertEqual(torch.count_nonzero(output).item(), 0)
 
-    def test_qk_residuals_match_rope_at_init(self):
+                with self.subTest(sharing=sharing, feature_map=feature_map, apply="add"):
+                    add = QKPositionChannel(
+                        feature_map=feature_map,
+                        sharing=sharing,
+                        apply="add",
+                        heads=4,
+                        head_dim=8,
+                        extent=16,
+                        theta=10_000.0,
+                        rank=4,
+                        mlp_hidden=12,
+                    )
+                    output = add(9)
+                    self.assertEqual(output.shape, (4, 9, 8))
+                    # True AddRoPE uses the feature map as the addend; sinusoid
+                    # and residual maps are non-zero at initialization.
+                    if feature_map in ADDROPE_SINUSOID_MAPS:
+                        self.assertGreater(torch.count_nonzero(output).item(), 0)
+
+    def test_phase_residual_matches_rope_at_init(self):
         common = {
             "dim": 32,
             "depth": 1,
@@ -82,22 +97,79 @@ class PositionChannelTest(unittest.TestCase):
         input_ids = torch.randint(0, 64, (2, 8))
         expected = baseline(input_ids)
 
-        for apply in ("add", "phase_residual"):
-            with self.subTest(apply=apply):
-                candidate = Transformer(
-                    **common,
-                    qk_config={
-                        "enabled": True,
-                        "feature_map": "mlp",
-                        "sharing": "per_head",
-                        "apply": apply,
-                        "rank": 4,
-                        "mlp_hidden": 12,
-                    },
-                ).eval()
-                candidate.load_state_dict(baseline.state_dict(), strict=False)
-                actual = candidate(input_ids)
-                torch.testing.assert_close(actual, expected)
+        candidate = Transformer(
+            **common,
+            qk_config={
+                "enabled": True,
+                "feature_map": "mlp",
+                "sharing": "per_head",
+                "apply": "phase_residual",
+                "rank": 4,
+                "mlp_hidden": 12,
+            },
+        ).eval()
+        candidate.load_state_dict(baseline.state_dict(), strict=False)
+        actual = candidate(input_ids)
+        torch.testing.assert_close(actual, expected)
+
+    def test_addrope_does_not_apply_multiplicative_rope(self):
+        common = {
+            "dim": 32,
+            "depth": 1,
+            "heads": 4,
+            "ff_mult": 2,
+            "vocab_size": 64,
+            "max_seq_len": 16,
+            "attn_impl": "sdpa",
+            "logit_bias_config": {"enabled": False},
+        }
+        rope = Transformer(**common, qk_config={"enabled": False}).eval()
+        addrope = Transformer(
+            **common,
+            qk_config={
+                "enabled": True,
+                "feature_map": "identity",
+                "sharing": "per_head",
+                "apply": "add",
+                "rank": 4,
+                "mlp_hidden": 12,
+            },
+        ).eval()
+        self.assertTrue(rope.blocks[0].attn.multiplicative_rope)
+        self.assertFalse(addrope.blocks[0].attn.multiplicative_rope)
+
+        addrope.load_state_dict(rope.state_dict(), strict=False)
+        input_ids = torch.randint(0, 64, (2, 8))
+        rope_out = rope(input_ids)
+        add_out = addrope(input_ids)
+        self.assertFalse(torch.allclose(rope_out, add_out))
+
+    def test_addrope_residual_maps_match_identity_at_init(self):
+        for feature_map in ("low_rank", "bottleneck_mlp", "mlp"):
+            with self.subTest(feature_map=feature_map):
+                identity = QKPositionChannel(
+                    feature_map="identity",
+                    sharing="per_head",
+                    apply="add",
+                    heads=4,
+                    head_dim=8,
+                    extent=16,
+                    theta=10_000.0,
+                    rank=4,
+                    mlp_hidden=12,
+                )
+                residual = QKPositionChannel(
+                    feature_map=feature_map,
+                    sharing="per_head",
+                    apply="add",
+                    heads=4,
+                    head_dim=8,
+                    extent=16,
+                    theta=10_000.0,
+                    rank=4,
+                    mlp_hidden=12,
+                )
+                torch.testing.assert_close(identity(11), residual(11))
 
     def test_low_rank_and_bottleneck_have_fixed_feature_shape(self):
         low_rank = LogitBiasChannel(
@@ -182,6 +254,19 @@ class PositionConfigTest(unittest.TestCase):
         self.assertTrue(config.logit_bias["enabled"])
         self.assertEqual(config.attn_impl, "flex")
         self.assertIn("+", config.run_name)
+
+    def test_addrope_run_tag(self):
+        config = self._load(
+            {
+                "qk": {
+                    "enabled": True,
+                    "feature_map": "identity",
+                    "apply": "add",
+                },
+            }
+        )
+        self.assertEqual(config.qk["apply"], "add")
+        self.assertTrue(config.run_name.startswith("qk-add-identity"))
 
 
 if __name__ == "__main__":
