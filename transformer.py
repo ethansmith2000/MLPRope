@@ -285,7 +285,17 @@ class LogitBiasChannel(PositionChannel):
 
 
 class QKPositionChannel(PositionChannel):
-    """Vector or phase residual composed with the standard RoPE Q/K path."""
+    """Q/K position channel: true AddRoPE addend, or phase residual on RoPE.
+
+    ``apply="add"`` (AddRoPE): the feature-map output is added to Q/K and
+    multiplicative RoPE is skipped. Identity / add_rope / residual feature maps
+    therefore start as (scaled) sinusoids, matching
+    https://jonathanc.net/blog/additive-rotary-embedding — extended so the
+    addend may be ``f(cis)`` or ``cis + f(cis)`` via the feature-map taxonomy.
+
+    ``apply="phase_residual"``: a zero-initialized ``D/2`` phase delta is
+    composed with standard multiplicative RoPE (``R(θ+δ)``).
+    """
 
     def __init__(
         self,
@@ -318,14 +328,20 @@ class QKPositionChannel(PositionChannel):
             rank=rank,
             mlp_hidden=mlp_hidden,
         )
-        output_dim = head_dim if apply == "add" else head_dim // 2
-        output_groups = 1 if sharing == "shared_head" else heads
-        self.output_weight = torch.nn.Parameter(
-            torch.zeros(output_groups, head_dim, output_dim)
-        )
-        self.output_bias = torch.nn.Parameter(
-            torch.zeros(output_groups, output_dim)
-        )
+        # Phase residual needs a D/2 readout (zero => δ=0 => R(δ)=I).
+        # AddRoPE uses the feature map as the addend directly — a zero readout
+        # would erase position at init and defeat the AddRoPE baseline.
+        if apply == "phase_residual":
+            output_groups = 1 if sharing == "shared_head" else heads
+            self.output_weight = torch.nn.Parameter(
+                torch.zeros(output_groups, head_dim, head_dim // 2)
+            )
+            self.output_bias = torch.nn.Parameter(
+                torch.zeros(output_groups, head_dim // 2)
+            )
+        else:
+            self.register_parameter("output_weight", None)
+            self.register_parameter("output_bias", None)
 
     def forward(
         self,
@@ -339,6 +355,8 @@ class QKPositionChannel(PositionChannel):
                 f"{self.extent}."
             )
         features = self.features(dtype=dtype)[:, :sequence_length]
+        if self.apply == "add":
+            return features
         if self.sharing == "shared_head":
             output = torch.einsum(
                 "rd,do->ro", features[0], self.output_weight[0]
@@ -351,7 +369,9 @@ class QKPositionChannel(PositionChannel):
         return output + self.output_bias[:, None, :]
 
     def reset_output_parameters(self) -> None:
-        # Additive delta=0; phase delta=0 => cos(delta)=1, sin(delta)=0.
+        if self.output_weight is None:
+            return
+        # Phase delta=0 => cos(delta)=1, sin(delta)=0 => R(delta)=I.
         torch.nn.init.zeros_(self.output_weight)
         torch.nn.init.zeros_(self.output_bias)
 
@@ -390,10 +410,8 @@ class Attention(torch.nn.Module):
 
         if dim % heads != 0:
             raise ValueError("dim must be divisible by heads.")
-        if not use_rope:
-            raise ValueError("These experiments keep RoPE enabled as the geometric prior.")
         if self.head_dim % 2 != 0:
-            raise ValueError("RoPE requires an even head dimension.")
+            raise ValueError("Position channels require an even head dimension.")
         if attn_impl not in ("sdpa", "flex"):
             raise ValueError(f"Unknown attn_impl: {attn_impl!r}")
         if self.logit_bias_config.get("enabled", False) and attn_impl != "flex":
@@ -422,6 +440,24 @@ class Attention(torch.nn.Module):
                 theta=rope_theta,
                 rank=self.qk_config["rank"],
                 mlp_hidden=self.qk_config["mlp_hidden"],
+            )
+        # True AddRoPE replaces multiplicative RoPE. Phase residual and the
+        # logit-only / baseline paths keep it. use_rope=False is only valid
+        # together with qk.apply="add".
+        self.multiplicative_rope = bool(use_rope) and not (
+            self.qk_position is not None and self.qk_position.apply == "add"
+        )
+        if not self.multiplicative_rope and self.qk_position is None:
+            raise ValueError(
+                "Disable multiplicative RoPE only when qk.apply='add' "
+                "(true AddRoPE) supplies position."
+            )
+        if not use_rope and (
+            self.qk_position is None or self.qk_position.apply != "add"
+        ):
+            raise ValueError(
+                "use_rope=False requires an enabled Q/K AddRoPE channel "
+                "(qk.apply='add')."
             )
         self.logit_bias = None
         if self.logit_bias_config.get("enabled", False):
@@ -548,12 +584,14 @@ class Attention(torch.nn.Module):
         if self.qk_position is not None:
             position_output = self.qk_position(q.shape[-2], dtype=q.dtype)
             if self.qk_position.apply == "add":
-                position_output = position_output[None, :, :, :]
-                q = q + position_output
-                k = k + position_output
+                # True AddRoPE: q' = q + e(p), no R(θ)q.
+                addend = position_output[None, :, :, :]
+                q = q + addend
+                k = k + addend
             else:
                 phase_delta = position_output
-        q, k = self._apply_rope(q, k, phase_delta=phase_delta)
+        if self.multiplicative_rope:
+            q, k = self._apply_rope(q, k, phase_delta=phase_delta)
         if self.attn_impl == "flex":
             attn = self._flex_attention(q, k, v)
         else:
