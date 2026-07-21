@@ -1,177 +1,228 @@
-# Position Embedding Experiments: Design Doc
+# Position Embedding Experiments: Dual-Channel Design
 
 ## Background
 
-We've been evaluating variants of RoPE and related position-encoding schemes, motivated by:
+This project studies two related but distinct ways to extend positional
+information in attention:
 
-1. **MLPRoPE** — a variant where sinusoidal position codes are run through a per-head MLP and *added* to Q/K (rather than multiplied, as in RoPE). Inspired by Jonathan Chang's [Additive Rotary Embedding](https://jonathanc.net/blog/additive-rotary-embedding).
-2. **Inkling's content-conditioned relative bias** — the query's hidden state produces a mixture over a learned bank of distance profiles, yielding a per-query, per-head relative-position bias added to attention logits.
-3. Prior findings on **entropy calibration** (visible-key scaling) — mostly separate, tracked elsewhere.
+1. **Q/K position transforms** modify the query and key vectors before their dot
+   product. This includes additive MLPRoPE-style embeddings and learned phase
+   residuals composed with standard RoPE.
+2. **Logit biases** add a scalar function of relative distance after the Q/K dot
+   product. This includes the completed position-only sweep and future
+   Inkling-style content-conditioned profiles.
 
-The through-line: standard attention has a fixed temperature and a position-independent dot product. All the variants relax one of those constraints, giving the model more degrees of freedom in how content and position interact.
+These channels should not be forced through one interface. They can be enabled
+independently or together, and each channel has its own feature-map and sharing
+choices.
 
-## Key insight: the unifying interface
+Entropy calibration / visible-key scaling remains a separate research thread.
 
-Every variant we care about produces a **bias tensor added to attention logits** via FlexAttention's `score_mod`. The bias is never materialized as a full `[seq, seq]` matrix — `score_mod` runs inside the fused kernel and reads from precomputed state indexed by `(q_idx, kv_idx)`.
+## Baseline and Phase-1 result
 
-Interface:
+The baseline is standard multiplicative RoPE with no learned Q/K residual and no
+learned logit bias.
 
-```python
-bias = position_module(hidden_states, positions)  # semantically [B, H, Q, K]
-                                                   # never allocated in full
+Phase 1 kept RoPE on Q/K and tested position-only logit-bias deltas. At 10k steps:
+
+| Variant | Eval loss | Perplexity |
+| --- | ---: | ---: |
+| RoPE baseline | 4.129 | 62.1 |
+| AddRoPE logit bias | 4.126 | 61.9 |
+| Low-rank implementation used in Phase 1 | 4.102 | 60.5 |
+| MLP logit bias | 4.095 | 60.0 |
+| Linear logit bias | **4.076** | **58.9** |
+
+The completed low-rank run was confounded: the document described
+`D → r → D`, but the code implemented `D → r → GELU → scalar`. It is retained as
+an empirical result, but it is not the factorized-linear ablation its name
+implied.
+
+## Independent channel configuration
+
+Conceptually, the model exposes:
+
+```yaml
+qk:
+  enabled: false
+  feature_map: identity
+  sharing: per_head
+  apply: phase_residual
+  rank: 32
+  mlp_hidden: 128
+
+logit_bias:
+  enabled: false
+  feature_map: identity
+  sharing: per_head
+  rank: 32
+  mlp_hidden: 128
 ```
 
-The variants differ only in what `position_module` does internally.
+With both channels disabled, attention is the RoPE baseline. Enabling both is a
+valid experiment: Q/K receives a learned geometric transform and the resulting
+dot product receives a learned distance bias.
 
-## Design decisions we landed on
+### Channel-local semantics
 
-### 1. Add-to-logits, not add-to-Q/K
+| Axis | Q/K channel | Logit-bias channel |
+| --- | --- | --- |
+| Output | Vector added to Q/K, or `D/2` phase deltas | Scalar curve over relative distance |
+| `shared_head` | One vector/phase bank broadcast to all heads | One feature map and readout shared across heads |
+| `per_head` | Independent vector/phase bank per head | Independent feature map and readout per head |
+| `full_dim` | Joint map in model dimension, reshaped into heads | Joint full-dimension map, then per-head scalar readout |
+| Identity initialization | Zero additive delta or zero phase delta | Zero scalar readout |
 
-MLPRoPE originally added to Q/K before the dot product. **We're standardizing on add-to-logits (via `score_mod`) across all variants.** Reasons:
+`feature_map` and `sharing` therefore have channel-local consequences even
+though both channels use the same vocabulary.
 
-- Cheaper (no per-token position code interacting with projections)
-- Inkling requires it anyway
-- Makes the ablation clean — "does content-conditioning help" is a fair comparison only if position-only and content-conditioned variants hit attention through the same channel
+## Feature-map taxonomy
 
-If we later want to separate "add-to-logits itself is the win" from "content-conditioning is the win," we can add an add-to-Q/K version of each position-only variant. Not the priority.
+Let the sinusoidal basis at a position or distance be `x ∈ R^D`.
 
-### 2. Keep RoPE on Q/K as the geometric prior
+1. **Identity:** `f(x) = x`.
+2. **AddRoPE affine:** learned per-frequency scale and offset, initialized as
+   identity.
+3. **Linear:** full `D → D` affine map.
+4. **Low-rank:** purely linear residual factorization
+   `f(x) = x + up(down(x))`, with `D → r → D`.
+5. **Bottleneck MLP:** nonlinear residual
+   `f(x) = x + up(GELU(down(x)))`, with `D → r → D`.
+6. **MLP:** the same nonlinear residual with an independently selected hidden
+   width rather than the low-rank budget.
 
-Learned bias is a **delta on top of RoPE**, not a replacement. Init the learned piece near-zero so at step 0 the model behaves like a pure RoPE baseline. This means if the learned piece is unhelpful we degrade gracefully to a known-good baseline, not to noise.
+Biases are enabled in affine layers and initialized to zero. Residual output
+layers are zero-initialized so low-rank and MLP feature maps begin as identity.
+Channel output layers are also zero-initialized so every learned channel has
+zero effect at step 0.
 
-### 3. Per-head granularity
+This taxonomy keeps output shape fixed while varying the feature map. In
+particular, low-rank and bottleneck MLP are separate ablations.
 
-Bias tensor is per-head (`[B, H, Q, K]` semantically). Not per-dim (interacts badly with RoPE geometry, especially post-RoPE), not shared across heads (heads specialize). This matches the granularity that fell out of the entropy-scaling analysis for a different question.
+## Q/K channel
 
-### 4. Anchor to identity at init
+The Q/K channel consumes absolute-position sinusoidal features and emits a
+vector-valued transform.
 
-Every learned modification starts as a small delta from a known-good baseline:
-- Position-only variants: `+ embs` residual from the raw sinusoids, MLP output initialized small
-- Content-conditioned: mixing weights softplus-with-identity-backward, initialized so the produced bias ≈ 0
-- Positivity where needed: softplus, not exp (avoids the exp-derivative explosion issue)
+### Additive Q/K residual
 
-### 5. Same parameter budget across variants
+For the shared Q/K embedding `e(p)`:
 
-The honest ablation isn't "new thing vs RoPE" — it's "new thing vs RoPE with the extra parameters spent somewhere else, e.g. wider FFN." At minimum, match parameter counts across position variants.
-
-## Direction 1 (fold-in of what was originally "Directions 1 and 4"): Position-only expressiveness sweep
-
-**Hypothesis:** As we make `f(pos) → bias` more expressive, does loss keep improving, or does it plateau? Finding the plateau tells us whether extra position machinery beyond a certain point is wasted.
-
-**Variants (in order of expressiveness):**
-
-1. **RoPE baseline** — standard multiplicative RoPE, no added bias. Control.
-2. **AddRoPE** — learned per-frequency scale + offset on sinusoidal basis, add-to-logits.
-3. **Linear** — per-head linear transform over the sinusoidal basis.
-4. **Low-rank** — per-head `dim → r → dim` bottleneck, `r` small (say 16-32).
-5. **MLPRoPE** — per-head 2-layer MLP over the sinusoidal basis (roughly what the existing MLPRoPE code does, but adapted to add-to-logits).
-
-All produce a bias curve as a function of relative distance, materialized as `[B, H, Q, rel_extent]` and read via `score_mod`.
-
-## Direction 2: Content-conditioned relative bias (Inkling-style)
-
-**Hypothesis:** Letting the query's content decide which relative-distance pattern to apply is a *new capability* — no position-only variant can express "this query wants distance profile A, that query wants distance profile B." If this direction wins over the best Direction 1 variant at matched parameters, content-conditioning is doing real work.
-
-**Variants:**
-
-1. **Inkling-table** — literal Chang/Inkling design. `relative_states = linear(hidden_states)` produces `[B, Q, H, d_rel]`. `proj: [d_rel, rel_extent]` is a learned parameter. `bias_curve = relative_states @ proj` gives `[B, Q, H, rel_extent]`. Read via `score_mod` at `q_idx - kv_idx`, masked to `0 <= distance < rel_extent`, causal mask handled separately.
-2. **Inkling-CosNet** — replace the `[d_rel, rel_extent]` lookup table with `d_rel` CosNet-parameterized functions of relative distance (learnable-frequency cosine features + tiny MLP, à la the NOBLE paper). Gets extrapolation beyond `rel_extent` for free and uses fewer parameters. This is the "how do our internal Canva Research findings compose with Inkling" experiment.
-
-**Hyperparameters to think about:**
-- `d_rel` — the "vocabulary size" of relative-position patterns. Start small (16-32). Too small → collapses to ALiBi. Too large → overfits and wastes parameters.
-- `rel_extent` — for the table variant, the bounded distance range. Set to something like training seqlen or half of it. Beyond `rel_extent`, bias is zero and content-based attention takes over. This hard cutoff is a *feature* for length extrapolation.
-- For CosNet variant, no hard cutoff, but pay attention to what the learned frequencies do at long distances.
-
-## What we're NOT doing here
-
-**Entropy calibration / visible-key scaling** is a separate research thread, being handled elsewhere. It lives on Q/K/logit-scale, has different diagnostics (multiplier curves, attention entropy vs count), and mixes it in here would confound the position ablation. Keep it in its own file.
-
-Notes handed to the other thread already: bounded softplus multiplier with identity backward, `log(log1p(n))` input, no intercept, standard SDPA scaling as anchor, 2×2 with denominator/null-token bias.
-
-## Implementation notes
-
-### FlexAttention `score_mod` pattern
-
-```python
-def make_score_mod(bias_curves, rel_extent):
-    # bias_curves: [B, H, Q, rel_extent], precomputed by the position module
-    def score_mod(score, b, h, q_idx, kv_idx):
-        distance = q_idx - kv_idx
-        in_range = (distance >= 0) & (distance < rel_extent)
-        bias = torch.where(in_range, bias_curves[b, h, q_idx, distance.clamp(0, rel_extent - 1)], 0.0)
-        return score + bias
-    return score_mod
+```text
+q'(p) = RoPE(q(p) + e(p), p)
+k'(p) = RoPE(k(p) + e(p), p)
 ```
 
-For the CosNet variant, replace the table lookup with a call to the CosNet function on `distance` inside `score_mod` (assumes the CosNet is cheap; if not, materialize `[H, rel_extent_large]` once and index).
+The final projection producing `e` is zero-initialized, so this is exactly
+standard RoPE at initialization.
 
-### Shape audit
+This channel introduces content-position cross terms:
 
-For Inkling-table:
-- Hidden state to `relative_states`: `nn.Linear(dim, n_heads * d_rel, bias=False)` → reshape to `[B, Q, H, d_rel]`.
-- Profile bank: `nn.Parameter(torch.empty(d_rel, rel_extent))`, initialized small (e.g. `nn.init.trunc_normal_(std=0.02)`).
-- Bias curves: `relative_states @ proj` → `[B, Q, H, rel_extent]`.
-- Transpose to `[B, H, Q, rel_extent]` before feeding to `score_mod`.
+```text
+(q + e_q) · (k + e_k)
+  = q·k + q·e_k + e_q·k + e_q·e_k
+```
 
-For position-only variants (Direction 1):
-- Input: sinusoidal basis at distances `0, 1, ..., rel_extent - 1`.
-- Output: `[H, rel_extent]` (per-head bias curve, no batch or query dependence).
-- Broadcast to `[B, H, Q, rel_extent]` inside score_mod (i.e., all queries share the same curve for a given head).
+Those terms cannot be reproduced by a position-only scalar logit bias.
 
-### Init strategy
+### Phase residual
 
-- **Position-only variants:** initialize output layers so bias ≈ 0 at step 0. E.g., zero-init the final linear/MLP layer, or scale by a small factor and add a residual from a fixed sinusoid so the initial output is bounded but small.
-- **Content-conditioned:** zero-init the `proj` bank OR zero-init the `relative_states` linear. Either way, bias starts at 0 and grows during training.
+The phase path predicts `δ(p) ∈ R^(D/2)` and composes it with standard RoPE:
 
-### Parameter matching
+```text
+q'(p) = R(theta(p) + delta(p)) q(p)
+k'(p) = R(theta(p) + delta(p)) k(p)
+```
 
-- RoPE baseline: no extra params.
-- AddRoPE: ~`n_freqs` per head. Small.
-- Linear position-only: `n_heads * head_dim * head_dim` per layer if fully expressive, less if low-rank.
-- Low-rank: `2 * n_heads * head_dim * r`.
-- MLPRoPE (add-to-logits version): depends on hidden dim.
-- Inkling-table: `dim * n_heads * d_rel + d_rel * rel_extent`. With `d_rel=32, rel_extent=512`, this is dominated by the first term.
-- Inkling-CosNet: `dim * n_heads * d_rel` for routing + small CosNet parameters shared across profiles.
+Equivalently, apply `R(theta) R(delta)`. At initialization `δ = 0`, therefore
+`cos(δ)=1`, `sin(δ)=0`, and `R(δ)=I`. Zero phase means zero effect after
+conversion to a rotation, not a zero rotation matrix.
 
-Log parameter counts for each and match them (or match to within a factor of ~1.5) via bumping `d_rel`, `r`, or hidden dim of MLPs.
+Standard RoPE uses the same frequencies for every head. The sharing axis tests
+whether learned geometry should preserve that constraint or specialize by head.
 
-### Diagnostics to log
+## Logit-bias channel
 
-- Bias magnitudes per layer, per head (histograms).
-- For content-conditioned: distribution of mixing weights per query — is it near-uniform (routing not working) or peaked (routing engaged)?
-- Effective distance profile for a few representative queries across depths. Plot them. If they look like uniform noise, mechanism is broken. If they look like interpretable curves (peak-at-1, peak-at-8, smooth-decay), the mechanism is working.
-- Attention entropy per layer for each variant — the position bias will shift this and it's worth watching.
-- Length extrapolation: eval at seqlen > training seqlen. Position-only variants with hard cutoffs (or Inkling-table) should show a clean handoff to content attention beyond the cutoff; RoPE tends to degrade in a messier way.
+The position-only logit path consumes a sinusoidal basis at relative distances:
 
-## Experiment plan
+```text
+basis[R,D]
+  → feature_map
+  → features[H,R,D]
+  → scalar readout
+  → bias[H,R]
+```
 
-**Phase 1: Position-only sweep (Direction 1).**
-- Train each of the 5 variants at matched compute and (approximately) matched parameters.
-- Report loss curves, final loss, and length-extrapolation curves.
-- Goal: find where the position-only expressiveness curve plateaus.
+The scalar readout is part of the logit channel, not part of the feature map.
+It is zero-initialized, so the initial bias is exactly zero and attention starts
+as standard RoPE.
 
-**Phase 2: Content-conditioned comparison (Direction 2).**
-- Train the two content-conditioned variants at the same budget as the best Direction 1 result.
-- Same reporting.
-- Goal: does content-conditioning clear the position-only ceiling?
+FlexAttention reads the curve without materializing `[B,H,Q,K]`:
 
-**Phase 3 (only if Phase 2 shows a real win):** Ablations on the content-conditioned variant.
-- Sweep `d_rel`.
-- Compare shared vs per-layer distance profile bank.
-- Try dropping RoPE entirely under content-conditioning (does it still need the geometric prior?).
+```python
+distance = query_idx - key_value_idx
+in_range = (distance >= 0) & (distance < rel_extent)
+bias = bias_curves[head_idx, distance.clamp(0, rel_extent - 1)]
+score = score + torch.where(in_range, bias, 0.0)
+```
 
-Do not mix in entropy-calibration experiments during any of these phases.
+Only this channel requires FlexAttention. Q/K-only variants can use SDPA.
 
-## Open questions / things to watch
+## Direction 1b: corrected position-only and Q/K sweep
 
-- The MLPRoPE code we started from has a shape bug (see the review): `nfreqs // n_heads` produces a per-head output smaller than `head_dim`. When porting to add-to-logits, this shape issue disappears (output is now bias-shaped, not Q-shaped), but flag it if it comes back.
-- Content-conditioning at inference breaks a small nice property of RoPE: `relative_states` depends on the query's hidden state, so it recomputes per generation step. This is fine but affects wall-clock comparisons.
-- The `+ embs` residual pattern from the original MLPRoPE code is a good idea and should be preserved in any position-only variant that has capacity to fail — always fall back to a known-good baseline at init.
+Completed at 10k steps (same recipe as Phase 1). Anchors not re-run:
 
-## Remaining TODOs
+| Variant | Channel | Eval loss | Perplexity |
+| --- | --- | ---: | ---: |
+| RoPE baseline | — | 4.129 | 62.1 |
+| Linear logit bias (Phase-1 best) | logit | **4.076** | **58.9** |
+| Corrected low-rank logit `r=32` | logit | 4.081 | 59.2 |
+| Bottleneck-MLP logit `r=32` | logit | 4.084 | 59.4 |
+| Linear phase residual on Q/K | Q/K | 4.109 | 60.9 |
+| MLP phase residual on Q/K | Q/K | 4.131 | 62.2 |
 
-- Implement Phase 2's `inkling_table` and `inkling_cosnet` variants. Their config and model dispatch points are scaffolded, but deliberately raise until the content-conditioned path is implemented.
-- Implement `suggest_matched_baselines`: match position variants by parameter count (`pos_rank`, MLP width, or FFN width) and add a short timing probe for wallclock matching.
-- Add the planned diagnostics: per-layer/per-head bias histograms, content-routing statistics, representative distance profiles, attention entropy, and length-extrapolation evaluation.
-- Add the add-to-Q/K version as a later ablation against the primary add-to-logits implementation.
-- If Phase 2 wins, run the Phase 3 ablation that removes RoPE under content-conditioning and compare shared versus per-layer profile banks.
+Takeaways: factorized linear nearly matches full linear on the logit channel;
+bottleneck nonlinearity adds nothing; Q/K phase residuals underperform scalar
+logit bias, and MLP phase does not beat RoPE.
+
+## Direction 2: content-conditioned relative bias
+
+The Inkling hypothesis remains: query content can select different
+relative-distance profiles, a capability no position-only curve provides.
+
+1. **Inkling table:** query hidden states produce mixture weights over a learned
+   bank of bounded distance profiles.
+2. **Inkling CosNet:** replace the table with parameterized functions of
+   distance for lower parameter cost and extrapolation.
+
+Inkling belongs naturally in the logit-bias channel. It does not require Q/K
+position alternatives to use the same channel in unrelated ablations.
+
+A separate future idea is a cheap content-conditioned Q/K residual such as:
+
+```text
+x + low_rank_MLP(concat(x, rope_features))
+```
+
+That is not part of Direction 1b.
+
+## Diagnostics
+
+At every validation point, log:
+
+- Per-layer logit-bias mean, standard deviation, and absolute maximum.
+- Distance-profile snapshots `[H,R]` for the first, middle, and last layers.
+- Later, for content-conditioned variants: routing-weight distributions and
+  representative query-specific profiles.
+- Later, attention entropy and length-extrapolation evaluation.
+
+Profiles should answer whether the winning linear map learns smooth,
+head-specialized structure while nonlinear maps learn noisy or redundant curves.
+
+## Deferred work
+
+- Inkling table and CosNet implementation.
+- Parameter-matched wider-FFN controls.
+- The content-conditioned `x + MLP(concat(x, rope))` Q/K residual.
+- Replacing RoPE entirely; current phase experiments are residuals on top of it.
+- Full Cartesian sweeps across channel, feature map, and sharing.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import fcntl
 import inspect as _inspect
 import json
@@ -98,7 +99,7 @@ DEFAULT_CONFIG = {
     "hf_cache_dir": os.environ["HF_DATASETS_CACHE"],
     # Shared on-disk cache so parallel gpu-claim jobs don't re-tokenize.
     "tokenized_dataset_path": str(
-        WORKSPACE_DIR / ".cache" / "mlprope_openwebtext_gpt2_bs1024_ids"
+        WORKSPACE_DIR / ".cache" / "tokenized" / "openwebtext_gpt2_bs1024"
     ),
     "preprocessing_num_workers": min(8, os.cpu_count() or 1),
     "overwrite_cache": False,
@@ -144,18 +145,36 @@ DEFAULT_CONFIG = {
     "ff_mult": 4,
     "rope_theta": 10000.0,
     "qk_norm": True,
-    # Phase 1: rope | add_rope | linear | low_rank | mlp_rope.
+    # Legacy convenience preset. Nested qk/logit_bias configs are source of truth.
+    # Phase 1: rope | add_rope | linear | low_rank | bottleneck_mlp | mlp_rope.
     # Phase 2 stubs: inkling_table | inkling_cosnet.
-    "pos_variant": "rope",
+    "pos_variant": None,
     "rel_extent": None,  # None follows block_size.
     "pos_rank": 32,
     "pos_mlp_hidden": 128,
-    # Learned logit biases require flex; rope supports sdpa or flex.
+    "qk": {
+        "enabled": False,
+        "feature_map": "identity",
+        "sharing": "per_head",
+        "apply": "phase_residual",
+        "rank": 32,
+        "mlp_hidden": 128,
+    },
+    "logit_bias": {
+        "enabled": False,
+        "feature_map": "identity",
+        "sharing": "per_head",
+        "rank": 32,
+        "mlp_hidden": 128,
+    },
+    # Only the learned logit-bias channel requires flex.
     "attn_impl": "sdpa",
     "gradient_checkpointing": False,
     "compile": True,
-    "compile_mode": "reduce-overhead",
-    "compile_fullgraph": True,
+    # reduce-overhead + CUDAGraphs overwrites the CE loss tensor; flex+inductor
+    # also OOM'd Triton SMEM under nested compile. Prefer default.
+    "compile_mode": "default",
+    "compile_fullgraph": False,
     "optimizer": "adamw",
     "beta1": 0.9,
     "beta2": 0.98,
@@ -172,6 +191,7 @@ def parse_args():
             "add_rope",
             "linear",
             "low_rank",
+            "bottleneck_mlp",
             "mlp_rope",
             "inkling_table",
             "inkling_cosnet",
@@ -187,6 +207,21 @@ def parse_args():
     parser.add_argument("--dry_run", action="store_true")
     parser.add_argument("--print_model", action="store_true")
     return parser.parse_args()
+
+
+def deep_merge(base: dict, updates: dict) -> dict:
+    """Recursively merge nested config dictionaries without aliasing defaults."""
+    merged = copy.deepcopy(base)
+    for key, value in updates.items():
+        if (
+            key in merged
+            and isinstance(merged[key], dict)
+            and isinstance(value, dict)
+        ):
+            merged[key] = deep_merge(merged[key], value)
+        else:
+            merged[key] = copy.deepcopy(value)
+    return merged
 
 
 def load_json_overrides(path: str | Path, seen: set[Path] | None = None) -> dict:
@@ -208,12 +243,95 @@ def load_json_overrides(path: str | Path, seen: set[Path] | None = None) -> dict
     if not base_path.is_absolute():
         base_path = config_path.parent / base_path
     merged = load_json_overrides(base_path, seen)
-    merged.update(overrides)
-    return merged
+    return deep_merge(merged, overrides)
+
+
+CHANNEL_DEFAULTS = {
+    "qk": DEFAULT_CONFIG["qk"],
+    "logit_bias": DEFAULT_CONFIG["logit_bias"],
+}
+
+POSITION_PRESETS = {
+    "rope": {},
+    "add_rope": {
+        "logit_bias": {"enabled": True, "feature_map": "add_rope"},
+    },
+    "linear": {
+        "logit_bias": {"enabled": True, "feature_map": "linear"},
+    },
+    "low_rank": {
+        "logit_bias": {"enabled": True, "feature_map": "low_rank"},
+    },
+    "bottleneck_mlp": {
+        "logit_bias": {"enabled": True, "feature_map": "bottleneck_mlp"},
+    },
+    "mlp_rope": {
+        "logit_bias": {"enabled": True, "feature_map": "mlp"},
+    },
+}
+
+
+def normalize_channel_config(name: str, channel: dict) -> dict:
+    allowed = set(CHANNEL_DEFAULTS[name])
+    unknown = set(channel) - allowed
+    if unknown:
+        raise ValueError(f"Unknown {name} config keys: {sorted(unknown)}")
+    normalized = deep_merge(CHANNEL_DEFAULTS[name], channel)
+    if not isinstance(normalized["enabled"], bool):
+        raise TypeError(f"{name}.enabled must be a boolean")
+    feature_maps = {
+        "identity",
+        "add_rope",
+        "linear",
+        "low_rank",
+        "bottleneck_mlp",
+        "mlp",
+    }
+    if normalized["feature_map"] not in feature_maps:
+        raise ValueError(
+            f"{name}.feature_map must be one of {sorted(feature_maps)}, got "
+            f"{normalized['feature_map']!r}"
+        )
+    sharing_modes = {"shared_head", "per_head", "full_dim"}
+    if normalized["sharing"] not in sharing_modes:
+        raise ValueError(
+            f"{name}.sharing must be one of {sorted(sharing_modes)}, got "
+            f"{normalized['sharing']!r}"
+        )
+    if name == "qk" and normalized["apply"] not in {"add", "phase_residual"}:
+        raise ValueError("qk.apply must be 'add' or 'phase_residual'")
+    for key in ("rank", "mlp_hidden"):
+        normalized[key] = int(normalized[key])
+        if normalized[key] <= 0:
+            raise ValueError(f"{name}.{key} must be positive")
+    return normalized
+
+
+def position_run_tag(cfg: dict) -> str:
+    qk = cfg["qk"]
+    logit = cfg["logit_bias"]
+    if not qk["enabled"] and not logit["enabled"]:
+        return "rope-flex" if cfg["attn_impl"] == "flex" else "rope"
+
+    tags = []
+    for channel_name, channel in (("qk", qk), ("logit", logit)):
+        if not channel["enabled"]:
+            continue
+        parts = [channel_name]
+        if channel_name == "qk":
+            parts.append("phase" if channel["apply"] == "phase_residual" else "add")
+        parts.extend((channel["feature_map"], channel["sharing"]))
+        if channel["feature_map"] in {"low_rank", "bottleneck_mlp"}:
+            parts.append(f"r{channel['rank']}")
+        elif channel["feature_map"] == "mlp":
+            parts.append(f"m{channel['mlp_hidden']}")
+        tags.append("-".join(parts))
+    return "+".join(tags)
 
 
 def load_config(cli_args):
-    cfg = dict(DEFAULT_CONFIG)
+    cfg = copy.deepcopy(DEFAULT_CONFIG)
+    overrides = {}
     if cli_args.override_json is not None:
         overrides = load_json_overrides(cli_args.override_json)
         unknown = set(overrides) - set(cfg)
@@ -221,7 +339,7 @@ def load_config(cli_args):
         unknown -= {"_matching_todo"}
         if unknown:
             raise ValueError(f"Unknown override keys: {sorted(unknown)}")
-        cfg.update(overrides)
+        cfg = deep_merge(cfg, overrides)
     if cli_args.pos_variant is not None:
         cfg["pos_variant"] = cli_args.pos_variant
     if cli_args.attn_impl is not None:
@@ -233,31 +351,65 @@ def load_config(cli_args):
     if cli_args.print_model:
         cfg["print_model"] = True
 
-    # Learned logit biases require FlexAttention; keep SDPA only for pure RoPE.
-    if cfg["pos_variant"] != "rope" and cfg["attn_impl"] != "flex":
+    preset = cfg["pos_variant"]
+    if preset in {"inkling_table", "inkling_cosnet"}:
+        raise NotImplementedError(
+            f"pos_variant={preset!r} remains deferred to the Inkling phase."
+        )
+    if preset is not None and preset not in POSITION_PRESETS:
+        raise ValueError(f"Unknown position preset: {preset!r}")
+
+    # Expand the legacy preset first, then let explicit nested channel config win.
+    qk_config = copy.deepcopy(CHANNEL_DEFAULTS["qk"])
+    logit_config = copy.deepcopy(CHANNEL_DEFAULTS["logit_bias"])
+    if preset is not None:
+        preset_config = POSITION_PRESETS[preset]
+        qk_config = deep_merge(qk_config, preset_config.get("qk", {}))
+        logit_config = deep_merge(
+            logit_config, preset_config.get("logit_bias", {})
+        )
+    qk_config = normalize_channel_config(
+        "qk", deep_merge(qk_config, overrides.get("qk", {}))
+    )
+    logit_config = normalize_channel_config(
+        "logit_bias",
+        deep_merge(logit_config, overrides.get("logit_bias", {})),
+    )
+    # Legacy width knobs remain aliases for preset-generated configs.
+    if preset is not None:
+        if "qk" not in overrides:
+            qk_config["rank"] = int(cfg["pos_rank"])
+            qk_config["mlp_hidden"] = int(cfg["pos_mlp_hidden"])
+        if "logit_bias" not in overrides:
+            logit_config["rank"] = int(cfg["pos_rank"])
+            logit_config["mlp_hidden"] = int(cfg["pos_mlp_hidden"])
+    cfg["qk"] = qk_config
+    cfg["logit_bias"] = logit_config
+    cfg["pos_variant"] = preset or (
+        "rope"
+        if not qk_config["enabled"] and not logit_config["enabled"]
+        else "custom"
+    )
+
+    # Only learned logit biases require FlexAttention.
+    if logit_config["enabled"] and cfg["attn_impl"] != "flex":
         cfg["attn_impl"] = "flex"
 
     # Keep the shared tokenized cache keyed by block size when using the default path.
-    default_tok_prefix = str(WORKSPACE_DIR / ".cache" / "mlprope_openwebtext_gpt2_bs")
+    default_tok_prefix = str(WORKSPACE_DIR / ".cache" / "tokenized" / "openwebtext_gpt2_bs")
     if (
         isinstance(cfg["tokenized_dataset_path"], str)
         and cfg["tokenized_dataset_path"].startswith(default_tok_prefix)
+        and cfg["tokenized_dataset_path"].endswith("_ids")
     ):
-        cfg["tokenized_dataset_path"] = (
-            f"{default_tok_prefix}{cfg['block_size']}_ids"
-        )
+        # legacy name; prefer the shared nonlinear/calib path without _ids suffix
+        cfg["tokenized_dataset_path"] = f"{default_tok_prefix}{cfg['block_size']}"
 
     model_tag = f"h{cfg['hidden_size']}d{cfg['depth']}"
-    variant_tag = cfg["pos_variant"]
-    if cfg["pos_variant"] == "low_rank":
-        variant_tag = f"{variant_tag}-r{cfg['pos_rank']}"
-    elif cfg["pos_variant"] == "mlp_rope":
-        variant_tag = f"{variant_tag}-m{cfg['pos_mlp_hidden']}"
-    if cfg["pos_variant"] != "rope":
+    variant_tag = position_run_tag(cfg)
+    if qk_config["enabled"] or logit_config["enabled"]:
         rel_extent = cfg["rel_extent"] or cfg["block_size"]
         variant_tag = f"{variant_tag}-e{rel_extent}"
-    if cfg["attn_impl"] == "flex" and cfg["pos_variant"] == "rope":
-        variant_tag = "rope-flex"
     run_name = cfg["run_name"] or f"{variant_tag}-{model_tag}"
     cfg["run_name"] = run_name
 
@@ -371,10 +523,9 @@ def make_model(args, vocab_size):
         use_rope=True,
         rope_theta=args.rope_theta,
         qk_norm=args.qk_norm,
-        pos_variant=args.pos_variant,
         rel_extent=args.rel_extent,
-        pos_rank=args.pos_rank,
-        pos_mlp_hidden=args.pos_mlp_hidden,
+        qk_config=args.qk,
+        logit_bias_config=args.logit_bias,
         attn_impl=args.attn_impl,
     )
 
@@ -486,17 +637,39 @@ def evaluate(args, model, eval_dataloader, accelerator, step):
     eval_loss_value = eval_loss.item()
     perplexity = math.exp(eval_loss_value) if eval_loss_value < 20 else float("inf")
     logger.info("step %s: eval_loss %.4f perplexity %.4f", step, eval_loss_value, perplexity)
+    diagnostic_model = accelerator.unwrap_model(model)
+    while hasattr(diagnostic_model, "_orig_mod"):
+        diagnostic_model = diagnostic_model._orig_mod
+    position_metrics, position_profiles = diagnostic_model.position_diagnostics()
     if accelerator.is_main_process:
         metrics = {
             "step": int(step),
             "eval_loss": eval_loss_value,
             "perplexity": perplexity if math.isfinite(perplexity) else None,
             "timestamp": time.time(),
+            **position_metrics,
         }
         with open(os.path.join(args.output_dir, "metrics.jsonl"), "a") as f:
             f.write(json.dumps(metrics, sort_keys=True) + "\n")
+        if position_profiles:
+            profile_dir = Path(args.output_dir) / "position_profiles"
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {
+                    "step": int(step),
+                    "profiles": position_profiles,
+                },
+                profile_dir / f"step_{int(step):08d}.pt",
+            )
     if args.with_tracking:
-        accelerator.log({"eval_loss": eval_loss_value, "perplexity": perplexity}, step=step)
+        accelerator.log(
+            {
+                "eval_loss": eval_loss_value,
+                "perplexity": perplexity,
+                **position_metrics,
+            },
+            step=step,
+        )
     model.train()
 
 
@@ -556,6 +729,8 @@ def main():
         counts = count_parameters(model)
         print(json.dumps({
             "pos_variant": args.pos_variant,
+            "qk": args.qk,
+            "logit_bias": args.logit_bias,
             "attn_impl": args.attn_impl,
             "rel_extent": args.rel_extent or args.block_size,
             **counts,
@@ -729,6 +904,8 @@ def main():
             input_ids = batch["input_ids"][:, :-1]
             targets = batch["input_ids"][:, 1:]
             with accelerator.accumulate(model):
+                if args.compile and args.compile_mode == "reduce-overhead":
+                    torch.compiler.cudagraph_mark_step_begin()
                 stage_timer.range_start("forward")
                 loss = model(input_ids=input_ids, targets=targets)
                 stage_timer.range_end("forward")

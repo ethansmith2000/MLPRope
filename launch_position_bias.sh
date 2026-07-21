@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# MLPRope Phase 1: position-only expressiveness sweep on this 8x RTX 5090 node.
+# MLPRope position-channel sweeps on this 8x RTX 5090 node.
 #
 # Config-driven like calib_attn/launch_llm.sh, but jobs run through the shared
 # lifetime-locking helper (no Slurm):
@@ -19,10 +19,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TRAIN_SCRIPT="${SCRIPT_DIR}/train_gpt.py"
 LOG_DIR="${SCRIPT_DIR}/logs"
 CONFIG_DIR="${SCRIPT_DIR}/sweep_configs"
-OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1"
 WANDB_PROJECT="${WANDB_PROJECT:-mlprope-position-bias}"
 WANDB_ENTITY="${WANDB_ENTITY:-ethansmith2000}"
-EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | rope | add_rope | linear | low_rank | mlp_rope | all
+EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | phase1b | individual family | all
+if [[ "${EXPERIMENT_FAMILY}" == "phase1b" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1b"
+else
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1"
+fi
+OUTPUT_ROOT="${OUTPUT_ROOT:-${DEFAULT_OUTPUT_ROOT}}"
 SUBMIT_JOBS="${SUBMIT_JOBS:-true}"
 DRY_RUN="${DRY_RUN:-false}"
 # true: background each job (packs the 8 GPUs). false: run one-after-another.
@@ -48,6 +53,7 @@ BASE_BETA1="0.9"
 BASE_BETA2="0.98"
 POS_RANK="${POS_RANK:-32}"
 POS_MLP_HIDDEN="${POS_MLP_HIDDEN:-128}"
+POS_SHARING="${POS_SHARING:-per_head}"
 REL_EXTENT="${REL_EXTENT:-}" # empty => follow block_size in train_gpt.py
 
 # Model config: "hidden_size depth n_head lr batch_size max_train_steps block_size"
@@ -69,7 +75,7 @@ export WANDB_DIR="${WANDB_DIR:-/workspace/.wandb_home}"
 mkdir -p "${HF_HOME}" "${HF_DATASETS_CACHE}" "${WANDB_HOME}" "${WANDB_DIR}"
 
 # Shared tokenized cache (must match train_gpt default schema: input_ids only).
-TOKENIZED_DATASET_PATH="${TOKENIZED_DATASET_PATH:-/workspace/.cache/mlprope_openwebtext_gpt2_bs1024_ids}"
+TOKENIZED_DATASET_PATH="${TOKENIZED_DATASET_PATH:-/workspace/.cache/tokenized/openwebtext_gpt2_bs1024}"
 NUM_WORKERS="${NUM_WORKERS:-4}"
 PREFETCH_FACTOR="${PREFETCH_FACTOR:-2}"
 LOG_EVERY="${LOG_EVERY:-50}"
@@ -114,8 +120,8 @@ write_common_config() {
   "with_tracking": ${WITH_TRACKING},
   "num_warmup_steps": ${NUM_WARMUP_STEPS},
   "compile": true,
-  "compile_mode": "reduce-overhead",
-  "compile_fullgraph": true,
+  "compile_mode": "default",
+  "compile_fullgraph": false,
   ${extra_json}
 }
 JSON
@@ -182,10 +188,28 @@ emit_variant() {
   run_job "${job_name}" "${cfg_file}"
 }
 
+emit_channel_variant() {
+  local job_name="$1"
+  local attn_impl="$2"
+  local qk_json="$3"
+  local logit_json="$4"
+  local cfg_file="${CONFIG_DIR}/${job_name}.json"
+  write_common_config "${cfg_file}" \
+    "\"pos_variant\": null, \"qk\": ${qk_json}, \"logit_bias\": ${logit_json}, \"attn_impl\": \"${attn_impl}\", \"run_name\": \"${job_name}\""
+  run_job "${job_name}" "${cfg_file}"
+}
+
 want_family() {
   local family="$1"
   [[ "${EXPERIMENT_FAMILY}" == "all" \
     || "${EXPERIMENT_FAMILY}" == "phase1" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase1b_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "all" \
+    || "${EXPERIMENT_FAMILY}" == "phase1b" \
     || "${EXPERIMENT_FAMILY}" == "${family}" ]]
 }
 
@@ -209,6 +233,39 @@ if want_family "low_rank"; then
 fi
 if want_family "mlp_rope"; then
   emit_variant "mlp_rope" "flex" "mlp_rope-m${POS_MLP_HIDDEN}-h${HIDDEN_SIZE}d${DEPTH}"
+fi
+
+# Direction 1b. Existing completed RoPE and linear-logit runs are the anchors;
+# this family emits only the four new/corrected ablations.
+QK_DISABLED="{\"enabled\": false}"
+LOGIT_DISABLED="{\"enabled\": false}"
+if want_phase1b_family "low_rank_corrected"; then
+  emit_channel_variant \
+    "logit-low-rank-linear-r${POS_RANK}-${POS_SHARING}-h${HIDDEN_SIZE}d${DEPTH}" \
+    "flex" \
+    "${QK_DISABLED}" \
+    "{\"enabled\": true, \"feature_map\": \"low_rank\", \"sharing\": \"${POS_SHARING}\", \"rank\": ${POS_RANK}, \"mlp_hidden\": ${POS_MLP_HIDDEN}}"
+fi
+if want_phase1b_family "bottleneck_mlp"; then
+  emit_channel_variant \
+    "logit-bottleneck-mlp-r${POS_RANK}-${POS_SHARING}-h${HIDDEN_SIZE}d${DEPTH}" \
+    "flex" \
+    "${QK_DISABLED}" \
+    "{\"enabled\": true, \"feature_map\": \"bottleneck_mlp\", \"sharing\": \"${POS_SHARING}\", \"rank\": ${POS_RANK}, \"mlp_hidden\": ${POS_MLP_HIDDEN}}"
+fi
+if want_phase1b_family "qk_phase_linear"; then
+  emit_channel_variant \
+    "qk-phase-linear-${POS_SHARING}-h${HIDDEN_SIZE}d${DEPTH}" \
+    "sdpa" \
+    "{\"enabled\": true, \"feature_map\": \"linear\", \"sharing\": \"${POS_SHARING}\", \"apply\": \"phase_residual\", \"rank\": ${POS_RANK}, \"mlp_hidden\": ${POS_MLP_HIDDEN}}" \
+    "${LOGIT_DISABLED}"
+fi
+if want_phase1b_family "qk_phase_mlp"; then
+  emit_channel_variant \
+    "qk-phase-mlp-m${POS_MLP_HIDDEN}-${POS_SHARING}-h${HIDDEN_SIZE}d${DEPTH}" \
+    "sdpa" \
+    "{\"enabled\": true, \"feature_map\": \"mlp\", \"sharing\": \"${POS_SHARING}\", \"apply\": \"phase_residual\", \"rank\": ${POS_RANK}, \"mlp_hidden\": ${POS_MLP_HIDDEN}}" \
+    "${LOGIT_DISABLED}"
 fi
 
 if [[ "${SUBMIT_JOBS}" == "true" && "${PARALLEL}" == "true" && ${#PIDS[@]} -gt 0 ]]; then

@@ -6,7 +6,7 @@
   "per_device_train_batch_size": 8,
   "max_train_steps": 10000,
   "block_size": 1024,
-  "base_output_dir": "/workspace/MLPRope/model-output/position_bias_phase1",
+  "base_output_dir": "/workspace/MLPRope/model-output/position_bias_phase1b",
   "hidden_size": 768,
   "depth": 8,
   "n_head": 8,
@@ -30,5 +30,5 @@
   "compile": true,
   "compile_mode": "default",
   "compile_fullgraph": false,
-  "pos_variant": "linear", "attn_impl": "flex", "run_name": "linear-h768d8"
+  "pos_variant": null, "qk": {"enabled": true, "feature_map": "linear", "sharing": "per_head", "apply": "phase_residual", "rank": 32, "mlp_hidden": 128}, "logit_bias": {"enabled": false}, "attn_impl": "sdpa", "run_name": "qk-phase-linear-per_head-h768d8"
 }

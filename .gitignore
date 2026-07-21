@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+.env
+
+# Training / experiment outputs
+model-output/
+logs/
+wandb/
+.wandb/
+lightning_logs/
+runs/
+outputs/
+checkpoints/
+*.log
+
+# Model weights & binaries
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+*.onnx
+*.pkl
+*.pickle
+*.npy
+*.npz
+
+# Caches
+.cache/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.torchinductor/
+.triton/
+*.egg-info/
+.ipynb_checkpoints/

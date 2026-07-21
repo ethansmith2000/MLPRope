@@ -1,6 +1,5 @@
 #!/bin/bash
-# Wait for the shared tokenized cache, then queue short Phase-1 runs on a
-# small GPU slice (default 6,7) so other projects can use 0-5.
+# Wait for the shared tokenized cache, then queue Phase-1 runs via gpu-claim.
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
@@ -13,16 +12,20 @@ export WANDB_DIR="${WANDB_DIR:-/workspace/.wandb_home}"
 export WANDB_ENTITY="${WANDB_ENTITY:-ethansmith2000}"
 export WANDB_PROJECT="${WANDB_PROJECT:-mlprope-position-bias}"
 
-TOKENIZED_DATASET_PATH="${TOKENIZED_DATASET_PATH:-/workspace/.cache/mlprope_openwebtext_gpt2_bs1024_ids}"
+TOKENIZED_DATASET_PATH="${TOKENIZED_DATASET_PATH:-/workspace/.cache/tokenized/openwebtext_gpt2_bs1024}"
 LOG="${LOG:-logs/queue_short_runs.log}"
 mkdir -p logs "$(dirname "${TOKENIZED_DATASET_PATH}")"
+
+cache_ready() {
+  [[ -f "${TOKENIZED_DATASET_PATH}/dataset_dict.json" ]] \
+    || [[ -f "${TOKENIZED_DATASET_PATH}/.ready" ]]
+}
 
 echo "SHORT_QUEUE_STARTED $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "${LOG}"
 echo "Waiting for tokenized cache: ${TOKENIZED_DATASET_PATH}" | tee -a "${LOG}"
 
-# Do not start a second downloader. prepare_tokenized_dataset.py (or another
-# polite holder of the flock) owns Hub/tokenization. We only wait.
-while [[ ! -d "${TOKENIZED_DATASET_PATH}" ]]; do
+# Do not start a second downloader while calib/shared prepare holds the flock.
+while ! cache_ready; do
   if ! pgrep -f 'prepare_tokenized_dataset.py' >/dev/null 2>&1; then
     echo "No prepare_tokenized_dataset.py running and cache missing; starting one." | tee -a "${LOG}"
     /venv/main/bin/python -u prepare_tokenized_dataset.py >> logs/prepare_tokenized_dataset.log 2>&1 &
@@ -31,26 +34,10 @@ while [[ ! -d "${TOKENIZED_DATASET_PATH}" ]]; do
   sleep 30
 done
 
-echo "Cache ready. Ensuring wandb project ${WANDB_ENTITY}/${WANDB_PROJECT}" | tee -a "${LOG}"
-/venv/main/bin/python - <<PY
-import os
-from pathlib import Path
-import wandb
-os.environ.setdefault("WANDB_HOME", "/workspace/.wandb_home")
-os.environ.setdefault("WANDB_DIR", "/workspace/.wandb_home")
-Path(os.environ["WANDB_HOME"]).mkdir(parents=True, exist_ok=True)
-run = wandb.init(
-    project=os.environ.get("WANDB_PROJECT", "mlprope-position-bias"),
-    entity=os.environ.get("WANDB_ENTITY", "ethansmith2000"),
-    name="project-bootstrap",
-    dir=os.environ["WANDB_DIR"],
-    config={"bootstrap": True},
-)
-print("wandb project:", run.entity, run.project, run.url)
-run.finish()
-PY
+echo "Cache ready at ${TOKENIZED_DATASET_PATH}" | tee -a "${LOG}"
+du -sh "${TOKENIZED_DATASET_PATH}" | tee -a "${LOG}" || true
 
-# Phase-1: 10k steps, GPUs 6,7 only (leave 0-5 for siblings), wandb on.
+# Phase-1: 10k steps. Claim any free GPU (siblings may hold some).
 export EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}"
 export MODEL_CONFIG="${MODEL_CONFIG:-768 8 8 3.0e-4 8 10000 1024}"
 export NUM_WARMUP_STEPS="${NUM_WARMUP_STEPS:-200}"
@@ -60,10 +47,10 @@ export PROFILE_EVERY="${PROFILE_EVERY:-10}"
 export WITH_TRACKING="${WITH_TRACKING:-true}"
 export PARALLEL="${PARALLEL:-true}"
 export SUBMIT_JOBS="${SUBMIT_JOBS:-true}"
-export GPU_SELECTOR="${GPU_SELECTOR:-6,7}"
+export GPU_SELECTOR="${GPU_SELECTOR:-any}"
 export TOKENIZED_DATASET_PATH
 
-echo "Launching short runs on GPUs ${GPU_SELECTOR} (leaving others free)" | tee -a "${LOG}"
+echo "Launching Phase-1 on GPUs ${GPU_SELECTOR} (gpu-claim --wait)" | tee -a "${LOG}"
 gpu-claim status | tee -a "${LOG}" || true
 ./launch_position_bias.sh 2>&1 | tee -a "${LOG}"
 echo "SHORT_QUEUE_COMPLETED $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "${LOG}"
