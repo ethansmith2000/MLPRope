@@ -208,6 +208,21 @@ under it:
 
 Anchor: Phase-1 RoPE baseline. Launcher family: `EXPERIMENT_FAMILY=phase1c`.
 
+### Phase 1c results
+
+| Variant | Eval loss | Perplexity |
+| --- | ---: | ---: |
+| RoPE baseline | 4.129 | 62.1 |
+| Linear logit (still best overall) | **4.076** | **58.9** |
+| AddRoPE + MLP | 4.116 | 61.3 |
+| AddRoPE + linear | 4.116 | 61.3 |
+| AddRoPE + low_rank | 4.124 | 61.8 |
+| AddRoPE + add_rope affine | 4.139 | 62.7 |
+| AddRoPE identity | 4.212 | 67.5 |
+
+Plain AddRoPE loses to RoPE; mapping the addend helps and can slightly beat RoPE,
+but RoPE + linear logit bias remains clearly ahead.
+
 ## Direction 2: content-conditioned relative bias
 
 The Inkling hypothesis remains: query content can select different
