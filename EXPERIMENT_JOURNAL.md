@@ -648,9 +648,52 @@ Additional later analyses:
 ## Reproducibility pointers
 
 - Design: `position_embedding_experiments.md`
+- Config schema: `POSITION_CONFIG.md`
+- Position package: `position/`
 - Model: `transformer.py`
 - Trainer and diagnostics: `train_gpt.py`
 - Sweep launcher: `launch_position_bias.sh`
-- Phase-1b configs: `sweep_configs/`
+- Phase-1b/1c configs: `sweep_configs/`
 - Run outputs: `model-output/`
 - WandB project: `mlprope-position-bias`
+
+---
+
+## 2026-07-22 — Position foundation refactor (v2 schema + Q/K coupling)
+
+Implemented the middle-scope foundation refactor without launching new training
+sweeps or rewriting completed Phase 1/1b/1c artifacts.
+
+**Code**
+
+- New package `position/` with frozen Fourier basis, mappers, rotary helpers,
+  head-coupled pipelines, Q/K + logit channels, config upgrade/validation, and
+  state-dict adaptation.
+- `Attention` consumes `QKPositionOutput` and supports separate Q/K phase
+  deltas. FlexAttention compile boundaries unchanged.
+- Trainer resolves all configs to `position_schema_version=2`, records
+  `position_source_schema`, preserves legacy auto-run tags for v1 sources, and
+  emits compact Q/K diagnostics alongside existing logit bias metrics.
+
+**New capability (only intentional behavior addition)**
+
+- `qk_coupling`: `shared` (v1 parity) |
+  `shared_trunk_separate_readouts` (identity/zero dual readouts) |
+  `separate` (deep-copied twin pipelines).
+
+**Deferred (explicit errors if requested)**
+
+- Canonical amplitude+phase AddRoPE, learned Fourier inputs, projected-phase,
+  content-aware maps, residual-stream PE, attention-output writes, Inkling.
+
+**Verification**
+
+- `python -m unittest test_position_channels -v`
+- Dry-run of all 14 `sweep_configs/` (param counts / SDPA-Flex / enabled channels)
+- Claimed-GPU eager+compiled smoke (see `scripts/position_v2_cuda_smoke.py`)
+
+**Checkpoint note**
+
+- Shared-coupling model weights migrate via key adapter.
+- Optimizer-state resume across the v1→v2 parameter rename is **not** guaranteed.
+

@@ -9,6 +9,18 @@ from torch.nn.attention.flex_attention import (
     flex_attention as _flex_attention_op,
 )
 
+from position import (
+    PositionChannel,
+    adapt_legacy_position_state_dict,
+    apply_rotary,
+    build_logit_bias_channel,
+    build_qk_position_channel,
+    build_rope_cache,
+    count_position_parameters,
+    ensure_channel_v2,
+    interleaved_fourier_basis,
+)
+
 # Inductor's default FlexAttention tiles need ~120KiB SMEM; this GPU reports a
 # 101376 cap, so pin small tiles. Compile flex alone (not nested under the outer
 # model compile) while allowing graph breaks in the outer model.
@@ -41,339 +53,15 @@ def _flex_attention_call(*args, **kwargs):
     return _compiled_flex_attention(*args, **kwargs)
 
 
-PositionVariant = Literal[
-    "rope",
-    "add_rope",
-    "linear",
-    "low_rank",
-    "bottleneck_mlp",
-    "mlp_rope",
-    "inkling_table",
-    "inkling_cosnet",
-]
-FeatureMapName = Literal[
-    "identity",
-    "add_rope",
-    "linear",
-    "low_rank",
-    "bottleneck_mlp",
-    "mlp",
-]
-SharingMode = Literal["shared_head", "per_head", "full_dim"]
-QKApply = Literal["add", "phase_residual"]
 AttentionImpl = Literal["sdpa", "flex"]
 
-FEATURE_MAPS = {
-    "identity",
-    "add_rope",
-    "linear",
-    "low_rank",
-    "bottleneck_mlp",
-    "mlp",
-}
-SHARING_MODES = {"shared_head", "per_head", "full_dim"}
-QK_APPLY_MODES = {"add", "phase_residual"}
-POSITION_ONLY_VARIANTS = {
-    "add_rope",
-    "linear",
-    "low_rank",
-    "bottleneck_mlp",
-    "mlp_rope",
-}
-CONTENT_CONDITIONED_VARIANTS = {"inkling_table", "inkling_cosnet"}
-POSITION_VARIANTS = {"rope"} | POSITION_ONLY_VARIANTS | CONTENT_CONDITIONED_VARIANTS
+# Re-export the interleaved Fourier helper under its historical name.
+sinusoidal_basis = interleaved_fourier_basis
 
 
 def causal_mask(batch_idx, head_idx, query_idx, key_value_idx):
     del batch_idx, head_idx
     return query_idx >= key_value_idx
-
-
-def sinusoidal_basis(
-    extent: int,
-    feature_dim: int,
-    theta: float,
-) -> torch.Tensor:
-    """Return interleaved cosine/sine features for non-negative distances."""
-    if feature_dim % 2 != 0:
-        raise ValueError("Position-bias feature_dim must be even.")
-    half = feature_dim // 2
-    frequencies = torch.arange(half, dtype=torch.float32)
-    inverse_frequencies = 1.0 / (theta ** (frequencies / half))
-    distances = torch.arange(extent, dtype=torch.float32)
-    angles = torch.outer(distances, inverse_frequencies)
-    return torch.stack((angles.cos(), angles.sin()), dim=-1).flatten(-2)
-
-
-class PositionChannel(torch.nn.Module):
-    """Marker base class for position-channel parameter accounting and resets."""
-
-    def reset_output_parameters(self) -> None:
-        raise NotImplementedError
-
-
-class PositionFeatureMap(torch.nn.Module):
-    """Map a sinusoidal basis to [heads, extent, head_dim] features."""
-
-    def __init__(
-        self,
-        *,
-        name: FeatureMapName,
-        sharing: SharingMode,
-        heads: int,
-        head_dim: int,
-        extent: int,
-        theta: float,
-        rank: int,
-        mlp_hidden: int,
-    ):
-        super().__init__()
-        if name not in FEATURE_MAPS:
-            raise ValueError(f"Unknown position feature_map: {name!r}")
-        if sharing not in SHARING_MODES:
-            raise ValueError(f"Unknown position sharing mode: {sharing!r}")
-        if rank <= 0:
-            raise ValueError("position rank must be positive.")
-        if mlp_hidden <= 0:
-            raise ValueError("position mlp_hidden must be positive.")
-
-        self.name = name
-        self.sharing = sharing
-        self.heads = heads
-        self.head_dim = head_dim
-        self.extent = extent
-        self.feature_dim = heads * head_dim if sharing == "full_dim" else head_dim
-        self.groups = heads if sharing == "per_head" else 1
-        self.hidden_dim = rank if name in {"low_rank", "bottleneck_mlp"} else mlp_hidden
-        self.register_buffer(
-            "basis",
-            sinusoidal_basis(extent, self.feature_dim, theta),
-            persistent=False,
-        )
-
-        if name == "add_rope":
-            self.scale = torch.nn.Parameter(
-                torch.zeros(self.groups, self.feature_dim)
-            )
-            self.offset = torch.nn.Parameter(
-                torch.zeros(self.groups, self.feature_dim)
-            )
-        elif name == "linear":
-            self.weight = torch.nn.Parameter(
-                torch.empty(self.groups, self.feature_dim, self.feature_dim)
-            )
-            self.bias = torch.nn.Parameter(
-                torch.zeros(self.groups, self.feature_dim)
-            )
-        elif name in {"low_rank", "bottleneck_mlp", "mlp"}:
-            self.down = torch.nn.Parameter(
-                torch.empty(self.groups, self.feature_dim, self.hidden_dim)
-            )
-            self.down_bias = torch.nn.Parameter(
-                torch.zeros(self.groups, self.hidden_dim)
-            )
-            self.up = torch.nn.Parameter(
-                torch.zeros(self.groups, self.hidden_dim, self.feature_dim)
-            )
-            self.up_bias = torch.nn.Parameter(
-                torch.zeros(self.groups, self.feature_dim)
-            )
-        self.reset_parameters()
-
-    def reset_parameters(self) -> None:
-        if self.name == "add_rope":
-            torch.nn.init.zeros_(self.scale)
-            torch.nn.init.zeros_(self.offset)
-        elif self.name == "linear":
-            for weight in self.weight:
-                torch.nn.init.xavier_normal_(weight)
-            torch.nn.init.zeros_(self.bias)
-        elif self.name in {"low_rank", "bottleneck_mlp", "mlp"}:
-            for weight in self.down:
-                torch.nn.init.xavier_normal_(weight)
-            torch.nn.init.zeros_(self.down_bias)
-            # A zero residual branch makes the feature map exactly identity.
-            torch.nn.init.zeros_(self.up)
-            torch.nn.init.zeros_(self.up_bias)
-
-    def forward(self, *, dtype: torch.dtype | None = None) -> torch.Tensor:
-        basis = self.basis if dtype is None else self.basis.to(dtype=dtype)
-        grouped_basis = basis.unsqueeze(0).expand(self.groups, -1, -1)
-
-        if self.name == "identity":
-            mapped = grouped_basis
-        elif self.name == "add_rope":
-            mapped = (
-                grouped_basis * (1.0 + self.scale[:, None, :])
-                + self.offset[:, None, :]
-            )
-        elif self.name == "linear":
-            mapped = torch.einsum(
-                "grd,gde->gre", grouped_basis, self.weight
-            )
-            mapped = mapped + self.bias[:, None, :]
-        else:
-            hidden = torch.einsum(
-                "grd,gdk->grk", grouped_basis, self.down
-            )
-            hidden = hidden + self.down_bias[:, None, :]
-            if self.name in {"bottleneck_mlp", "mlp"}:
-                hidden = F.gelu(hidden)
-            delta = torch.einsum("grk,gkd->grd", hidden, self.up)
-            mapped = grouped_basis + delta + self.up_bias[:, None, :]
-
-        if self.sharing == "per_head":
-            return mapped
-        if self.sharing == "shared_head":
-            return mapped.expand(self.heads, -1, -1)
-        # A full-dimension map can mix frequencies across heads before reshape.
-        return (
-            mapped.squeeze(0)
-            .reshape(self.extent, self.heads, self.head_dim)
-            .permute(1, 0, 2)
-            .contiguous()
-        )
-
-
-class LogitBiasChannel(PositionChannel):
-    """Position-only scalar logit curves with a fixed [heads, extent] contract."""
-
-    def __init__(
-        self,
-        *,
-        feature_map: FeatureMapName,
-        sharing: SharingMode,
-        heads: int,
-        head_dim: int,
-        extent: int,
-        theta: float,
-        rank: int,
-        mlp_hidden: int,
-    ):
-        super().__init__()
-        self.heads = heads
-        self.extent = extent
-        self.sharing = sharing
-        self.features = PositionFeatureMap(
-            name=feature_map,
-            sharing=sharing,
-            heads=heads,
-            head_dim=head_dim,
-            extent=extent,
-            theta=theta,
-            rank=rank,
-            mlp_hidden=mlp_hidden,
-        )
-        readout_groups = 1 if sharing == "shared_head" else heads
-        self.readout = torch.nn.Parameter(
-            torch.zeros(readout_groups, head_dim)
-        )
-        self.readout_bias = torch.nn.Parameter(torch.zeros(readout_groups))
-
-    def forward(self, *, dtype: torch.dtype | None = None) -> torch.Tensor:
-        features = self.features(dtype=dtype)
-        if self.sharing == "shared_head":
-            curve = torch.einsum("rd,d->r", features[0], self.readout[0])
-            curve = curve + self.readout_bias[0]
-            return curve.unsqueeze(0).expand(self.heads, -1)
-        curves = torch.einsum("hrd,hd->hr", features, self.readout)
-        return curves + self.readout_bias[:, None]
-
-    def reset_output_parameters(self) -> None:
-        torch.nn.init.zeros_(self.readout)
-        torch.nn.init.zeros_(self.readout_bias)
-
-
-class QKPositionChannel(PositionChannel):
-    """Q/K position channel: true AddRoPE addend, or phase residual on RoPE.
-
-    ``apply="add"`` (AddRoPE): the feature-map output is added to Q/K and
-    multiplicative RoPE is skipped. Identity / add_rope / residual feature maps
-    therefore start as (scaled) sinusoids, matching
-    https://jonathanc.net/blog/additive-rotary-embedding — extended so the
-    addend may be ``f(cis)`` or ``cis + f(cis)`` via the feature-map taxonomy.
-
-    ``apply="phase_residual"``: a zero-initialized ``D/2`` phase delta is
-    composed with standard multiplicative RoPE (``R(θ+δ)``).
-    """
-
-    def __init__(
-        self,
-        *,
-        feature_map: FeatureMapName,
-        sharing: SharingMode,
-        apply: QKApply,
-        heads: int,
-        head_dim: int,
-        extent: int,
-        theta: float,
-        rank: int,
-        mlp_hidden: int,
-    ):
-        super().__init__()
-        if apply not in QK_APPLY_MODES:
-            raise ValueError(f"Unknown Q/K position apply mode: {apply!r}")
-        self.heads = heads
-        self.head_dim = head_dim
-        self.extent = extent
-        self.sharing = sharing
-        self.apply = apply
-        self.features = PositionFeatureMap(
-            name=feature_map,
-            sharing=sharing,
-            heads=heads,
-            head_dim=head_dim,
-            extent=extent,
-            theta=theta,
-            rank=rank,
-            mlp_hidden=mlp_hidden,
-        )
-        # Phase residual needs a D/2 readout (zero => δ=0 => R(δ)=I).
-        # AddRoPE uses the feature map as the addend directly — a zero readout
-        # would erase position at init and defeat the AddRoPE baseline.
-        if apply == "phase_residual":
-            output_groups = 1 if sharing == "shared_head" else heads
-            self.output_weight = torch.nn.Parameter(
-                torch.zeros(output_groups, head_dim, head_dim // 2)
-            )
-            self.output_bias = torch.nn.Parameter(
-                torch.zeros(output_groups, head_dim // 2)
-            )
-        else:
-            self.register_parameter("output_weight", None)
-            self.register_parameter("output_bias", None)
-
-    def forward(
-        self,
-        sequence_length: int,
-        *,
-        dtype: torch.dtype | None = None,
-    ) -> torch.Tensor:
-        if sequence_length > self.extent:
-            raise ValueError(
-                f"Sequence length {sequence_length} exceeds Q/K position extent "
-                f"{self.extent}."
-            )
-        features = self.features(dtype=dtype)[:, :sequence_length]
-        if self.apply == "add":
-            return features
-        if self.sharing == "shared_head":
-            output = torch.einsum(
-                "rd,do->ro", features[0], self.output_weight[0]
-            )
-            output = output + self.output_bias[0]
-            return output.unsqueeze(0).expand(self.heads, -1, -1)
-        output = torch.einsum(
-            "hrd,hdo->hro", features, self.output_weight
-        )
-        return output + self.output_bias[:, None, :]
-
-    def reset_output_parameters(self) -> None:
-        if self.output_weight is None:
-            return
-        # Phase delta=0 => cos(delta)=1, sin(delta)=0 => R(delta)=I.
-        torch.nn.init.zeros_(self.output_weight)
-        torch.nn.init.zeros_(self.output_bias)
 
 
 class Attention(torch.nn.Module):
@@ -401,26 +89,40 @@ class Attention(torch.nn.Module):
         self.max_seq_len = max_seq_len
         self.rel_extent = rel_extent or max_seq_len
         self.attn_impl = attn_impl
-        self.qk_config = dict(qk_config or {})
-        self.logit_bias_config = dict(logit_bias_config or {})
-        self._prepared_block_mask: BlockMask | None = None
-        self._prepared_query_length: int | None = None
-        # Stable score_mod closure target — updated each flex forward, not redefined.
-        self._flex_bias_curves: torch.Tensor | None = None
-
         if dim % heads != 0:
             raise ValueError("dim must be divisible by heads.")
         if self.head_dim % 2 != 0:
             raise ValueError("Position channels require an even head dimension.")
         if attn_impl not in ("sdpa", "flex"):
             raise ValueError(f"Unknown attn_impl: {attn_impl!r}")
+        if self.rel_extent <= 0:
+            raise ValueError("rel_extent must be positive.")
+
+        # Accept v1 or v2 channel dicts; store canonical v2 on the module.
+        self.qk_config = ensure_channel_v2(
+            "qk",
+            qk_config,
+            model_dim=dim,
+            heads=heads,
+            rope_theta=rope_theta,
+        )
+        self.logit_bias_config = ensure_channel_v2(
+            "logit_bias",
+            logit_bias_config,
+            model_dim=dim,
+            heads=heads,
+            rope_theta=rope_theta,
+        )
+        self._prepared_block_mask: BlockMask | None = None
+        self._prepared_query_length: int | None = None
+        # Stable score_mod closure target — updated each flex forward, not redefined.
+        self._flex_bias_curves: torch.Tensor | None = None
+
         if self.logit_bias_config.get("enabled", False) and attn_impl != "flex":
             raise ValueError(
                 "The logit-bias channel requires attn_impl='flex'. "
                 "Q/K-only position channels may use SDPA."
             )
-        if self.rel_extent <= 0:
-            raise ValueError("rel_extent must be positive.")
 
         # Split projections match the other experimental Transformer.
         self.to_q = torch.nn.Linear(dim, dim, bias=False)
@@ -428,49 +130,42 @@ class Attention(torch.nn.Module):
         self.to_v = torch.nn.Linear(dim, dim, bias=False)
         self.to_out = torch.nn.Linear(dim, dim, bias=True)
 
-        self.qk_position = None
-        if self.qk_config.get("enabled", False):
-            self.qk_position = QKPositionChannel(
-                feature_map=self.qk_config["feature_map"],
-                sharing=self.qk_config["sharing"],
-                apply=self.qk_config["apply"],
-                heads=heads,
-                head_dim=self.head_dim,
-                extent=max_seq_len,
-                theta=rope_theta,
-                rank=self.qk_config["rank"],
-                mlp_hidden=self.qk_config["mlp_hidden"],
-            )
-        # True AddRoPE replaces multiplicative RoPE. Phase residual and the
+        self.qk_position = build_qk_position_channel(
+            self.qk_config,
+            heads=heads,
+            head_dim=self.head_dim,
+            model_dim=dim,
+            extent=max_seq_len,
+            rope_theta=rope_theta,
+        )
+        # Additive Fourier Q/K replaces multiplicative RoPE. Rotary/phase and the
         # logit-only / baseline paths keep it. use_rope=False is only valid
-        # together with qk.apply="add".
+        # together with qk.application="additive".
         self.multiplicative_rope = bool(use_rope) and not (
-            self.qk_position is not None and self.qk_position.apply == "add"
+            self.qk_position is not None
+            and not self.qk_position.uses_multiplicative_rope
         )
         if not self.multiplicative_rope and self.qk_position is None:
             raise ValueError(
-                "Disable multiplicative RoPE only when qk.apply='add' "
-                "(true AddRoPE) supplies position."
+                "Disable multiplicative RoPE only when qk.application='additive' "
+                "(additive Fourier Q/K) supplies position."
             )
         if not use_rope and (
-            self.qk_position is None or self.qk_position.apply != "add"
+            self.qk_position is None
+            or self.qk_position.application != "additive"
         ):
             raise ValueError(
-                "use_rope=False requires an enabled Q/K AddRoPE channel "
-                "(qk.apply='add')."
+                "use_rope=False requires an enabled additive Q/K channel "
+                "(qk.application='additive')."
             )
-        self.logit_bias = None
-        if self.logit_bias_config.get("enabled", False):
-            self.logit_bias = LogitBiasChannel(
-                feature_map=self.logit_bias_config["feature_map"],
-                sharing=self.logit_bias_config["sharing"],
-                heads=heads,
-                head_dim=self.head_dim,
-                extent=self.rel_extent,
-                theta=rope_theta,
-                rank=self.logit_bias_config["rank"],
-                mlp_hidden=self.logit_bias_config["mlp_hidden"],
-            )
+        self.logit_bias = build_logit_bias_channel(
+            self.logit_bias_config,
+            heads=heads,
+            head_dim=self.head_dim,
+            model_dim=dim,
+            extent=self.rel_extent,
+            rope_theta=rope_theta,
+        )
 
         if qk_norm:
             self.q_norm = torch.nn.LayerNorm(self.head_dim)
@@ -479,38 +174,38 @@ class Attention(torch.nn.Module):
             self.q_norm = torch.nn.Identity()
             self.k_norm = torch.nn.Identity()
 
-        half = self.head_dim // 2
-        freqs = torch.arange(half, dtype=torch.float32)
-        inv_freq = 1.0 / (self.rope_theta ** (freqs / half))
-        positions = torch.arange(max_seq_len, dtype=torch.float32)
-        angles = torch.outer(positions, inv_freq)
-        self.register_buffer("rope_sin", angles.sin(), persistent=False)
-        self.register_buffer("rope_cos", angles.cos(), persistent=False)
+        rope_sin, rope_cos = build_rope_cache(
+            max_seq_len,
+            self.head_dim,
+            self.rope_theta,
+        )
+        self.register_buffer("rope_sin", rope_sin, persistent=False)
+        self.register_buffer("rope_cos", rope_cos, persistent=False)
 
-    def _apply_rope(self, q, k, phase_delta=None):
-        seq_len = q.shape[-2]
-        if seq_len > self.max_seq_len:
-            raise ValueError(
-                f"Sequence length {seq_len} exceeds RoPE cache length {self.max_seq_len}"
-            )
-        half = q.shape[-1] // 2
-        sin = self.rope_sin[:seq_len].to(dtype=q.dtype)[None, None, :, :]
-        cos = self.rope_cos[:seq_len].to(dtype=q.dtype)[None, None, :, :]
+    def _apply_rope(
+        self,
+        q,
+        k,
+        *,
+        q_phase_delta=None,
+        k_phase_delta=None,
+        phase_delta=None,
+    ):
         if phase_delta is not None:
-            delta = phase_delta.to(dtype=q.dtype)[None, :, :, :]
-            delta_sin = delta.sin()
-            delta_cos = delta.cos()
-            # R(theta + delta) = R(theta) R(delta).
-            sin, cos = (
-                sin * delta_cos + cos * delta_sin,
-                cos * delta_cos - sin * delta_sin,
-            )
-
-        def rotate(x):
-            x1, x2 = x[..., :half], x[..., half:]
-            return torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
-
-        return rotate(q), rotate(k)
+            if q_phase_delta is not None or k_phase_delta is not None:
+                raise ValueError(
+                    "Pass either phase_delta or q_phase_delta/k_phase_delta, not both."
+                )
+            q_phase_delta = phase_delta
+            k_phase_delta = phase_delta
+        return apply_rotary(
+            q,
+            k,
+            self.rope_sin,
+            self.rope_cos,
+            q_phase_delta=q_phase_delta,
+            k_phase_delta=k_phase_delta,
+        )
 
     def _split_heads(self, x):
         batch, sequence, _ = x.shape
@@ -580,18 +275,24 @@ class Attention(torch.nn.Module):
 
         q = self.q_norm(q)
         k = self.k_norm(k)
-        phase_delta = None
+        q_phase_delta = None
+        k_phase_delta = None
         if self.qk_position is not None:
             position_output = self.qk_position(q.shape[-2], dtype=q.dtype)
-            if self.qk_position.apply == "add":
-                # True AddRoPE: q' = q + e(p), no R(θ)q.
-                addend = position_output[None, :, :, :]
-                q = q + addend
-                k = k + addend
+            if position_output.application == "additive":
+                # Additive Fourier Q/K: q' = q + e_q(p), no R(θ)q.
+                q = q + position_output.q[None, :, :, :]
+                k = k + position_output.k[None, :, :, :]
             else:
-                phase_delta = position_output
+                q_phase_delta = position_output.q
+                k_phase_delta = position_output.k
         if self.multiplicative_rope:
-            q, k = self._apply_rope(q, k, phase_delta=phase_delta)
+            q, k = self._apply_rope(
+                q,
+                k,
+                q_phase_delta=q_phase_delta,
+                k_phase_delta=k_phase_delta,
+            )
         if self.attn_impl == "flex":
             attn = self._flex_attention(q, k, v)
         else:
@@ -610,6 +311,25 @@ class Attention(torch.nn.Module):
             return None
         parameter = next(self.logit_bias.parameters())
         return self.logit_bias(dtype=parameter.dtype).float().detach()
+
+    @torch.no_grad()
+    def qk_position_summary(
+        self,
+        sequence_length: int,
+        *,
+        q_ref: torch.Tensor | None = None,
+        k_ref: torch.Tensor | None = None,
+    ) -> dict[str, float] | None:
+        if self.qk_position is None:
+            return None
+        parameter = next(self.qk_position.parameters(), None)
+        dtype = parameter.dtype if parameter is not None else None
+        return self.qk_position.summarize(
+            sequence_length,
+            dtype=dtype,
+            q_ref=q_ref,
+            k_ref=k_ref,
+        )
 
 
 class GeGLU(torch.nn.Module):
@@ -754,23 +474,38 @@ class Transformer(torch.nn.Module):
     @torch.no_grad()
     def position_diagnostics(
         self,
+        *,
+        sequence_length: int | None = None,
     ) -> tuple[dict[str, float], dict[str, torch.Tensor]]:
-        """Return scalar bias statistics and selected [heads, extent] profiles."""
+        """Return scalar position statistics and selected logit profiles."""
         metrics: dict[str, float] = {}
         profiles: dict[str, torch.Tensor] = {}
         selected_layers = {0, len(self.blocks) // 2, len(self.blocks) - 1}
+        seq_len = sequence_length
         for layer_idx, block in enumerate(self.blocks):
             curves = block.attn.logit_bias_curves()
-            if curves is None:
+            if curves is not None:
+                curves_cpu = curves.cpu()
+                prefix = f"position/layer_{layer_idx:02d}"
+                metrics[f"{prefix}/bias_mean"] = curves_cpu.mean().item()
+                metrics[f"{prefix}/bias_std"] = curves_cpu.std().item()
+                metrics[f"{prefix}/bias_abs_max"] = curves_cpu.abs().max().item()
+                if layer_idx in selected_layers:
+                    profiles[f"layer_{layer_idx:02d}"] = curves_cpu
+
+            if seq_len is None:
                 continue
-            curves_cpu = curves.cpu()
-            prefix = f"position/layer_{layer_idx:02d}"
-            metrics[f"{prefix}/bias_mean"] = curves_cpu.mean().item()
-            metrics[f"{prefix}/bias_std"] = curves_cpu.std().item()
-            metrics[f"{prefix}/bias_abs_max"] = curves_cpu.abs().max().item()
-            if layer_idx in selected_layers:
-                profiles[f"layer_{layer_idx:02d}"] = curves_cpu
+            qk_summary = block.attn.qk_position_summary(seq_len)
+            if qk_summary is None:
+                continue
+            prefix = f"position/layer_{layer_idx:02d}/qk"
+            for key, value in qk_summary.items():
+                metrics[f"{prefix}/{key}"] = value
         return metrics, profiles
+
+    def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
+        adapted = adapt_legacy_position_state_dict(state_dict)
+        return super().load_state_dict(adapted, strict=strict, assign=assign)
 
     def forward(self, input_ids, targets=None, *, return_logits: bool = False):
         """Training path returns loss only so torch.compile need not keep vocab logits live."""
@@ -817,24 +552,14 @@ def count_parameters(model: torch.nn.Module) -> dict[str, int]:
     total = sum(parameter.numel() for parameter in model.parameters())
     embed = sum(parameter.numel() for parameter in model.token_embedding.parameters())
     head = sum(parameter.numel() for parameter in model.out_proj.parameters())
-    qk_position = sum(
-        parameter.numel()
-        for name, parameter in model.named_parameters()
-        if ".qk_position." in name
-    )
-    logit_bias = sum(
-        parameter.numel()
-        for name, parameter in model.named_parameters()
-        if ".logit_bias." in name
-    )
-    position = qk_position + logit_bias
+    position_counts = count_position_parameters(model)
     return {
         "total": total,
         "embeddings": embed,
         "lm_head": head,
-        "position_params": position,
-        "qk_position_params": qk_position,
-        "logit_bias_params": logit_bias,
+        "position_params": position_counts["position_params"],
+        "qk_position_params": position_counts["qk_position_params"],
+        "logit_bias_params": position_counts["logit_bias_params"],
         "non_embed": total - embed - head,
     }
 
@@ -846,3 +571,7 @@ def suggest_matched_baselines(cfg: dict) -> dict:
         "Matched-baseline helper deferred. Match pos_rank / pos_mlp_hidden or "
         "override ff_mult manually for now."
     )
+
+
+# Public re-exports for tests and checkpoint helpers.
+from position.channels import LogitBiasChannel, QKPositionChannel  # noqa: E402,F401

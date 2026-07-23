@@ -201,6 +201,23 @@ emit_channel_variant() {
   run_job "${job_name}" "${cfg_file}"
 }
 
+# Helper for future v2 experiment families. Does not rewrite completed Phase 1/1b/1c
+# JSON files. Example qk fragment:
+#   {"enabled": true, "application": "rotary", "geometry": "phase",
+#    "input": {"kind": "frozen_fourier", "basis_dim": null, "theta": null, "scalars": []},
+#    "mapper": {"kind": "mlp", "residual": true, "rank": 32, "hidden_dim": 128},
+#    "qk_coupling": "shared", "head_coupling": "per_head_independent"}
+emit_v2_channel_variant() {
+  local job_name="$1"
+  local attn_impl="$2"
+  local qk_json="$3"
+  local logit_json="$4"
+  local cfg_file="${CONFIG_DIR}/${job_name}.json"
+  write_common_config "${cfg_file}" \
+    "\"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${logit_json}, \"attn_impl\": \"${attn_impl}\", \"run_name\": \"${job_name}\""
+  run_job "${job_name}" "${cfg_file}"
+}
+
 want_family() {
   local family="$1"
   [[ "${EXPERIMENT_FAMILY}" == "all" \
@@ -277,9 +294,9 @@ if want_phase1b_family "qk_phase_mlp"; then
     "${LOGIT_DISABLED}"
 fi
 
-# Direction 1c: true AddRoPE (replace multiplicative RoPE with q + f(cis)).
-# See https://jonathanc.net/blog/additive-rotary-embedding — extended with our
-# feature-map taxonomy. RoPE baseline from Phase 1 remains the anchor.
+# Direction 1c: additive Fourier Q/K (replace multiplicative RoPE with q + f(cis)).
+# This is not canonical amplitude+phase AddRoPE; see POSITION_CONFIG.md.
+# Feature-map taxonomy still applies. RoPE baseline from Phase 1 remains the anchor.
 if want_phase1c_family "qk_add_identity"; then
   emit_channel_variant \
     "qk-addrope-identity-${POS_SHARING}-h${HIDDEN_SIZE}d${DEPTH}" \

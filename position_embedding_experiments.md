@@ -40,9 +40,11 @@ implied.
 
 ## Independent channel configuration
 
-Conceptually, the model exposes:
+The shipped runtime schema is **v2** (see [`POSITION_CONFIG.md`](POSITION_CONFIG.md)).
+Legacy Phase 1/1b/1c JSON still uses the v1 shape below and is upgraded on load.
 
 ```yaml
+# Legacy v1 (accepted; upgraded to v2)
 qk:
   enabled: false
   feature_map: identity
@@ -59,6 +61,26 @@ logit_bias:
   mlp_hidden: 128
 ```
 
+```yaml
+# Canonical v2
+qk:
+  enabled: false
+  application: rotary          # additive | rotary
+  geometry: phase              # free | phase
+  input: { kind: frozen_fourier, basis_dim: null, theta: null, scalars: [] }
+  mapper: { kind: identity, residual: false, rank: 32, hidden_dim: 128 }
+  qk_coupling: shared          # shared | shared_trunk_separate_readouts | separate
+  head_coupling: per_head_independent
+
+logit_bias:
+  enabled: false
+  application: logit_bias
+  geometry: scalar_curve
+  input: { kind: frozen_fourier, basis_dim: null, theta: null, scalars: [] }
+  mapper: { kind: identity, residual: false, rank: 32, hidden_dim: 128 }
+  head_coupling: per_head_independent
+```
+
 With both channels disabled, attention is the RoPE baseline. Enabling both is a
 valid experiment: Q/K receives a learned geometric transform and the resulting
 dot product receives a learned distance bias.
@@ -67,14 +89,15 @@ dot product receives a learned distance bias.
 
 | Axis | Q/K channel | Logit-bias channel |
 | --- | --- | --- |
-| Output | AddRoPE addend (`head_dim`), or `D/2` phase deltas | Scalar curve over relative distance |
+| Output | Additive Fourier addend (`head_dim`), or `D/2` phase deltas | Scalar curve over relative distance |
 | `shared_head` | One vector/phase bank broadcast to all heads | One feature map and readout shared across heads |
-| `per_head` | Independent vector/phase bank per head | Independent feature map and readout per head |
-| `full_dim` | Joint map in model dimension, reshaped into heads | Joint full-dimension map, then per-head scalar readout |
-| Identity initialization | AddRoPE: sinusoid addend (no `R`); phase: zero `δ` ⇒ `R=I` | Zero scalar readout |
+| `per_head` / `per_head_independent` | Independent vector/phase bank per head | Independent feature map and readout per head |
+| `full_dim` / `per_head_joint` | Joint map in model dimension, reshaped into heads | Joint full-dimension map, then per-head scalar readout |
+| Identity initialization | Additive: sinusoid addend (no `R`); phase: zero `δ` ⇒ `R=I` | Zero scalar readout |
 
-`feature_map` and `sharing` therefore have channel-local consequences even
-though both channels use the same vocabulary.
+`feature_map`/`mapper` and `sharing`/`head_coupling` therefore have channel-local
+consequences even though both channels use the same vocabulary. Phase-1c
+`apply=add` is **additive Fourier Q/K**, not canonical amplitude+phase AddRoPE.
 
 ## Feature-map taxonomy
 

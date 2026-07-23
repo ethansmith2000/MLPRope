@@ -27,6 +27,16 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from transformers import AutoConfig, AutoTokenizer, default_data_collator, get_scheduler
 
+from position import (
+    POSITION_PRESETS,
+    POSITION_SCHEMA_VERSION,
+    V1_CHANNEL_DEFAULTS,
+    deep_merge,
+    legacy_position_run_tag,
+    resolve_channel_config,
+    v2_position_run_tag,
+)
+from position.config import v2_to_legacy_tag_fields
 from transformer import Transformer, count_parameters, suggest_matched_baselines
 
 REPO_DIR = Path(__file__).resolve().parent
@@ -152,21 +162,11 @@ DEFAULT_CONFIG = {
     "rel_extent": None,  # None follows block_size.
     "pos_rank": 32,
     "pos_mlp_hidden": 128,
-    "qk": {
-        "enabled": False,
-        "feature_map": "identity",
-        "sharing": "per_head",
-        "apply": "phase_residual",
-        "rank": 32,
-        "mlp_hidden": 128,
-    },
-    "logit_bias": {
-        "enabled": False,
-        "feature_map": "identity",
-        "sharing": "per_head",
-        "rank": 32,
-        "mlp_hidden": 128,
-    },
+    # Raw defaults remain v1-shaped for override merging; load_config upgrades to v2.
+    "qk": copy.deepcopy(V1_CHANNEL_DEFAULTS["qk"]),
+    "logit_bias": copy.deepcopy(V1_CHANNEL_DEFAULTS["logit_bias"]),
+    "position_schema_version": POSITION_SCHEMA_VERSION,
+    "position_source_schema": 1,
     # Only the learned logit-bias channel requires flex.
     "attn_impl": "sdpa",
     "gradient_checkpointing": False,
@@ -209,21 +209,6 @@ def parse_args():
     return parser.parse_args()
 
 
-def deep_merge(base: dict, updates: dict) -> dict:
-    """Recursively merge nested config dictionaries without aliasing defaults."""
-    merged = copy.deepcopy(base)
-    for key, value in updates.items():
-        if (
-            key in merged
-            and isinstance(merged[key], dict)
-            and isinstance(value, dict)
-        ):
-            merged[key] = deep_merge(merged[key], value)
-        else:
-            merged[key] = copy.deepcopy(value)
-    return merged
-
-
 def load_json_overrides(path: str | Path, seen: set[Path] | None = None) -> dict:
     config_path = Path(path).expanduser().resolve()
     seen = set() if seen is None else seen
@@ -246,87 +231,20 @@ def load_json_overrides(path: str | Path, seen: set[Path] | None = None) -> dict
     return deep_merge(merged, overrides)
 
 
-CHANNEL_DEFAULTS = {
-    "qk": DEFAULT_CONFIG["qk"],
-    "logit_bias": DEFAULT_CONFIG["logit_bias"],
-}
-
-POSITION_PRESETS = {
-    "rope": {},
-    "add_rope": {
-        "logit_bias": {"enabled": True, "feature_map": "add_rope"},
-    },
-    "linear": {
-        "logit_bias": {"enabled": True, "feature_map": "linear"},
-    },
-    "low_rank": {
-        "logit_bias": {"enabled": True, "feature_map": "low_rank"},
-    },
-    "bottleneck_mlp": {
-        "logit_bias": {"enabled": True, "feature_map": "bottleneck_mlp"},
-    },
-    "mlp_rope": {
-        "logit_bias": {"enabled": True, "feature_map": "mlp"},
-    },
-}
-
-
-def normalize_channel_config(name: str, channel: dict) -> dict:
-    allowed = set(CHANNEL_DEFAULTS[name])
-    unknown = set(channel) - allowed
-    if unknown:
-        raise ValueError(f"Unknown {name} config keys: {sorted(unknown)}")
-    normalized = deep_merge(CHANNEL_DEFAULTS[name], channel)
-    if not isinstance(normalized["enabled"], bool):
-        raise TypeError(f"{name}.enabled must be a boolean")
-    feature_maps = {
-        "identity",
-        "add_rope",
-        "linear",
-        "low_rank",
-        "bottleneck_mlp",
-        "mlp",
-    }
-    if normalized["feature_map"] not in feature_maps:
-        raise ValueError(
-            f"{name}.feature_map must be one of {sorted(feature_maps)}, got "
-            f"{normalized['feature_map']!r}"
-        )
-    sharing_modes = {"shared_head", "per_head", "full_dim"}
-    if normalized["sharing"] not in sharing_modes:
-        raise ValueError(
-            f"{name}.sharing must be one of {sorted(sharing_modes)}, got "
-            f"{normalized['sharing']!r}"
-        )
-    if name == "qk" and normalized["apply"] not in {"add", "phase_residual"}:
-        raise ValueError("qk.apply must be 'add' or 'phase_residual'")
-    for key in ("rank", "mlp_hidden"):
-        normalized[key] = int(normalized[key])
-        if normalized[key] <= 0:
-            raise ValueError(f"{name}.{key} must be positive")
-    return normalized
-
-
 def position_run_tag(cfg: dict) -> str:
-    qk = cfg["qk"]
-    logit = cfg["logit_bias"]
-    if not qk["enabled"] and not logit["enabled"]:
-        return "rope-flex" if cfg["attn_impl"] == "flex" else "rope"
-
-    tags = []
-    for channel_name, channel in (("qk", qk), ("logit", logit)):
-        if not channel["enabled"]:
-            continue
-        parts = [channel_name]
-        if channel_name == "qk":
-            parts.append("phase" if channel["apply"] == "phase_residual" else "add")
-        parts.extend((channel["feature_map"], channel["sharing"]))
-        if channel["feature_map"] in {"low_rank", "bottleneck_mlp"}:
-            parts.append(f"r{channel['rank']}")
-        elif channel["feature_map"] == "mlp":
-            parts.append(f"m{channel['mlp_hidden']}")
-        tags.append("-".join(parts))
-    return "+".join(tags)
+    """Dispatch to legacy or v2 tags based on ``position_source_schema``."""
+    source = int(cfg.get("position_source_schema", 2))
+    if source == 1:
+        return legacy_position_run_tag(
+            qk_v1=v2_to_legacy_tag_fields("qk", cfg["qk"]),
+            logit_v1=v2_to_legacy_tag_fields("logit_bias", cfg["logit_bias"]),
+            attn_impl=cfg["attn_impl"],
+        )
+    return v2_position_run_tag(
+        qk=cfg["qk"],
+        logit_bias=cfg["logit_bias"],
+        attn_impl=cfg["attn_impl"],
+    )
 
 
 def load_config(cli_args):
@@ -359,32 +277,71 @@ def load_config(cli_args):
     if preset is not None and preset not in POSITION_PRESETS:
         raise ValueError(f"Unknown position preset: {preset!r}")
 
-    # Expand the legacy preset first, then let explicit nested channel config win.
-    qk_config = copy.deepcopy(CHANNEL_DEFAULTS["qk"])
-    logit_config = copy.deepcopy(CHANNEL_DEFAULTS["logit_bias"])
-    if preset is not None:
-        preset_config = POSITION_PRESETS[preset]
-        qk_config = deep_merge(qk_config, preset_config.get("qk", {}))
-        logit_config = deep_merge(
-            logit_config, preset_config.get("logit_bias", {})
-        )
-    qk_config = normalize_channel_config(
-        "qk", deep_merge(qk_config, overrides.get("qk", {}))
-    )
-    logit_config = normalize_channel_config(
-        "logit_bias",
-        deep_merge(logit_config, overrides.get("logit_bias", {})),
-    )
+    preset_config = POSITION_PRESETS.get(preset, {}) if preset is not None else {}
     # Legacy width knobs remain aliases for preset-generated configs.
+    qk_override = copy.deepcopy(overrides.get("qk", {}))
+    logit_override = copy.deepcopy(overrides.get("logit_bias", {}))
     if preset is not None:
         if "qk" not in overrides:
-            qk_config["rank"] = int(cfg["pos_rank"])
-            qk_config["mlp_hidden"] = int(cfg["pos_mlp_hidden"])
+            qk_override = deep_merge(
+                qk_override,
+                {
+                    "rank": int(cfg["pos_rank"]),
+                    "mlp_hidden": int(cfg["pos_mlp_hidden"]),
+                },
+            )
         if "logit_bias" not in overrides:
-            logit_config["rank"] = int(cfg["pos_rank"])
-            logit_config["mlp_hidden"] = int(cfg["pos_mlp_hidden"])
+            logit_override = deep_merge(
+                logit_override,
+                {
+                    "rank": int(cfg["pos_rank"]),
+                    "mlp_hidden": int(cfg["pos_mlp_hidden"]),
+                },
+            )
+
+    model_dim = int(cfg["hidden_size"])
+    heads = int(cfg["n_head"])
+    rope_theta = float(cfg["rope_theta"])
+    qk_config, qk_source = resolve_channel_config(
+        "qk",
+        preset_fragment=preset_config.get("qk"),
+        override=qk_override,
+        model_dim=model_dim,
+        heads=heads,
+        rope_theta=rope_theta,
+    )
+    logit_config, logit_source = resolve_channel_config(
+        "logit_bias",
+        preset_fragment=preset_config.get("logit_bias"),
+        override=logit_override,
+        model_dim=model_dim,
+        heads=heads,
+        rope_theta=rope_theta,
+    )
+    # If a preset set rank aliases onto a v1 fragment, they are already applied
+    # above via overrides. For presets with only feature_map, rank aliases need
+    # to land on the upgraded mapper — handle when preset set and no channel override.
+    if preset is not None:
+        if "qk" not in overrides and qk_config["enabled"]:
+            qk_config["mapper"]["rank"] = int(cfg["pos_rank"])
+            qk_config["mapper"]["hidden_dim"] = int(cfg["pos_mlp_hidden"])
+        if "logit_bias" not in overrides and logit_config["enabled"]:
+            logit_config["mapper"]["rank"] = int(cfg["pos_rank"])
+            logit_config["mapper"]["hidden_dim"] = int(cfg["pos_mlp_hidden"])
+
     cfg["qk"] = qk_config
     cfg["logit_bias"] = logit_config
+    cfg["position_schema_version"] = POSITION_SCHEMA_VERSION
+    cfg["position_source_schema"] = 1 if (qk_source == 1 and logit_source == 1) else (
+        1 if qk_source == 1 or logit_source == 1 else 2
+    )
+    # Prefer schema 1 tagging whenever any channel came from a legacy dict so
+    # historical auto-generated names remain stable for v1 sweep configs.
+    if qk_source == 1 or logit_source == 1:
+        cfg["position_source_schema"] = 1
+    else:
+        cfg["position_source_schema"] = 2
+
     cfg["pos_variant"] = preset or (
         "rope"
         if not qk_config["enabled"] and not logit_config["enabled"]
@@ -640,7 +597,9 @@ def evaluate(args, model, eval_dataloader, accelerator, step):
     diagnostic_model = accelerator.unwrap_model(model)
     while hasattr(diagnostic_model, "_orig_mod"):
         diagnostic_model = diagnostic_model._orig_mod
-    position_metrics, position_profiles = diagnostic_model.position_diagnostics()
+    position_metrics, position_profiles = diagnostic_model.position_diagnostics(
+        sequence_length=args.block_size,
+    )
     if accelerator.is_main_process:
         metrics = {
             "step": int(step),
@@ -733,6 +692,8 @@ def main():
             "logit_bias": args.logit_bias,
             "attn_impl": args.attn_impl,
             "rel_extent": args.rel_extent or args.block_size,
+            "position_schema_version": args.position_schema_version,
+            "position_source_schema": args.position_source_schema,
             **counts,
         }, indent=2))
         # TODO: once implemented, print suggest_matched_baselines(vars(args)) here.
