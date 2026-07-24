@@ -13,12 +13,16 @@ from position import (
     PositionChannel,
     adapt_legacy_position_state_dict,
     apply_rotary,
+    build_attention_position_write_channel,
     build_logit_bias_channel,
     build_qk_position_channel,
+    build_residual_position_channel,
     build_rope_cache,
     count_position_parameters,
     ensure_channel_v2,
     interleaved_fourier_basis,
+    normalize_attention_write_config,
+    normalize_residual_stream_config,
 )
 
 # Inductor's default FlexAttention tiles need ~120KiB SMEM; this GPU reports a
@@ -78,6 +82,7 @@ class Attention(torch.nn.Module):
         qk_config: dict | None = None,
         logit_bias_config: dict | None = None,
         attn_impl: AttentionImpl = "sdpa",
+        attention_write_config: dict | None = None,
     ):
         super().__init__()
         self.dim = dim
@@ -109,6 +114,12 @@ class Attention(torch.nn.Module):
         self.logit_bias_config = ensure_channel_v2(
             "logit_bias",
             logit_bias_config,
+            model_dim=dim,
+            heads=heads,
+            rope_theta=rope_theta,
+        )
+        self.attention_write_config = normalize_attention_write_config(
+            attention_write_config,
             model_dim=dim,
             heads=heads,
             rope_theta=rope_theta,
@@ -166,6 +177,14 @@ class Attention(torch.nn.Module):
             extent=self.rel_extent,
             rope_theta=rope_theta,
         )
+        self.position_write = build_attention_position_write_channel(
+            self.attention_write_config,
+            heads=heads,
+            head_dim=self.head_dim,
+            model_dim=dim,
+            extent=max_seq_len,
+            rope_theta=rope_theta,
+        )
 
         if qk_norm:
             self.q_norm = torch.nn.LayerNorm(self.head_dim)
@@ -189,6 +208,8 @@ class Attention(torch.nn.Module):
         *,
         q_phase_delta=None,
         k_phase_delta=None,
+        q_scale=None,
+        k_scale=None,
         phase_delta=None,
     ):
         if phase_delta is not None:
@@ -205,6 +226,8 @@ class Attention(torch.nn.Module):
             self.rope_cos,
             q_phase_delta=q_phase_delta,
             k_phase_delta=k_phase_delta,
+            q_scale=q_scale,
+            k_scale=k_scale,
         )
 
     def _split_heads(self, x):
@@ -245,21 +268,26 @@ class Attention(torch.nn.Module):
         )
 
     def _position_bias_score_mod(self, score, batch_idx, head_idx, query_idx, key_value_idx):
-        del batch_idx
         bias_curves = self._flex_bias_curves
         distance = query_idx - key_value_idx
         in_range = (distance >= 0) & (distance < self.rel_extent)
         distance = distance.clamp(0, self.rel_extent - 1)
-        bias = bias_curves[head_idx, distance]
+        if bias_curves.ndim == 2:
+            bias = bias_curves[head_idx, distance]
+        else:
+            bias = bias_curves[batch_idx, head_idx, query_idx, distance]
         return score + torch.where(in_range, bias, 0.0)
 
     @torch.compiler.disable
-    def _flex_attention(self, q, k, v):
+    def _flex_attention(self, q, k, v, query_content):
         block_mask = self._block_mask(q)
         if self.logit_bias is None:
             return _flex_attention_call(q, k, v, block_mask=block_mask)
 
-        self._flex_bias_curves = self.logit_bias(dtype=q.dtype)
+        self._flex_bias_curves = self.logit_bias(
+            dtype=q.dtype,
+            query=query_content,
+        )
         return _flex_attention_call(
             q,
             k,
@@ -275,26 +303,58 @@ class Attention(torch.nn.Module):
 
         q = self.q_norm(q)
         k = self.k_norm(k)
+        q_content = q
+        k_content = k
         q_phase_delta = None
         k_phase_delta = None
+        q_scale = None
+        k_scale = None
         if self.qk_position is not None:
-            position_output = self.qk_position(q.shape[-2], dtype=q.dtype)
+            position_output = self.qk_position(
+                q.shape[-2],
+                dtype=q.dtype,
+                q_content=q_content,
+                k_content=k_content,
+            )
             if position_output.application == "additive":
                 # Additive Fourier Q/K: q' = q + e_q(p), no R(θ)q.
-                q = q + position_output.q[None, :, :, :]
-                k = k + position_output.k[None, :, :, :]
+                q_addend = (
+                    position_output.q[None, :, :, :]
+                    if position_output.q.ndim == 3
+                    else position_output.q
+                )
+                k_addend = (
+                    position_output.k[None, :, :, :]
+                    if position_output.k.ndim == 3
+                    else position_output.k
+                )
+                q = q + q_addend
+                k = k + k_addend
             else:
                 q_phase_delta = position_output.q
                 k_phase_delta = position_output.k
+                q_scale = position_output.q_scale
+                k_scale = position_output.k_scale
         if self.multiplicative_rope:
             q, k = self._apply_rope(
                 q,
                 k,
                 q_phase_delta=q_phase_delta,
                 k_phase_delta=k_phase_delta,
+                q_scale=q_scale,
+                k_scale=k_scale,
             )
+        if self.position_write is not None:
+            position_values = self.position_write.position_values(
+                v.shape[-2],
+                dtype=v.dtype,
+            )
+            position_values = position_values[None].expand(
+                v.shape[0], -1, -1, -1
+            )
+            v = torch.cat((v, position_values), dim=-1)
         if self.attn_impl == "flex":
-            attn = self._flex_attention(q, k, v)
+            attn = self._flex_attention(q, k, v, q_content)
         else:
             attn = F.scaled_dot_product_attention(
                 q,
@@ -302,15 +362,31 @@ class Attention(torch.nn.Module):
                 v,
                 is_causal=self.is_causal,
             )
-        attn = attn.transpose(1, 2).contiguous().view(x.shape[0], x.shape[1], -1)
-        return self.to_out(attn)
+        if self.position_write is None:
+            content_attn = attn
+            position_output = None
+        else:
+            content_attn = attn[..., : self.head_dim]
+            position_summary = attn[..., self.head_dim :]
+            position_output = self.position_write(position_summary)
+        content_attn = (
+            content_attn.transpose(1, 2)
+            .contiguous()
+            .view(x.shape[0], x.shape[1], -1)
+        )
+        output = self.to_out(content_attn)
+        if position_output is not None:
+            output = output + position_output
+        return output
 
     @torch.no_grad()
     def logit_bias_curves(self) -> torch.Tensor | None:
         if self.logit_bias is None:
             return None
         parameter = next(self.logit_bias.parameters())
-        return self.logit_bias(dtype=parameter.dtype).float().detach()
+        return self.logit_bias.base_curves(
+            dtype=parameter.dtype
+        ).float().detach()
 
     @torch.no_grad()
     def qk_position_summary(
@@ -367,6 +443,7 @@ class TransformerBlock(torch.nn.Module):
         qk_config: dict | None = None,
         logit_bias_config: dict | None = None,
         attn_impl: AttentionImpl = "sdpa",
+        attention_write_config: dict | None = None,
     ):
         super().__init__()
         self.attn = Attention(
@@ -380,6 +457,7 @@ class TransformerBlock(torch.nn.Module):
             rel_extent=rel_extent,
             qk_config=qk_config,
             logit_bias_config=logit_bias_config,
+            attention_write_config=attention_write_config,
             attn_impl=attn_impl,
         )
         self.ff = GeGLU(dim, hidden_dim=ff_hidden_dim)
@@ -409,16 +487,54 @@ class Transformer(torch.nn.Module):
         qk_config: dict | None = None,
         logit_bias_config: dict | None = None,
         attn_impl: AttentionImpl = "sdpa",
+        ff_hidden_dim=None,
+        residual_stream_config: dict | None = None,
+        attention_write_config: dict | None = None,
     ):
         super().__init__()
 
         self.token_embedding = torch.nn.Embedding(vocab_size, dim)
         self.gradient_checkpointing = gradient_checkpointing
+        self.residual_stream_config = normalize_residual_stream_config(
+            residual_stream_config,
+            model_dim=dim,
+            heads=heads,
+            rope_theta=rope_theta,
+        )
+        placement = self.residual_stream_config["placement"]
+        self.residual_position_input = None
+        if self.residual_stream_config["enabled"] and placement in {"input", "both"}:
+            self.residual_position_input = build_residual_position_channel(
+                self.residual_stream_config,
+                model_dim=dim,
+                heads=heads,
+                extent=max_seq_len,
+                rope_theta=rope_theta,
+            )
+        self.residual_position_layer_shared = bool(
+            self.residual_stream_config["layer_shared"]
+        )
+        self.residual_position_layers = torch.nn.ModuleList()
+        if self.residual_stream_config["enabled"] and placement in {
+            "per_layer",
+            "both",
+        }:
+            layer_count = 1 if self.residual_position_layer_shared else depth
+            self.residual_position_layers.extend(
+                build_residual_position_channel(
+                    self.residual_stream_config,
+                    model_dim=dim,
+                    heads=heads,
+                    extent=max_seq_len,
+                    rope_theta=rope_theta,
+                )
+                for _ in range(layer_count)
+            )
         self.blocks = torch.nn.ModuleList([
             TransformerBlock(
                 dim,
                 heads,
-                dim * ff_mult,
+                ff_hidden_dim or dim * ff_mult,
                 is_causal=True,
                 use_rope=use_rope,
                 rope_theta=rope_theta,
@@ -427,6 +543,7 @@ class Transformer(torch.nn.Module):
                 rel_extent=rel_extent,
                 qk_config=qk_config,
                 logit_bias_config=logit_bias_config,
+                attention_write_config=attention_write_config,
                 attn_impl=attn_impl,
             )
             for _ in range(depth)
@@ -490,8 +607,24 @@ class Transformer(torch.nn.Module):
                 metrics[f"{prefix}/bias_mean"] = curves_cpu.mean().item()
                 metrics[f"{prefix}/bias_std"] = curves_cpu.std().item()
                 metrics[f"{prefix}/bias_abs_max"] = curves_cpu.abs().max().item()
+                frequencies = (
+                    block.attn.logit_bias.pipeline.basis.frequencies()
+                    .detach()
+                    .float()
+                )
+                metrics[f"{prefix}/frequency_min"] = frequencies.min().item()
+                metrics[f"{prefix}/frequency_max"] = frequencies.max().item()
                 if layer_idx in selected_layers:
                     profiles[f"layer_{layer_idx:02d}"] = curves_cpu
+                routing = block.attn.logit_bias.routing_summary()
+                for key, value in routing.items():
+                    metrics[f"{prefix}/{key}"] = value
+
+            if block.attn.position_write is not None:
+                gate = block.attn.position_write.gate.detach().float()
+                prefix = f"position/layer_{layer_idx:02d}/attention_write"
+                metrics[f"{prefix}/gate_mean"] = gate.mean().item()
+                metrics[f"{prefix}/gate_abs_max"] = gate.abs().max().item()
 
             if seq_len is None:
                 continue
@@ -501,6 +634,14 @@ class Transformer(torch.nn.Module):
             prefix = f"position/layer_{layer_idx:02d}/qk"
             for key, value in qk_summary.items():
                 metrics[f"{prefix}/{key}"] = value
+        if self.residual_position_input is not None:
+            gate = self.residual_position_input.gate.detach().float()
+            metrics["position/residual_stream/input_gate"] = gate.item()
+        for layer_idx, channel in enumerate(self.residual_position_layers):
+            gate = channel.gate.detach().float()
+            metrics[
+                f"position/residual_stream/layer_{layer_idx:02d}_gate"
+            ] = gate.item()
         return metrics, profiles
 
     def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
@@ -510,7 +651,20 @@ class Transformer(torch.nn.Module):
     def forward(self, input_ids, targets=None, *, return_logits: bool = False):
         """Training path returns loss only so torch.compile need not keep vocab logits live."""
         x = self.in_proj(self.token_embedding(input_ids))
-        for block in self.blocks:
+        if self.residual_position_input is not None:
+            x = x + self.residual_position_input(
+                x.shape[1],
+                dtype=x.dtype,
+            )[None, :, :]
+        for layer_idx, block in enumerate(self.blocks):
+            if self.residual_position_layers:
+                position_idx = (
+                    0 if self.residual_position_layer_shared else layer_idx
+                )
+                x = x + self.residual_position_layers[position_idx](
+                    x.shape[1],
+                    dtype=x.dtype,
+                )[None, :, :]
             if self.gradient_checkpointing:
                 x = torch.utils.checkpoint.checkpoint(
                     block,
@@ -560,17 +714,40 @@ def count_parameters(model: torch.nn.Module) -> dict[str, int]:
         "position_params": position_counts["position_params"],
         "qk_position_params": position_counts["qk_position_params"],
         "logit_bias_params": position_counts["logit_bias_params"],
+        "attention_write_params": position_counts["attention_write_params"],
+        "residual_stream_params": position_counts["residual_stream_params"],
         "non_embed": total - embed - head,
     }
 
 
-def suggest_matched_baselines(cfg: dict) -> dict:
-    """Placeholder for position-variant parameter/wallclock matching."""
-    del cfg
-    raise NotImplementedError(
-        "Matched-baseline helper deferred. Match pos_rank / pos_mlp_hidden or "
-        "override ff_mult manually for now."
+def suggest_matched_baselines(
+    cfg: dict,
+    *,
+    position_params: int = 0,
+    align_multiple: int = 64,
+) -> dict[str, int]:
+    """Recommend a wider GeGLU hidden width spending the position budget.
+
+    A GeGLU hidden unit contributes ``3*dim + 2`` parameters per layer:
+    two input projections (including biases) and one output projection.
+    """
+    dim = int(cfg["hidden_size"])
+    depth = int(cfg["depth"])
+    current_hidden = int(
+        cfg.get("ff_hidden_dim") or dim * int(cfg["ff_mult"])
     )
+    per_hidden = 3 * dim + 2
+    extra_hidden = math.ceil(max(int(position_params), 0) / max(depth * per_hidden, 1))
+    target = current_hidden + extra_hidden
+    if align_multiple > 1:
+        target = math.ceil(target / align_multiple) * align_multiple
+    added = (target - current_hidden) * per_hidden * depth
+    return {
+        "current_ff_hidden_dim": current_hidden,
+        "matched_ff_hidden_dim": target,
+        "matched_ff_added_params": added,
+        "position_param_target": int(position_params),
+    }
 
 
 # Public re-exports for tests and checkpoint helpers.

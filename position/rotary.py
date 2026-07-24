@@ -48,10 +48,16 @@ def rotate_half(
     x: torch.Tensor,
     sin: torch.Tensor,
     cos: torch.Tensor,
+    scale: torch.Tensor | None = None,
 ) -> torch.Tensor:
     half = x.shape[-1] // 2
     x1, x2 = x[..., :half], x[..., half:]
-    return torch.cat([x1 * cos - x2 * sin, x1 * sin + x2 * cos], dim=-1)
+    out1 = x1 * cos - x2 * sin
+    out2 = x1 * sin + x2 * cos
+    if scale is not None:
+        out1 = out1 * scale
+        out2 = out2 * scale
+    return torch.cat([out1, out2], dim=-1)
 
 
 def apply_rotary(
@@ -62,8 +68,10 @@ def apply_rotary(
     *,
     q_phase_delta: torch.Tensor | None = None,
     k_phase_delta: torch.Tensor | None = None,
+    q_scale: torch.Tensor | None = None,
+    k_scale: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Apply split-half RoPE, optionally with separate Q/K phase residuals."""
+    """Apply split-half RoPE with optional separate phase and radial scales."""
     seq_len = q.shape[-2]
     if seq_len > rope_sin.shape[0]:
         raise ValueError(
@@ -74,16 +82,36 @@ def apply_rotary(
 
     q_sin, q_cos = sin, cos
     k_sin, k_cos = sin, cos
+
+    def batch_shape(value: torch.Tensor, *, dtype: torch.dtype) -> torch.Tensor:
+        value = value.to(dtype=dtype)
+        if value.ndim == 3:
+            return value[None, :, :, :]
+        if value.ndim == 4:
+            return value
+        raise ValueError(
+            "Rotary phase/scale tensors must be [H,L,D/2] or [B,H,L,D/2]"
+        )
+
     if q_phase_delta is not None:
         q_sin, q_cos = compose_phase(
             sin,
             cos,
-            q_phase_delta.to(dtype=q.dtype)[None, :, :, :],
+            batch_shape(q_phase_delta, dtype=q.dtype),
         )
     if k_phase_delta is not None:
         k_sin, k_cos = compose_phase(
             sin,
             cos,
-            k_phase_delta.to(dtype=k.dtype)[None, :, :, :],
+            batch_shape(k_phase_delta, dtype=k.dtype),
         )
-    return rotate_half(q, q_sin, q_cos), rotate_half(k, k_sin, k_cos)
+    q_scale_batched = (
+        None if q_scale is None else batch_shape(q_scale, dtype=q.dtype)
+    )
+    k_scale_batched = (
+        None if k_scale is None else batch_shape(k_scale, dtype=k.dtype)
+    )
+    return (
+        rotate_half(q, q_sin, q_cos, q_scale_batched),
+        rotate_half(k, k_sin, k_cos, k_scale_batched),
+    )

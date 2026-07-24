@@ -21,11 +21,23 @@ LOG_DIR="${SCRIPT_DIR}/logs"
 CONFIG_DIR="${SCRIPT_DIR}/sweep_configs"
 WANDB_PROJECT="${WANDB_PROJECT:-mlprope-position-bias}"
 WANDB_ENTITY="${WANDB_ENTITY:-ethansmith2000}"
-EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | phase1b | phase1c | individual | all
+EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | phase1b | phase1c | phase2_coupling | phase2_followup | phase3_geometry | phase3_amplitude_followup | phase3_promotion | phase3_basis_screen | individual | all
 if [[ "${EXPERIMENT_FAMILY}" == "phase1b" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1b"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase1c" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1c"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase2_coupling" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase2_coupling"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase2_followup" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase2_followup"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase3_geometry" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase3_geometry"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase3_amplitude_followup" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase3_amplitude_followup"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase3_promotion" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase3_promotion"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase3_basis_screen" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase3_basis_screen"
 else
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1"
 fi
@@ -40,8 +52,32 @@ if [[ -z "${GPU_CLAIM_BIN}" ]]; then
   GPU_CLAIM_BIN="/workspace/bin/gpu-claim"
 fi
 OWNER="${OWNER:-mlprope}"
-# Default to a small slice so sibling projects can claim the rest.
-GPU_SELECTOR="${GPU_SELECTOR:-6,7}" # e.g. any | 0,1,2 | UUID
+# Suites use every GPU that is available through the shared lifetime-locking
+# queue; historical families retain the conservative two-GPU default.
+if [[ -z "${GPU_SELECTOR:-}" ]]; then
+  if [[ "${EXPERIMENT_FAMILY}" == "phase3_geometry" \
+    || "${EXPERIMENT_FAMILY}" == "phase3_amplitude_followup" \
+    || "${EXPERIMENT_FAMILY}" == "phase3_promotion" \
+    || "${EXPERIMENT_FAMILY}" == "phase3_basis_screen" ]]; then
+    GPU_SELECTOR="any"
+  else
+    GPU_SELECTOR="6,7"
+  fi
+fi
+# Separate config dirs so Phase-2 writes do not touch historical JSON.
+if [[ "${EXPERIMENT_FAMILY}" == "phase2_coupling" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase2_coupling"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase2_followup" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase2_followup"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase3_geometry" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase3_geometry"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase3_amplitude_followup" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase3_amplitude_followup"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase3_promotion" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase3_promotion"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase3_basis_screen" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase3_basis_screen"
+fi
 PIDS=()
 JOB_NAMES=()
 
@@ -50,6 +86,7 @@ mkdir -p "${LOG_DIR}" "${CONFIG_DIR}" "${OUTPUT_ROOT}"
 # Common settings (single-GPU jobs; pack up to 8 concurrent via gpu-claim)
 NUM_WARMUP_STEPS="${NUM_WARMUP_STEPS:-200}"
 WITH_TRACKING="${WITH_TRACKING:-true}"
+WANDB_GROUP="${WANDB_GROUP:-}"
 BASE_WD="0.01"
 BASE_BETA1="0.9"
 BASE_BETA2="0.98"
@@ -88,8 +125,12 @@ write_common_config() {
   local cfg_file="$1"
   local extra_json="$2"
   local rel_extent_json="null"
+  local wandb_group_json="null"
   if [[ -n "${REL_EXTENT}" ]]; then
     rel_extent_json="${REL_EXTENT}"
+  fi
+  if [[ -n "${WANDB_GROUP}" ]]; then
+    wandb_group_json="\"${WANDB_GROUP}\""
   fi
   cat > "${cfg_file}" <<JSON
 {
@@ -119,6 +160,7 @@ write_common_config() {
   "save_final_model": false,
   "wandb_project": "${WANDB_PROJECT}",
   "wandb_entity": "${WANDB_ENTITY}",
+  "wandb_group": ${wandb_group_json},
   "with_tracking": ${WITH_TRACKING},
   "num_warmup_steps": ${NUM_WARMUP_STEPS},
   "compile": true,
@@ -218,6 +260,68 @@ emit_v2_channel_variant() {
   run_job "${job_name}" "${cfg_file}"
 }
 
+# Fully general v2 emitter for future playground sweeps. Callers provide complete
+# canonical channel fragments; no family invokes this automatically.
+emit_v2_playground_variant() {
+  local job_name="$1"
+  local attn_impl="$2"
+  local qk_json="$3"
+  local logit_json="$4"
+  local residual_json="${5:-{\"enabled\": false}}"
+  local write_json="${6:-{\"enabled\": false}}"
+  local cfg_file="${CONFIG_DIR}/${job_name}.json"
+  write_common_config "${cfg_file}" \
+    "\"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${logit_json}, \"residual_stream\": ${residual_json}, \"attention_write\": ${write_json}, \"attn_impl\": \"${attn_impl}\", \"run_name\": \"${job_name}\""
+  run_job "${job_name}" "${cfg_file}"
+}
+
+emit_v2_playground_seed_variant() {
+  local job_name="$1"
+  local seed="$2"
+  local attn_impl="$3"
+  local qk_json="$4"
+  local logit_json="$5"
+  local residual_json="${6:-{\"enabled\": false}}"
+  local write_json="${7:-{\"enabled\": false}}"
+  local cfg_file="${CONFIG_DIR}/${job_name}.json"
+  write_common_config "${cfg_file}" \
+    "\"seed\": ${seed}, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${logit_json}, \"residual_stream\": ${residual_json}, \"attention_write\": ${write_json}, \"attn_impl\": \"${attn_impl}\", \"run_name\": \"${job_name}\""
+  run_job "${job_name}" "${cfg_file}"
+}
+
+# Extended Q/K helper. Geometry:
+#   additive/free | additive/amplitude_phase
+#   rotary/phase | rotary/projected_phase | rotary/scaled_phase
+# Input kind:
+#   frozen_fourier | learned_temperature_fourier | learned_frequency_fourier
+# Conditioning:
+#   none | local_residual | content_gate
+v2_qk_playground_json() {
+  local application="$1"
+  local geometry="$2"
+  local mapper_kind="$3"
+  local residual="$4"
+  local qk_coupling="$5"
+  local input_kind="${6:-frozen_fourier}"
+  local conditioning="${7:-none}"
+  local head_coupling="${8:-per_head_independent}"
+  local amplitude_init="${9:-0.1}"
+  local scalars_json="${10:-[]}"
+  cat <<JSON
+{"enabled": true, "application": "${application}", "geometry": "${geometry}", "input": {"kind": "${input_kind}", "basis_dim": null, "theta": null, "scalars": ${scalars_json}}, "mapper": {"kind": "${mapper_kind}", "residual": ${residual}, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "output": {"amplitude_init": ${amplitude_init}, "amplitude_parameterization": "signed", "phase_scale": 1.0, "scale_init": 1.0, "scale_parameterization": "exp"}, "conditioning": {"kind": "${conditioning}", "hidden_dim": ${POS_MLP_HIDDEN}}, "qk_coupling": "${qk_coupling}", "head_coupling": "${head_coupling}"}
+JSON
+}
+
+v2_inkling_json() {
+  local kind="$1" # inkling_table | inkling_cosnet
+  local profiles="${2:-8}"
+  local router_hidden="${3:-64}"
+  local head_coupling="${4:-per_head_independent}"
+  cat <<JSON
+{"enabled": true, "application": "logit_bias", "geometry": "scalar_curve", "input": {"kind": "frozen_fourier", "basis_dim": null, "theta": null, "scalars": []}, "mapper": {"kind": "identity", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "conditioning": {"kind": "${kind}", "num_profiles": ${profiles}, "router_hidden_dim": ${router_hidden}, "profile_init_std": 0.02, "num_frequencies": 16, "gate_init": 0.0}, "head_coupling": "${head_coupling}"}
+JSON
+}
+
 want_family() {
   local family="$1"
   [[ "${EXPERIMENT_FAMILY}" == "all" \
@@ -239,9 +343,78 @@ want_phase1c_family() {
     || "${EXPERIMENT_FAMILY}" == "${family}" ]]
 }
 
+want_phase2_coupling_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "all" \
+    || "${EXPERIMENT_FAMILY}" == "phase2_coupling" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase2_followup_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "all" \
+    || "${EXPERIMENT_FAMILY}" == "phase2_followup" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase3_geometry_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase3_geometry" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase3_amplitude_followup_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase3_amplitude_followup" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase3_promotion_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase3_promotion" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase3_basis_screen_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase3_basis_screen" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+# Compact v2 Q/K channel JSON. head_coupling defaults to per_head_independent.
+v2_qk_json() {
+  local application="$1"   # additive | rotary
+  local geometry="$2"      # free | phase
+  local mapper_kind="$3"
+  local residual="$4"      # true | false
+  local qk_coupling="$5"
+  local head_coupling="${6:-per_head_independent}"
+  cat <<JSON
+{"enabled": true, "application": "${application}", "geometry": "${geometry}", "input": {"kind": "frozen_fourier", "basis_dim": null, "theta": null, "scalars": []}, "mapper": {"kind": "${mapper_kind}", "residual": ${residual}, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "qk_coupling": "${qk_coupling}", "head_coupling": "${head_coupling}"}
+JSON
+}
+
+v2_logit_json() {
+  local mapper_kind="$1"
+  local residual="$2"
+  local head_coupling="${3:-per_head_independent}"
+  cat <<JSON
+{"enabled": true, "application": "logit_bias", "geometry": "scalar_curve", "input": {"kind": "frozen_fourier", "basis_dim": null, "theta": null, "scalars": []}, "mapper": {"kind": "${mapper_kind}", "residual": ${residual}, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "head_coupling": "${head_coupling}"}
+JSON
+}
+
+coupling_tag() {
+  case "$1" in
+    shared) echo "shared" ;;
+    shared_trunk_separate_readouts) echo "sep_readout" ;;
+    separate) echo "separate" ;;
+    *) echo "$1" ;;
+  esac
+}
+
 echo "MLPROPE_QUEUE_STARTED $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "family=${EXPERIMENT_FAMILY} model='${MODEL_CONFIG}' submit=${SUBMIT_JOBS} dry_run=${DRY_RUN} parallel=${PARALLEL}"
-echo "gpu-claim=${GPU_CLAIM_BIN} selector=${GPU_SELECTOR}"
+echo "gpu-claim=${GPU_CLAIM_BIN} selector=${GPU_SELECTOR} config_dir=${CONFIG_DIR}"
 "${GPU_CLAIM_BIN}" status || true
 
 # Direction 1 / Phase 1 expressiveness sweep.
@@ -331,6 +504,272 @@ if want_phase1c_family "qk_add_mlp"; then
     "sdpa" \
     "{\"enabled\": true, \"feature_map\": \"mlp\", \"sharing\": \"${POS_SHARING}\", \"apply\": \"add\", \"rank\": ${POS_RANK}, \"mlp_hidden\": ${POS_MLP_HIDDEN}}" \
     "${LOGIT_DISABLED}"
+fi
+
+# Phase 2: Q/K coupling ablation on the strongest Phase-1c additive mapper
+# (linear) and the Phase-1b phase mapper (mlp). Shared reproduces the prior
+# implicit coupling; sep_readout / separate are the new axes.
+if want_phase2_coupling_family "qk_coupling"; then
+  for coupling in shared shared_trunk_separate_readouts separate; do
+    tag="$(coupling_tag "${coupling}")"
+    emit_v2_channel_variant \
+      "qk-add-linear-${tag}-per_head-h${HIDDEN_SIZE}d${DEPTH}" \
+      "sdpa" \
+      "$(v2_qk_json additive free linear false "${coupling}")" \
+      "${LOGIT_DISABLED}"
+    emit_v2_channel_variant \
+      "qk-phase-mlp-m${POS_MLP_HIDDEN}-${tag}-per_head-h${HIDDEN_SIZE}d${DEPTH}" \
+      "sdpa" \
+      "$(v2_qk_json rotary phase mlp true "${coupling}")" \
+      "${LOGIT_DISABLED}"
+  done
+fi
+
+# Phase 2 follow-up:
+# 1) combine best Q/K (add-linear sep_readout) with best logit (linear)
+# 2) widen sep_readout across additive mappers (mlp, low_rank)
+if want_phase2_followup_family "combined_and_widen"; then
+  emit_v2_channel_variant \
+    "qk-add-linear-sep_readout+logit-linear-per_head-h${HIDDEN_SIZE}d${DEPTH}" \
+    "flex" \
+    "$(v2_qk_json additive free linear false shared_trunk_separate_readouts)" \
+    "$(v2_logit_json linear false)"
+  emit_v2_channel_variant \
+    "qk-add-mlp-m${POS_MLP_HIDDEN}-sep_readout-per_head-h${HIDDEN_SIZE}d${DEPTH}" \
+    "sdpa" \
+    "$(v2_qk_json additive free mlp true shared_trunk_separate_readouts)" \
+    "${LOGIT_DISABLED}"
+  emit_v2_channel_variant \
+    "qk-add-low_rank-r${POS_RANK}-sep_readout-per_head-h${HIDDEN_SIZE}d${DEPTH}" \
+    "sdpa" \
+    "$(v2_qk_json additive free low_rank true shared_trunk_separate_readouts)" \
+    "${LOGIT_DISABLED}"
+fi
+
+# Phase 3 screening bundle: one coherent geometry/injection-scale story.
+# This family is intentionally excluded from EXPERIMENT_FAMILY=all so historical
+# sweeps cannot launch it accidentally.
+if want_phase3_geometry_family "canonical_geometry_story"; then
+  steps_tag="s${MAX_TRAIN_STEPS}"
+  phase3_suffix="${steps_tag}-h${HIDDEN_SIZE}d${DEPTH}"
+  free_add_qk="$(v2_qk_json additive free linear false shared_trunk_separate_readouts)"
+  linear_logit="$(v2_logit_json linear false)"
+
+  emit_v2_playground_variant \
+    "phase3-rope-${phase3_suffix}" \
+    "sdpa" \
+    "${QK_DISABLED}" \
+    "${LOGIT_DISABLED}"
+  emit_v2_playground_variant \
+    "phase3-add-linear-sep-${phase3_suffix}" \
+    "sdpa" \
+    "${free_add_qk}" \
+    "${LOGIT_DISABLED}"
+  emit_v2_playground_variant \
+    "phase3-add-linear-sep+logit-linear-${phase3_suffix}" \
+    "flex" \
+    "${free_add_qk}" \
+    "${linear_logit}"
+
+  for amplitude_spec in \
+    "a001:0.01" \
+    "a003:0.03" \
+    "a010:0.1" \
+    "a030:0.3"; do
+    amplitude_tag="${amplitude_spec%%:*}"
+    amplitude_value="${amplitude_spec#*:}"
+    canonical_qk="$(
+      v2_qk_playground_json \
+        additive amplitude_phase linear false \
+        shared_trunk_separate_readouts frozen_fourier none \
+        per_head_independent "${amplitude_value}"
+    )"
+    emit_v2_playground_variant \
+      "phase3-canonical-${amplitude_tag}-sep-${phase3_suffix}" \
+      "sdpa" \
+      "${canonical_qk}" \
+      "${LOGIT_DISABLED}"
+  done
+
+  canonical_a010_qk="$(
+    v2_qk_playground_json \
+      additive amplitude_phase linear false \
+      shared_trunk_separate_readouts frozen_fourier none \
+      per_head_independent 0.1
+  )"
+  emit_v2_playground_variant \
+    "phase3-canonical-a010-sep+logit-linear-${phase3_suffix}" \
+    "flex" \
+    "${canonical_a010_qk}" \
+    "${linear_logit}"
+fi
+
+# Phase 3 amplitude follow-up: continue the monotonic Q/K-only amplitude trend
+# and bracket the current amplitude-0.1 winner when linear logit bias is active.
+if want_phase3_amplitude_followup_family "canonical_amplitude_followup"; then
+  steps_tag="s${MAX_TRAIN_STEPS}"
+  phase3_suffix="${steps_tag}-h${HIDDEN_SIZE}d${DEPTH}"
+  linear_logit="$(v2_logit_json linear false)"
+  amplitude_followup_scope="${AMPLITUDE_FOLLOWUP_SCOPE:-all}"
+  if [[ "${amplitude_followup_scope}" != "all" \
+    && "${amplitude_followup_scope}" != "qk" \
+    && "${amplitude_followup_scope}" != "logit" ]]; then
+    echo "AMPLITUDE_FOLLOWUP_SCOPE must be all, qk, or logit" >&2
+    exit 1
+  fi
+
+  if [[ "${amplitude_followup_scope}" != "logit" ]]; then
+    for amplitude_spec in \
+      "a050:0.5" \
+      "a070:0.7" \
+      "a100:1.0" \
+      "a200:2.0"; do
+      amplitude_tag="${amplitude_spec%%:*}"
+      amplitude_value="${amplitude_spec#*:}"
+      canonical_qk="$(
+        v2_qk_playground_json \
+          additive amplitude_phase linear false \
+          shared_trunk_separate_readouts frozen_fourier none \
+          per_head_independent "${amplitude_value}"
+      )"
+      emit_v2_playground_variant \
+        "phase3-canonical-${amplitude_tag}-sep-${phase3_suffix}" \
+        "sdpa" \
+        "${canonical_qk}" \
+        "${LOGIT_DISABLED}"
+    done
+  fi
+
+  if [[ "${amplitude_followup_scope}" != "qk" ]]; then
+    for amplitude_spec in \
+      "a003:0.03" \
+      "a030:0.3" \
+      "a100:1.0" \
+      "a200:2.0"; do
+      amplitude_tag="${amplitude_spec%%:*}"
+      amplitude_value="${amplitude_spec#*:}"
+      canonical_qk="$(
+        v2_qk_playground_json \
+          additive amplitude_phase linear false \
+          shared_trunk_separate_readouts frozen_fourier none \
+          per_head_independent "${amplitude_value}"
+      )"
+      emit_v2_playground_variant \
+        "phase3-canonical-${amplitude_tag}-sep+logit-linear-${phase3_suffix}" \
+        "flex" \
+        "${canonical_qk}" \
+        "${linear_logit}"
+    done
+  fi
+fi
+
+# Phase 3 promotion: two seeds at 10k for the baseline, historical free-additive
+# control, and the two leading canonical amplitudes. FlexAttention is used for
+# every run so attention implementation is controlled across the comparison.
+if want_phase3_promotion_family "canonical_10k_promotion"; then
+  steps_tag="s${MAX_TRAIN_STEPS}"
+  phase3_suffix="${steps_tag}-h${HIDDEN_SIZE}d${DEPTH}"
+  free_add_qk="$(v2_qk_json additive free linear false shared_trunk_separate_readouts)"
+  linear_logit="$(v2_logit_json linear false)"
+  canonical_a030_qk="$(
+    v2_qk_playground_json \
+      additive amplitude_phase linear false \
+      shared_trunk_separate_readouts frozen_fourier none \
+      per_head_independent 0.3
+  )"
+  canonical_a100_qk="$(
+    v2_qk_playground_json \
+      additive amplitude_phase linear false \
+      shared_trunk_separate_readouts frozen_fourier none \
+      per_head_independent 1.0
+  )"
+
+  for seed in 123 456; do
+    emit_v2_playground_seed_variant \
+      "phase3-promotion-rope-flex-seed${seed}-${phase3_suffix}" \
+      "${seed}" \
+      "flex" \
+      "${QK_DISABLED}" \
+      "${LOGIT_DISABLED}"
+    emit_v2_playground_seed_variant \
+      "phase3-promotion-add-linear-sep+logit-linear-seed${seed}-${phase3_suffix}" \
+      "${seed}" \
+      "flex" \
+      "${free_add_qk}" \
+      "${linear_logit}"
+    emit_v2_playground_seed_variant \
+      "phase3-promotion-canonical-a030-sep+logit-linear-seed${seed}-${phase3_suffix}" \
+      "${seed}" \
+      "flex" \
+      "${canonical_a030_qk}" \
+      "${linear_logit}"
+    emit_v2_playground_seed_variant \
+      "phase3-promotion-canonical-a100-sep+logit-linear-seed${seed}-${phase3_suffix}" \
+      "${seed}" \
+      "flex" \
+      "${canonical_a100_qk}" \
+      "${linear_logit}"
+  done
+fi
+
+# Phase 3 basis screen: hold canonical geometry and logit bias fixed while
+# changing only how absolute position is represented at the Q/K input.
+if want_phase3_basis_screen_family "canonical_basis_story"; then
+  steps_tag="s${MAX_TRAIN_STEPS}"
+  phase3_suffix="${steps_tag}-h${HIDDEN_SIZE}d${DEPTH}"
+  linear_logit="$(v2_logit_json linear false)"
+  frozen_qk="$(
+    v2_qk_playground_json \
+      additive amplitude_phase linear false \
+      shared_trunk_separate_readouts frozen_fourier none \
+      per_head_independent 0.3
+  )"
+  learned_temperature_qk="$(
+    v2_qk_playground_json \
+      additive amplitude_phase linear false \
+      shared_trunk_separate_readouts learned_temperature_fourier none \
+      per_head_independent 0.3
+  )"
+  learned_frequency_qk="$(
+    v2_qk_playground_json \
+      additive amplitude_phase linear false \
+      shared_trunk_separate_readouts learned_frequency_fourier none \
+      per_head_independent 0.3
+  )"
+  scalar_qk="$(
+    v2_qk_playground_json \
+      additive amplitude_phase linear false \
+      shared_trunk_separate_readouts frozen_fourier none \
+      per_head_independent 0.3 \
+      '["normalized_position", "log_position"]'
+  )"
+
+  for seed in 123 456; do
+    emit_v2_playground_seed_variant \
+      "phase3-basis-frozen-seed${seed}-${phase3_suffix}" \
+      "${seed}" \
+      "flex" \
+      "${frozen_qk}" \
+      "${linear_logit}"
+    emit_v2_playground_seed_variant \
+      "phase3-basis-learned-temperature-seed${seed}-${phase3_suffix}" \
+      "${seed}" \
+      "flex" \
+      "${learned_temperature_qk}" \
+      "${linear_logit}"
+    emit_v2_playground_seed_variant \
+      "phase3-basis-learned-frequency-seed${seed}-${phase3_suffix}" \
+      "${seed}" \
+      "flex" \
+      "${learned_frequency_qk}" \
+      "${linear_logit}"
+    emit_v2_playground_seed_variant \
+      "phase3-basis-scalars-seed${seed}-${phase3_suffix}" \
+      "${seed}" \
+      "flex" \
+      "${scalar_qk}" \
+      "${linear_logit}"
+  done
 fi
 
 if [[ "${SUBMIT_JOBS}" == "true" && "${PARALLEL}" == "true" && ${#PIDS[@]} -gt 0 ]]; then

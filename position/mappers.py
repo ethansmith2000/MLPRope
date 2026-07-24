@@ -47,6 +47,10 @@ class FeatureMapper(torch.nn.Module):
             raise ValueError(
                 "Identity mapper requires matching input and output dimensions."
             )
+        if kind == "euclidean_affine" and input_dim != output_dim:
+            raise ValueError(
+                "Euclidean affine mapper requires matching input/output dimensions."
+            )
         if rank <= 0:
             raise ValueError("rank must be positive.")
         if hidden_dim <= 0:
@@ -96,8 +100,13 @@ class FeatureMapper(torch.nn.Module):
             for weight in self.down:
                 torch.nn.init.xavier_normal_(weight)
             torch.nn.init.zeros_(self.down_bias)
-            # A zero residual branch makes residual mappers exactly identity.
-            torch.nn.init.zeros_(self.up)
+            # Residual branches start as exact identity. Direct-output branches
+            # need a live signal (especially when followed by a zero gate).
+            if self.residual:
+                torch.nn.init.zeros_(self.up)
+            else:
+                for weight in self.up:
+                    torch.nn.init.xavier_normal_(weight)
             torch.nn.init.zeros_(self.up_bias)
 
     def forward(self, features: torch.Tensor) -> torch.Tensor:

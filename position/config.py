@@ -8,8 +8,19 @@ from typing import Any, Literal
 POSITION_SCHEMA_VERSION = 2
 
 Application = Literal["additive", "rotary", "logit_bias"]
-Geometry = Literal["free", "phase", "scalar_curve"]
-InputKind = Literal["frozen_fourier"]
+Geometry = Literal[
+    "free",
+    "amplitude_phase",
+    "phase",
+    "projected_phase",
+    "scaled_phase",
+    "scalar_curve",
+]
+InputKind = Literal[
+    "frozen_fourier",
+    "learned_temperature_fourier",
+    "learned_frequency_fourier",
+]
 MapperKind = Literal[
     "identity",
     "euclidean_affine",
@@ -53,12 +64,30 @@ V2_COMMON_KEYS = {
     "geometry",
     "input",
     "mapper",
+    "output",
+    "conditioning",
     "head_coupling",
 }
 V2_QK_KEYS = V2_COMMON_KEYS | {"qk_coupling"}
 V2_LOGIT_KEYS = V2_COMMON_KEYS
 V2_INPUT_KEYS = {"kind", "basis_dim", "theta", "scalars"}
 V2_MAPPER_KEYS = {"kind", "residual", "rank", "hidden_dim"}
+V2_OUTPUT_KEYS = {
+    "amplitude_init",
+    "amplitude_parameterization",
+    "phase_scale",
+    "scale_init",
+    "scale_parameterization",
+}
+V2_CONDITIONING_KEYS = {
+    "kind",
+    "hidden_dim",
+    "gate_init",
+    "num_profiles",
+    "router_hidden_dim",
+    "profile_init_std",
+    "num_frequencies",
+}
 
 # Legacy v1 names that must not appear on a v2 channel (except enabled).
 V1_ONLY_KEYS = {"feature_map", "sharing", "apply", "rank", "mlp_hidden"}
@@ -68,6 +97,8 @@ V2_ONLY_KEYS = {
     "geometry",
     "input",
     "mapper",
+    "output",
+    "conditioning",
     "qk_coupling",
     "head_coupling",
 }
@@ -98,6 +129,22 @@ POSITION_PRESETS = {
     },
     "mlp_rope": {
         "logit_bias": {"enabled": True, "feature_map": "mlp"},
+    },
+    "inkling_table": {
+        "logit_bias": {
+            "enabled": True,
+            "application": "logit_bias",
+            "geometry": "scalar_curve",
+            "conditioning": {"kind": "inkling_table"},
+        },
+    },
+    "inkling_cosnet": {
+        "logit_bias": {
+            "enabled": True,
+            "application": "logit_bias",
+            "geometry": "scalar_curve",
+            "conditioning": {"kind": "inkling_cosnet"},
+        },
     },
 }
 
@@ -136,6 +183,22 @@ V2_CHANNEL_DEFAULTS = {
             "rank": 32,
             "hidden_dim": 128,
         },
+        "output": {
+            "amplitude_init": 0.1,
+            "amplitude_parameterization": "signed",
+            "phase_scale": 1.0,
+            "scale_init": 1.0,
+            "scale_parameterization": "exp",
+        },
+        "conditioning": {
+            "kind": "none",
+            "hidden_dim": 64,
+            "gate_init": 0.0,
+            "num_profiles": 8,
+            "router_hidden_dim": 64,
+            "profile_init_std": 0.02,
+            "num_frequencies": 16,
+        },
         "qk_coupling": "shared",
         "head_coupling": "per_head_independent",
     },
@@ -155,8 +218,63 @@ V2_CHANNEL_DEFAULTS = {
             "rank": 32,
             "hidden_dim": 128,
         },
+        "output": {
+            "amplitude_init": 0.1,
+            "amplitude_parameterization": "signed",
+            "phase_scale": 1.0,
+            "scale_init": 1.0,
+            "scale_parameterization": "exp",
+        },
+        "conditioning": {
+            "kind": "none",
+            "hidden_dim": 64,
+            "gate_init": 0.0,
+            "num_profiles": 8,
+            "router_hidden_dim": 64,
+            "profile_init_std": 0.02,
+            "num_frequencies": 16,
+        },
         "head_coupling": "per_head_independent",
     },
+}
+
+RESIDUAL_STREAM_DEFAULTS = {
+    "enabled": False,
+    "placement": "input",
+    "source": "position_basis",
+    "input": {
+        "kind": "frozen_fourier",
+        "basis_dim": None,
+        "theta": None,
+        "scalars": [],
+    },
+    "mapper": {
+        "kind": "identity",
+        "residual": False,
+        "rank": 32,
+        "hidden_dim": 128,
+    },
+    "gate_init": 0.0,
+    "layer_shared": False,
+}
+
+ATTENTION_WRITE_DEFAULTS = {
+    "enabled": False,
+    "mode": "key_position",
+    "input": {
+        "kind": "frozen_fourier",
+        "basis_dim": None,
+        "theta": None,
+        "scalars": [],
+    },
+    "mapper": {
+        "kind": "identity",
+        "residual": False,
+        "rank": 32,
+        "hidden_dim": 128,
+    },
+    "head_coupling": "per_head_independent",
+    "gate_init": 0.0,
 }
 
 _FEATURE_MAP_TO_MAPPER = {
@@ -400,12 +518,18 @@ def normalize_position_config_v2(
     application = normalized["application"]
     geometry = normalized["geometry"]
     if channel_name == "qk":
-        allowed_pairs = {("additive", "free"), ("rotary", "phase")}
+        allowed_pairs = {
+            ("additive", "free"),
+            ("additive", "amplitude_phase"),
+            ("rotary", "phase"),
+            ("rotary", "projected_phase"),
+            ("rotary", "scaled_phase"),
+        }
         if (application, geometry) not in allowed_pairs:
             raise ValueError(
                 f"Unsupported qk application/geometry pair "
                 f"application={application!r}, geometry={geometry!r}. "
-                "This refactor ships only (additive, free) and (rotary, phase)."
+                f"Allowed pairs are {sorted(allowed_pairs)}."
             )
     else:
         if application != "logit_bias" or geometry != "scalar_curve":
@@ -441,17 +565,32 @@ def normalize_position_config_v2(
         raise ValueError(
             f"Unknown {channel_name}.input keys: {sorted(unknown_input)}"
         )
-    if input_cfg.get("kind", "frozen_fourier") != "frozen_fourier":
+    input_kind = input_cfg.get("kind", "frozen_fourier")
+    allowed_input_kinds = {
+        "frozen_fourier",
+        "learned_temperature_fourier",
+        "learned_frequency_fourier",
+    }
+    if input_kind not in allowed_input_kinds:
         raise ValueError(
-            f"{channel_name}.input.kind={input_cfg.get('kind')!r} is unsupported; "
-            "this refactor ships only kind='frozen_fourier'."
+            f"{channel_name}.input.kind={input_kind!r} is unsupported; "
+            f"expected one of {sorted(allowed_input_kinds)}."
         )
     scalars = input_cfg.get("scalars", [])
-    if scalars not in ([], None):
+    if scalars is None:
+        scalars = []
+    if not isinstance(scalars, list):
+        raise TypeError(f"{channel_name}.input.scalars must be a list")
+    allowed_scalars = {"position", "normalized_position", "log_position"}
+    unknown_scalars = set(scalars) - allowed_scalars
+    if unknown_scalars:
         raise ValueError(
-            f"{channel_name}.input.scalars must be empty in this refactor; "
-            f"got {scalars!r}"
+            f"{channel_name}.input.scalars contains unsupported values "
+            f"{sorted(unknown_scalars)}; expected a subset of "
+            f"{sorted(allowed_scalars)}."
         )
+    if len(set(scalars)) != len(scalars):
+        raise ValueError(f"{channel_name}.input.scalars must not contain duplicates")
     theta = input_cfg.get("theta", None)
     if theta is not None:
         theta = float(theta)
@@ -459,10 +598,10 @@ def normalize_position_config_v2(
             raise ValueError(f"{channel_name}.input.theta must be positive or null")
     # null inherits the model rope theta at construction time; store null.
     input_cfg = {
-        "kind": "frozen_fourier",
+        "kind": input_kind,
         "basis_dim": input_cfg.get("basis_dim", None),
         "theta": theta,
-        "scalars": [],
+        "scalars": scalars,
     }
 
     mapper = _require_dict(f"{channel_name}.mapper", normalized["mapper"])
@@ -507,25 +646,22 @@ def normalize_position_config_v2(
             f"{channel_name}.input.basis_dim must be a positive even integer, "
             f"got {basis_dim}"
         )
-    expected = resolve_basis_dim(
+    default_output_dim = resolve_basis_dim(
         head_coupling,
         model_dim=model_dim,
         heads=heads,
         head_dim=head_dim,
     )
-    if basis_dim != expected:
-        raise ValueError(
-            f"{channel_name}.input.basis_dim={basis_dim} is incompatible with "
-            f"head_coupling={head_coupling!r}; expected {expected} in this refactor."
-        )
     input_cfg["basis_dim"] = basis_dim
 
     # identity / residual mappers require matching input/output widths.
-    mapper_output_dim = head_dim if head_coupling != "per_head_joint" else model_dim
-    mapper_input_dim = basis_dim
-    if mapper_kind == "identity" and mapper_input_dim != mapper_output_dim:
+    mapper_output_dim = default_output_dim
+    mapper_input_dim = basis_dim + len(scalars)
+    if mapper_kind in {"identity", "euclidean_affine"} and (
+        mapper_input_dim != mapper_output_dim
+    ):
         raise ValueError(
-            f"{channel_name}: identity mapper requires matching input/output "
+            f"{channel_name}: {mapper_kind} mapper requires matching input/output "
             f"dimensions ({mapper_input_dim} vs {mapper_output_dim})."
         )
     if residual and mapper_input_dim != mapper_output_dim:
@@ -536,6 +672,81 @@ def normalize_position_config_v2(
     if mapper_kind in {"identity", "euclidean_affine"} and residual:
         raise ValueError(
             f"{channel_name}: mapper.kind={mapper_kind!r} does not support residual=true."
+        )
+
+    output_cfg = _require_dict(f"{channel_name}.output", normalized["output"])
+    unknown_output = set(output_cfg) - V2_OUTPUT_KEYS
+    if unknown_output:
+        raise ValueError(
+            f"Unknown {channel_name}.output keys: {sorted(unknown_output)}"
+        )
+    amplitude_init = float(output_cfg.get("amplitude_init", 0.1))
+    if amplitude_init < 0:
+        raise ValueError(f"{channel_name}.output.amplitude_init must be non-negative")
+    amplitude_parameterization = output_cfg.get(
+        "amplitude_parameterization", "signed"
+    )
+    if amplitude_parameterization not in {"signed", "softplus"}:
+        raise ValueError(
+            f"{channel_name}.output.amplitude_parameterization must be "
+            "'signed' or 'softplus'"
+        )
+    phase_scale = float(output_cfg.get("phase_scale", 1.0))
+    if phase_scale <= 0:
+        raise ValueError(f"{channel_name}.output.phase_scale must be positive")
+    scale_init = float(output_cfg.get("scale_init", 1.0))
+    if scale_init <= 0:
+        raise ValueError(f"{channel_name}.output.scale_init must be positive")
+    scale_parameterization = output_cfg.get("scale_parameterization", "exp")
+    if scale_parameterization not in {"exp", "linear"}:
+        raise ValueError(
+            f"{channel_name}.output.scale_parameterization must be 'exp' or 'linear'"
+        )
+
+    conditioning_cfg = _require_dict(
+        f"{channel_name}.conditioning", normalized["conditioning"]
+    )
+    unknown_conditioning = set(conditioning_cfg) - V2_CONDITIONING_KEYS
+    if unknown_conditioning:
+        raise ValueError(
+            f"Unknown {channel_name}.conditioning keys: "
+            f"{sorted(unknown_conditioning)}"
+        )
+    conditioning_kind = conditioning_cfg.get("kind", "none")
+    allowed_conditioning = (
+        {"none", "local_residual", "content_gate"}
+        if channel_name == "qk"
+        else {"none", "inkling_table", "inkling_cosnet"}
+    )
+    if conditioning_kind not in allowed_conditioning:
+        raise ValueError(
+            f"{channel_name}.conditioning.kind={conditioning_kind!r} is "
+            f"unsupported; expected one of {sorted(allowed_conditioning)}."
+        )
+    conditioning = {
+        "kind": conditioning_kind,
+        "hidden_dim": int(conditioning_cfg.get("hidden_dim", 64)),
+        "gate_init": float(conditioning_cfg.get("gate_init", 0.0)),
+        "num_profiles": int(conditioning_cfg.get("num_profiles", 8)),
+        "router_hidden_dim": int(
+            conditioning_cfg.get("router_hidden_dim", 64)
+        ),
+        "profile_init_std": float(
+            conditioning_cfg.get("profile_init_std", 0.02)
+        ),
+        "num_frequencies": int(conditioning_cfg.get("num_frequencies", 16)),
+    }
+    for key in (
+        "hidden_dim",
+        "num_profiles",
+        "router_hidden_dim",
+        "num_frequencies",
+    ):
+        if conditioning[key] <= 0:
+            raise ValueError(f"{channel_name}.conditioning.{key} must be positive")
+    if conditioning["profile_init_std"] <= 0:
+        raise ValueError(
+            f"{channel_name}.conditioning.profile_init_std must be positive"
         )
 
     result = {
@@ -549,6 +760,14 @@ def normalize_position_config_v2(
             "rank": rank,
             "hidden_dim": hidden_dim,
         },
+        "output": {
+            "amplitude_init": amplitude_init,
+            "amplitude_parameterization": amplitude_parameterization,
+            "phase_scale": phase_scale,
+            "scale_init": scale_init,
+            "scale_parameterization": scale_parameterization,
+        },
+        "conditioning": conditioning,
         "head_coupling": head_coupling,
     }
     if channel_name == "qk":
@@ -583,9 +802,27 @@ def resolve_channel_config(
         )
         return upgraded, 1
 
-    # If only preset is present, treat as v1.
-    probe = override if override else preset_fragment
-    schema = detect_channel_schema(channel_name, probe)
+    preset_schema = (
+        detect_channel_schema(channel_name, preset_fragment)
+        if preset_fragment
+        else None
+    )
+    override_schema = (
+        detect_channel_schema(channel_name, override)
+        if override
+        else None
+    )
+    # Empty/enabled-only overrides are structurally ambiguous. Inherit the
+    # preset schema so {"enabled": false} can disable a native-v2 preset.
+    override_has_axes = bool(set(override) - {"enabled"})
+    if preset_schema == 2 and not override_has_axes:
+        schema = 2
+    elif override_schema is not None:
+        schema = override_schema
+    elif preset_schema is not None:
+        schema = preset_schema
+    else:
+        schema = 1
 
     if schema == 1:
         raw = deep_merge(V1_CHANNEL_DEFAULTS[channel_name], preset_fragment)
@@ -604,7 +841,6 @@ def resolve_channel_config(
     # v2 override path: upgrade any v1 preset fragment first, then merge.
     base = copy.deepcopy(V2_CHANNEL_DEFAULTS[channel_name])
     if preset_fragment:
-        preset_schema = detect_channel_schema(channel_name, preset_fragment)
         if preset_schema == 1:
             preset_v2 = upgrade_legacy_position_config(
                 channel_name,
@@ -685,9 +921,17 @@ def v2_position_run_tag(
         if not channel["enabled"]:
             continue
         parts = [channel_name, channel["application"], channel["geometry"]]
+        input_cfg = channel["input"]
+        if input_cfg["kind"] != "frozen_fourier":
+            parts.append(input_cfg["kind"].replace("_fourier", ""))
+        if input_cfg["scalars"]:
+            parts.append("scalars-" + "_".join(input_cfg["scalars"]))
         parts.append(channel["mapper"]["kind"])
         if channel_name == "qk":
             parts.append(channel["qk_coupling"])
+        conditioning = channel["conditioning"]["kind"]
+        if conditioning != "none":
+            parts.append(conditioning)
         parts.append(channel["head_coupling"])
         mapper = channel["mapper"]
         if mapper["kind"] in {"low_rank", "bottleneck_mlp"}:
@@ -742,3 +986,111 @@ def ensure_channel_v2(
         heads=heads,
         rope_theta=rope_theta,
     )
+
+
+def normalize_residual_stream_config(
+    raw_config: dict | None,
+    *,
+    model_dim: int,
+    heads: int,
+    rope_theta: float,
+) -> dict:
+    """Normalize residual-stream absolute-position injection settings."""
+    raw = _require_dict("residual_stream", dict(raw_config or {}))
+    allowed = set(RESIDUAL_STREAM_DEFAULTS)
+    unknown = set(raw) - allowed
+    if unknown:
+        raise ValueError(f"Unknown residual_stream keys: {sorted(unknown)}")
+    normalized = deep_merge(RESIDUAL_STREAM_DEFAULTS, raw)
+    if not isinstance(normalized["enabled"], bool):
+        raise TypeError("residual_stream.enabled must be a boolean")
+    placement = normalized["placement"]
+    if placement not in {"input", "per_layer", "both"}:
+        raise ValueError(
+            "residual_stream.placement must be 'input', 'per_layer', or 'both'"
+        )
+    source = normalized["source"]
+    if source not in {"position_basis", "learned_absolute"}:
+        raise ValueError(
+            "residual_stream.source must be 'position_basis' or 'learned_absolute'"
+        )
+    if not isinstance(normalized["layer_shared"], bool):
+        raise TypeError("residual_stream.layer_shared must be a boolean")
+
+    # Reuse the strict basis/mapper normalization with a joint model-dim output.
+    probe = normalize_position_config_v2(
+        "qk",
+        {
+            "enabled": True,
+            "application": "additive",
+            "geometry": "free",
+            "input": normalized["input"],
+            "mapper": normalized["mapper"],
+            "qk_coupling": "shared",
+            "head_coupling": "per_head_joint",
+        },
+        model_dim=model_dim,
+        heads=heads,
+        rope_theta=rope_theta,
+    )
+    return {
+        "enabled": normalized["enabled"],
+        "placement": placement,
+        "source": source,
+        "input": probe["input"],
+        "mapper": probe["mapper"],
+        "gate_init": float(normalized["gate_init"]),
+        "layer_shared": normalized["layer_shared"],
+    }
+
+
+def normalize_attention_write_config(
+    raw_config: dict | None,
+    *,
+    model_dim: int,
+    heads: int,
+    rope_theta: float,
+) -> dict:
+    """Normalize attended key-position / relative-offset write settings."""
+    raw = _require_dict("attention_write", dict(raw_config or {}))
+    allowed = set(ATTENTION_WRITE_DEFAULTS)
+    unknown = set(raw) - allowed
+    if unknown:
+        raise ValueError(f"Unknown attention_write keys: {sorted(unknown)}")
+    normalized = deep_merge(ATTENTION_WRITE_DEFAULTS, raw)
+    if not isinstance(normalized["enabled"], bool):
+        raise TypeError("attention_write.enabled must be a boolean")
+    mode = normalized["mode"]
+    if mode not in {"key_position", "relative_offset"}:
+        raise ValueError(
+            "attention_write.mode must be 'key_position' or 'relative_offset'"
+        )
+    head_coupling = normalized["head_coupling"]
+    probe = normalize_position_config_v2(
+        "qk",
+        {
+            "enabled": True,
+            "application": "additive",
+            "geometry": "free",
+            "input": normalized["input"],
+            "mapper": normalized["mapper"],
+            "qk_coupling": "shared",
+            "head_coupling": head_coupling,
+        },
+        model_dim=model_dim,
+        heads=heads,
+        rope_theta=rope_theta,
+    )
+    if mode == "relative_offset" and probe["input"]["scalars"]:
+        raise ValueError(
+            "attention_write relative_offset mode requires pure paired Fourier "
+            "features; scalar inputs cannot be translated by the Fourier identity."
+        )
+    return {
+        "enabled": normalized["enabled"],
+        "mode": mode,
+        "input": probe["input"],
+        "mapper": probe["mapper"],
+        "head_coupling": head_coupling,
+        "gate_init": float(normalized["gate_init"]),
+    }

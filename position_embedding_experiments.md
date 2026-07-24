@@ -2,7 +2,7 @@
 
 ## Background
 
-This project studies two related but distinct ways to extend positional
+This project studies four related but distinct ways to extend positional
 information in attention:
 
 1. **Q/K position transforms** modify the query and key vectors before their dot
@@ -11,6 +11,10 @@ information in attention:
 2. **Logit biases** add a scalar function of relative distance after the Q/K dot
    product. This includes the completed position-only sweep and future
    Inkling-style content-conditioned profiles.
+3. **Residual-stream position** injects fixed, functional, or learned absolute
+   position at input or per layer.
+4. **Attention-output writes** summarize attended key positions or relative
+   offsets into the residual stream.
 
 These channels should not be forced through one interface. They can be enabled
 independently or together, and each channel has its own feature-map and sharing
@@ -117,9 +121,13 @@ Let the sinusoidal basis at a position or distance be `x ∈ R^D`.
 Biases are enabled in affine layers and initialized to zero. Residual output
 layers are zero-initialized so low-rank and MLP feature maps begin as identity.
 Logit-channel readouts and Q/K phase readouts are zero-initialized so those
-channels have zero effect at step 0. True AddRoPE (`qk.apply=add`) has **no**
-zero readout: the feature map *is* the addend, so identity/residual maps start
-as sinusoids.
+channels have zero effect at step 0. Legacy additive Fourier Q/K
+(`qk.apply=add`) has **no** zero readout: the feature map *is* the addend, so
+identity/residual maps start as sinusoids.
+
+In historical v1 terminology, `qk.apply=add` is now called **additive Fourier
+Q/K**. Canonical amplitude+phase AddRoPE is the v2
+`application=additive, geometry=amplitude_phase` path.
 
 This taxonomy keeps output shape fixed while varying the feature map. In
 particular, low-rank and bottleneck MLP are separate ablations.
@@ -129,10 +137,9 @@ particular, low-rank and bottleneck MLP are separate ablations.
 The Q/K channel consumes absolute-position sinusoidal features and emits a
 vector-valued transform.
 
-### Additive Q/K (true AddRoPE)
+### Historical additive Fourier Q/K (Phase 1c)
 
-`qk.apply="add"` **replaces** multiplicative RoPE, following
-[Additive Rotary Embedding](https://jonathanc.net/blog/additive-rotary-embedding):
+Legacy `qk.apply="add"` **replaces** multiplicative RoPE:
 
 ```text
 q'(p) = q(p) + e(p)
@@ -217,7 +224,7 @@ Takeaways: factorized linear nearly matches full linear on the logit channel;
 bottleneck nonlinearity adds nothing; Q/K phase residuals underperform scalar
 logit bias, and MLP phase does not beat RoPE.
 
-## Direction 1c: true AddRoPE (replace multiplicative RoPE)
+## Direction 1c: additive Fourier Q/K (replace multiplicative RoPE)
 
 Phase 1c tests the AddRoPE family as a **replacement** for RoPE, not a residual
 under it:
@@ -280,11 +287,22 @@ At every validation point, log:
 Profiles should answer whether the winning linear map learns smooth,
 head-specialized structure while nonlinear maps learn noisy or redundant curves.
 
-## Deferred work
+## Playground implementation status
 
-- Inkling table and CosNet implementation.
-- Parameter-matched wider-FFN controls.
-- The content-conditioned `x + MLP(concat(x, rope))` Q/K residual.
-- Replacing RoPE entirely via multiplicative alternatives other than AddRoPE;
-  Phase 1c covers the AddRoPE replacement family.
-- Full Cartesian sweeps across channel, feature map, and sharing.
+The repository now exposes the full design behind strict schema-v2 knobs:
+
+- canonical amplitude+phase AddRoPE with deliberate amplitude initialization;
+- learned-temperature and learned-frequency Fourier inputs plus scalar features;
+- phase, projected-phase, and scaled-rotary output geometry;
+- shared, separate-readout, and separate Q/K pipelines;
+- local residual and content-gated Q/K conditioning;
+- fixed/functional/learned-absolute residual-stream injection;
+- attended key-position and relative-offset output writes;
+- query-routed Inkling table and CosNet logit banks;
+- parameter-matched GeGLU-width recommendations;
+- arbitrary combinations of the above.
+
+See `POSITION_CONFIG.md` for exact semantics and initialization. The remaining
+work is empirical selection and simplification, not missing implementation.
+Avoid a full Cartesian sweep: build sector-local controls first, then combine
+only mechanisms that win clean ablations.

@@ -6,10 +6,24 @@ results when the interpretation or code changes.
 
 ## Current status
 
-As of 2026-07-21:
+As of 2026-07-22:
 
 - Phase-1, 1b, and 1c are complete at 10k steps.
+- Position foundation refactor (v2 schema + Q/K coupling) is landed.
 - Best overall remains Phase-1 **linear logit bias** (4.076 / 58.9).
+- **Phase-2 coupling ablation launched**: additive-linear and phase-mlp ×
+  `{shared, sep_readout, separate}` (6 jobs), h768/d8, 10k steps.
+  Fresh post-refactor RoPE baseline also queued into
+  `model-output/position_bias_phase2_coupling/rope-h768d8` (Phase-1 baseline
+  at `position_bias_phase1/rope-h768d8` remains intact: 4.129 / 62.1).
+- **Phase-2 follow-up launched**: combined
+  `add-linear sep_readout + linear logit`, plus sep_readout wideners
+  (`mlp`, `low_rank`).
+- **Phase-2 follow-up complete.** Combined is a new best: **4.063 / 58.2**.
+  Sep_readout helps additive mappers generally, but linear remains strongest.
+
+As of 2026-07-21 (historical snapshot before the refactor):
+
 - Phase-1c tested fixed and mapped **additive Fourier Q/K embeddings**, not a
   faithful reproduction of canonical AddRoPE. Mapped variants (`linear`/`mlp`)
   slightly beat RoPE, while the fixed unit-amplitude addend performed poorly.
@@ -697,3 +711,235 @@ sweeps or rewriting completed Phase 1/1b/1c artifacts.
 - Shared-coupling model weights migrate via key adapter.
 - Optimizer-state resume across the v1→v2 parameter rename is **not** guaranteed.
 
+---
+
+## 2026-07-23 — Phase 2 coupling + follow-up results
+
+Same recipe (h768/d8, bs8, 10k, seq 1024). Fresh post-refactor RoPE matched the
+Phase-1 baseline.
+
+### Coupling ablation (additive-linear and phase-mlp)
+
+| Variant | Eval loss | PPL |
+| --- | ---: | ---: |
+| RoPE (fresh) | 4.129 | 62.1 |
+| add-linear **sep_readout** | **4.082** | **59.3** |
+| add-linear separate | 4.104 | 60.6 |
+| add-linear shared | 4.117 | 61.4 |
+| phase-mlp shared / sep / separate | ~4.13–4.14 | ~62.2–62.5 |
+
+Interpretation: for additive free geometry, separate Q/K readouts from a shared
+trunk help a lot. Fully separate trunks help less than sep_readout. Rotary phase
+MLP is insensitive to coupling and stays ~RoPE.
+
+### Follow-up: combine + widen sep_readout
+
+| Variant | Eval loss | PPL |
+| --- | ---: | ---: |
+| **add-linear sep_readout + linear logit** | **4.063** | **58.2** |
+| linear logit only (Phase 1) | 4.076 | 58.9 |
+| add-linear sep_readout only | 4.082 | 59.3 |
+| add-low_rank sep_readout | 4.094 | 60.0 |
+| add-mlp sep_readout | 4.098 | 60.2 |
+
+Interpretation:
+
+- Q/K additive PE and relative logit bias **stack** (new best overall).
+- Sep_readout generalizes across additive mappers, but **linear** remains the
+  best mapper under that coupling.
+- Gains vs RoPE: combined −0.066 loss / −3.9 PPL.
+
+---
+
+## 2026-07-23 — Fully configurable position playground
+
+Expanded the v2 foundation into the complete research playground after the
+Phase-2 result established that additive Q/K and relative logits are
+complementary.
+
+### Implemented axes
+
+- Position input: frozen Fourier, learned global temperature, independent
+  learned frequencies, reduced basis width, and optional scalar features.
+- Additive geometry: historical free Fourier addends plus canonical
+  amplitude+phase AddRoPE with explicit low-amplitude initialization.
+- Rotary geometry: phase residual, tangent-projected phase, and scaled rotary.
+- Content-aware Q/K: zero-init local residual and content-gated positional
+  outputs, preserving token-local/KV-cache-safe semantics.
+- Residual stream: fixed/functional Fourier or learned absolute position at
+  input, per layer, or both, with shared/layer-specific gates.
+- Attention output: attended key-position and Fourier-derived relative-offset
+  summaries, zero-gated into the residual stream.
+- Relative logits: static curves, query-routed bounded Inkling tables, and
+  query-routed bounded CosNet profile banks.
+- Controls: explicit `ff_hidden_dim` and a dry-run parameter-matched GeGLU
+  recommendation.
+
+### Initialization contracts
+
+- Learned Fourier inputs exactly match frozen Fourier at step 0.
+- Projected phase and phase residual start as exact RoPE.
+- Scaled rotary starts with phase 0 and scale 1.
+- Local Q/K residuals and content gates preserve their positional base.
+- Residual-stream and attention-output writes default to zero gates.
+- Inkling profile banks use small symmetry-breaking profiles behind a zero
+  gate, preserving baseline logits while allowing the gate to learn.
+
+### Verification
+
+- Existing foundation tests plus `test_position_playground.py`.
+- Recursive loading of all historical and Phase-2 JSON configs.
+- Claimed-GPU eager and compiled forward/backward coverage for every new
+  family and representative combinations.
+
+No new 10k training sweep was launched by this implementation.
+
+---
+
+## 2026-07-23 — Phase 3 canonical-geometry screen launched
+
+Launched an isolated eight-run, 3k-step screening bundle under
+`sweep_configs/phase3_geometry/` and
+`model-output/position_bias_phase3_geometry/`. Validation runs every 500 steps;
+WandB group is `phase3-geometry-screen`.
+
+The comparison bundle contains:
+
+- fresh RoPE;
+- additive-linear shared-trunk/separate-readout;
+- that additive control plus linear relative-logit bias;
+- canonical amplitude+phase AddRoPE initialized at amplitudes
+  `0.01`, `0.03`, `0.1`, and `0.3`;
+- canonical amplitude `0.1` plus linear relative-logit bias.
+
+Canonical and free additive Q/K controls are exactly parameter matched at
+1,787,904 position parameters. Their logit combinations are also matched at
+2,390,080. All eight configs passed CPU dry runs and entered training through
+the shared lifetime-locking `gpu-claim` queue; no historical config or output
+directory was reused.
+
+### 3k screening result
+
+All eight runs completed cleanly. Final eval loss ranked:
+
+- canonical amplitude `0.1` + linear logit bias: `4.74317`;
+- additive-linear + linear logit bias: `4.75412`;
+- canonical amplitude `0.3`: `4.76764`;
+- canonical amplitudes `0.1`, `0.03`, `0.01`: `4.79254`, `4.79935`,
+  `4.80390`;
+- additive-linear: `4.81469`;
+- RoPE: `4.81696`.
+
+Within the tested canonical range, larger initialization amplitude improved the
+3k result monotonically. The strongest run was canonical amplitude `0.1` plus
+linear logit bias (perplexity `114.80`), ahead of the parameter-matched
+additive-linear/logit control (perplexity `116.06`). This is a screening result
+from one seed; promotion should test the leading logit pair and extend the
+canonical amplitude range before committing to longer multi-seed finalists.
+
+---
+
+## 2026-07-23 — Phase 3 canonical-amplitude follow-up launched
+
+Launched a second isolated eight-run, 3k-step screen under
+`sweep_configs/phase3_amplitude_followup/` and
+`model-output/position_bias_phase3_amplitude_followup/`. Validation runs every
+500 steps; WandB group is `phase3-amplitude-followup`.
+
+The bundle extends the Q/K-only canonical amplitude range with `0.5`, `0.7`,
+`1.0`, and `2.0`. It also brackets and extends the previous amplitude-`0.1`
+winner with linear relative-logit bias at amplitudes `0.03`, `0.3`, `1.0`, and
+`2.0`.
+
+All eight configs passed CPU dry runs. Q/K-only runs have 1,787,904 position
+parameters and logit combinations have 2,390,080, matching the corresponding
+first-screen controls. The runs acquired all eight GPUs through the shared
+lifetime-locking `gpu-claim` queue and each completed its first 500-step
+validation without a startup error.
+
+### 3k follow-up result
+
+The initial launcher was interrupted after the four Q/K-only runs completed.
+The four slower logit runs were requeued through a one-shot supervisor service
+and then completed cleanly.
+
+Final eval loss ranked:
+
+- canonical amplitude `1.0` + linear logit bias: `4.7306`;
+- canonical amplitude `0.3` + linear logit bias: `4.7353`;
+- canonical amplitude `0.03` + linear logit bias: `4.7417`;
+- canonical amplitude `1.0`: `4.7488`;
+- canonical amplitudes `0.7`, `0.5`: `4.7504`, `4.7511`;
+- canonical amplitude `2.0` + linear logit bias: `4.7549`;
+- canonical amplitude `2.0`: `4.7723`.
+
+Together with the first screen, both curves improve through roughly amplitude
+`1.0` and regress at `2.0`. The new best 3k result is amplitude `1.0` plus
+linear logit bias (perplexity `113.37`), improving on the prior amplitude-`0.1`
+winner (`4.74317`) and the parameter-matched free-additive/logit control
+(`4.75412`). The next promotion target is therefore canonical amplitude `1.0`
+plus linear logit bias, with amplitude `0.3` as the nearest canonical/logit
+control.
+
+---
+
+## 2026-07-23 — Phase 3 two-seed 10k promotion launched
+
+Launched an isolated eight-run promotion bundle under
+`sweep_configs/phase3_promotion/` and
+`model-output/position_bias_phase3_promotion/`. The four-way comparison is run
+at seeds `123` and `456`:
+
+- RoPE;
+- free additive-linear Q/K plus linear relative-logit bias;
+- canonical amplitude `0.3` plus linear relative-logit bias;
+- canonical amplitude `1.0` plus linear relative-logit bias.
+
+All runs use FlexAttention to control the attention implementation across the
+comparison. The three learned-position candidates are exactly matched at
+2,390,080 position parameters; RoPE remains the zero-extra-parameter baseline.
+All eight configs passed CPU dry runs, acquired GPUs through the shared
+lifetime-locking `gpu-claim` queue, and completed their first 1,000-step
+validation without a startup error. The suite runs under one-shot supervisor
+management and cannot autostart after a supervisor restart. WandB group is
+`phase3-promotion-10k`.
+
+### 10k promotion result
+
+All eight runs completed cleanly. Final eval loss by seed:
+
+- RoPE: `4.1284` (seed `123`), `4.1549` (seed `456`);
+- free additive + linear logit: `4.0615`, `4.0647`;
+- canonical amplitude `0.3` + linear logit: `4.0525`, `4.0491`;
+- canonical amplitude `1.0` + linear logit: `4.0515`, `4.0534`.
+
+Two-seed mean eval loss is `4.1417` for RoPE, `4.0631` for free additive,
+`4.0508` for canonical amplitude `0.3`, and `4.0525` for canonical amplitude
+`1.0`. Canonical geometry therefore beats the parameter-matched free-additive
+control on both seeds by roughly `0.01` loss and beats RoPE by roughly `0.09`.
+The amplitude ordering flips across seeds and the two canonical means differ by
+only `0.0017`; the durable result is the canonical geometry advantage, not a
+resolved preference between amplitudes `0.3` and `1.0`.
+
+---
+
+## 2026-07-23 — Phase 3 basis-adaptability screen launched
+
+Launched an isolated eight-run, two-seed, 5k-step screen under
+`sweep_configs/phase3_basis_screen/` and
+`model-output/position_bias_phase3_basis_screen/`. Canonical amplitude `0.3`,
+linear relative-logit bias, coupling, mapper, and FlexAttention are held fixed.
+At seeds `123` and `456`, the Q/K position input is:
+
+- frozen Fourier;
+- learned-temperature Fourier;
+- learned-frequency Fourier;
+- frozen Fourier plus normalized-position and log-position scalars.
+
+All configs passed CPU dry runs and completed their first 500-step validation
+after acquiring GPUs through `gpu-claim`. Position parameter counts are
+2,390,080 for frozen, 2,390,088 for learned temperature, 2,390,464 for learned
+frequency, and 2,402,368 for scalar augmentation. The small count differences
+are intrinsic to the tested basis parameters/features rather than mapper or
+geometry changes. The suite runs under non-autostarting one-shot supervisor
+management; WandB group is `phase3-basis-screen-5k`.
