@@ -70,11 +70,19 @@ V2_COMMON_KEYS = {
 }
 V2_QK_KEYS = V2_COMMON_KEYS | {"qk_coupling"}
 V2_LOGIT_KEYS = V2_COMMON_KEYS
-V2_INPUT_KEYS = {"kind", "basis_dim", "theta", "scalars"}
+V2_INPUT_KEYS = {
+    "kind",
+    "basis_dim",
+    "theta",
+    "scalars",
+    "normalization_extent",
+}
 V2_MAPPER_KEYS = {"kind", "residual", "rank", "hidden_dim"}
 V2_OUTPUT_KEYS = {
     "amplitude_init",
     "amplitude_parameterization",
+    "learn_amplitude",
+    "learn_phase",
     "phase_scale",
     "scale_init",
     "scale_parameterization",
@@ -83,6 +91,8 @@ V2_CONDITIONING_KEYS = {
     "kind",
     "hidden_dim",
     "gate_init",
+    "pair_rank",
+    "position_mode",
     "num_profiles",
     "router_hidden_dim",
     "profile_init_std",
@@ -176,6 +186,7 @@ V2_CHANNEL_DEFAULTS = {
             "basis_dim": None,
             "theta": None,
             "scalars": [],
+            "normalization_extent": None,
         },
         "mapper": {
             "kind": "identity",
@@ -186,6 +197,8 @@ V2_CHANNEL_DEFAULTS = {
         "output": {
             "amplitude_init": 0.1,
             "amplitude_parameterization": "signed",
+            "learn_amplitude": True,
+            "learn_phase": True,
             "phase_scale": 1.0,
             "scale_init": 1.0,
             "scale_parameterization": "exp",
@@ -194,6 +207,8 @@ V2_CHANNEL_DEFAULTS = {
             "kind": "none",
             "hidden_dim": 64,
             "gate_init": 0.0,
+            "pair_rank": 16,
+            "position_mode": "relative_only",
             "num_profiles": 8,
             "router_hidden_dim": 64,
             "profile_init_std": 0.02,
@@ -211,6 +226,7 @@ V2_CHANNEL_DEFAULTS = {
             "basis_dim": None,
             "theta": None,
             "scalars": [],
+            "normalization_extent": None,
         },
         "mapper": {
             "kind": "identity",
@@ -221,6 +237,8 @@ V2_CHANNEL_DEFAULTS = {
         "output": {
             "amplitude_init": 0.1,
             "amplitude_parameterization": "signed",
+            "learn_amplitude": True,
+            "learn_phase": True,
             "phase_scale": 1.0,
             "scale_init": 1.0,
             "scale_parameterization": "exp",
@@ -229,6 +247,8 @@ V2_CHANNEL_DEFAULTS = {
             "kind": "none",
             "hidden_dim": 64,
             "gate_init": 0.0,
+            "pair_rank": 16,
+            "position_mode": "relative_only",
             "num_profiles": 8,
             "router_hidden_dim": 64,
             "profile_init_std": 0.02,
@@ -602,7 +622,16 @@ def normalize_position_config_v2(
         "basis_dim": input_cfg.get("basis_dim", None),
         "theta": theta,
         "scalars": scalars,
+        "normalization_extent": input_cfg.get("normalization_extent"),
     }
+    if input_cfg["normalization_extent"] is not None:
+        input_cfg["normalization_extent"] = int(
+            input_cfg["normalization_extent"]
+        )
+        if input_cfg["normalization_extent"] <= 0:
+            raise ValueError(
+                f"{channel_name}.input.normalization_extent must be positive"
+            )
 
     mapper = _require_dict(f"{channel_name}.mapper", normalized["mapper"])
     unknown_mapper = set(mapper) - V2_MAPPER_KEYS
@@ -691,6 +720,24 @@ def normalize_position_config_v2(
             f"{channel_name}.output.amplitude_parameterization must be "
             "'signed' or 'softplus'"
         )
+    learn_amplitude = output_cfg.get("learn_amplitude", True)
+    learn_phase = output_cfg.get("learn_phase", True)
+    if not isinstance(learn_amplitude, bool):
+        raise TypeError(f"{channel_name}.output.learn_amplitude must be a boolean")
+    if not isinstance(learn_phase, bool):
+        raise TypeError(f"{channel_name}.output.learn_phase must be a boolean")
+    if (
+        (not learn_amplitude or not learn_phase)
+        and not (
+            channel_name == "qk"
+            and application == "additive"
+            and geometry == "amplitude_phase"
+        )
+    ):
+        raise ValueError(
+            f"{channel_name}.output learn_amplitude/learn_phase controls require "
+            "qk application='additive', geometry='amplitude_phase'"
+        )
     phase_scale = float(output_cfg.get("phase_scale", 1.0))
     if phase_scale <= 0:
         raise ValueError(f"{channel_name}.output.phase_scale must be positive")
@@ -716,7 +763,7 @@ def normalize_position_config_v2(
     allowed_conditioning = (
         {"none", "local_residual", "content_gate"}
         if channel_name == "qk"
-        else {"none", "inkling_table", "inkling_cosnet"}
+        else {"none", "inkling_table", "inkling_cosnet", "pairwise_low_rank"}
     )
     if conditioning_kind not in allowed_conditioning:
         raise ValueError(
@@ -727,6 +774,10 @@ def normalize_position_config_v2(
         "kind": conditioning_kind,
         "hidden_dim": int(conditioning_cfg.get("hidden_dim", 64)),
         "gate_init": float(conditioning_cfg.get("gate_init", 0.0)),
+        "pair_rank": int(conditioning_cfg.get("pair_rank", 16)),
+        "position_mode": conditioning_cfg.get(
+            "position_mode", "relative_only"
+        ),
         "num_profiles": int(conditioning_cfg.get("num_profiles", 8)),
         "router_hidden_dim": int(
             conditioning_cfg.get("router_hidden_dim", 64)
@@ -741,12 +792,31 @@ def normalize_position_config_v2(
         "num_profiles",
         "router_hidden_dim",
         "num_frequencies",
+        "pair_rank",
     ):
         if conditioning[key] <= 0:
             raise ValueError(f"{channel_name}.conditioning.{key} must be positive")
     if conditioning["profile_init_std"] <= 0:
         raise ValueError(
             f"{channel_name}.conditioning.profile_init_std must be positive"
+        )
+    if conditioning["position_mode"] not in {
+        "relative_only",
+        "query_absolute",
+        "full_absolute",
+    }:
+        raise ValueError(
+            f"{channel_name}.conditioning.position_mode must be "
+            "'relative_only', 'query_absolute', or 'full_absolute'"
+        )
+    if (
+        conditioning_kind != "none"
+        and geometry == "amplitude_phase"
+        and (not learn_amplitude or not learn_phase)
+    ):
+        raise ValueError(
+            f"{channel_name}: content conditioning requires both amplitude and "
+            "phase learning to be enabled"
         )
 
     result = {
@@ -763,6 +833,8 @@ def normalize_position_config_v2(
         "output": {
             "amplitude_init": amplitude_init,
             "amplitude_parameterization": amplitude_parameterization,
+            "learn_amplitude": learn_amplitude,
+            "learn_phase": learn_phase,
             "phase_scale": phase_scale,
             "scale_init": scale_init,
             "scale_parameterization": scale_parameterization,

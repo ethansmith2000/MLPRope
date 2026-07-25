@@ -128,6 +128,11 @@ class Attention(torch.nn.Module):
         self._prepared_query_length: int | None = None
         # Stable score_mod closure target — updated each flex forward, not redefined.
         self._flex_bias_curves: torch.Tensor | None = None
+        self._flex_pair_query: tuple[torch.Tensor, ...] | None = None
+        self._flex_pair_key: tuple[torch.Tensor, ...] | None = None
+        self._flex_pair_distance: tuple[torch.Tensor, ...] | None = None
+        self._flex_pair_gate: torch.Tensor | None = None
+        self._flex_pair_scale = 1.0
 
         if self.logit_bias_config.get("enabled", False) and attn_impl != "flex":
             raise ValueError(
@@ -149,25 +154,20 @@ class Attention(torch.nn.Module):
             extent=max_seq_len,
             rope_theta=rope_theta,
         )
-        # Additive Fourier Q/K replaces multiplicative RoPE. Rotary/phase and the
-        # logit-only / baseline paths keep it. use_rope=False is only valid
-        # together with qk.application="additive".
+        # Additive Fourier Q/K replaces multiplicative RoPE. Explicit
+        # use_rope=False also enables residual-only and no-explicit-PE controls.
         self.multiplicative_rope = bool(use_rope) and not (
             self.qk_position is not None
             and not self.qk_position.uses_multiplicative_rope
         )
-        if not self.multiplicative_rope and self.qk_position is None:
-            raise ValueError(
-                "Disable multiplicative RoPE only when qk.application='additive' "
-                "(additive Fourier Q/K) supplies position."
-            )
         if not use_rope and (
-            self.qk_position is None
-            or self.qk_position.application != "additive"
+            self.qk_position is not None
+            and self.qk_position.application != "additive"
         ):
             raise ValueError(
-                "use_rope=False requires an enabled additive Q/K channel "
-                "(qk.application='additive')."
+                "use_rope=False is incompatible with rotary Q/K position "
+                "channels; use an additive Q/K channel, residual-stream PE, "
+                "or no explicit position channel."
             )
         self.logit_bias = build_logit_bias_channel(
             self.logit_bias_config,
@@ -276,18 +276,77 @@ class Attention(torch.nn.Module):
             bias = bias_curves[head_idx, distance]
         else:
             bias = bias_curves[batch_idx, head_idx, query_idx, distance]
+        if self._flex_pair_query is not None:
+            pair_bias = (
+                self._flex_pair_query[0][batch_idx, head_idx, query_idx]
+                * self._flex_pair_key[0][
+                    batch_idx, head_idx, key_value_idx
+                ]
+                * self._flex_pair_distance[0][head_idx, distance]
+            )
+            # FlexAttention score modifiers are pointwise subgraphs. An
+            # explicit scalar reduction keeps this low-rank contraction
+            # fusable without materializing a [B,H,Q,K] bias tensor.
+            for rank_idx in range(1, len(self._flex_pair_query)):
+                pair_bias = pair_bias + (
+                    self._flex_pair_query[
+                        rank_idx
+                    ][
+                        batch_idx, head_idx, query_idx
+                    ]
+                    * self._flex_pair_key[
+                        rank_idx
+                    ][
+                        batch_idx, head_idx, key_value_idx
+                    ]
+                    * self._flex_pair_distance[
+                        rank_idx
+                    ][
+                        head_idx, distance
+                    ]
+                )
+            pair_bias = pair_bias * self._flex_pair_scale
+            bias = bias + self._flex_pair_gate[head_idx] * pair_bias
         return score + torch.where(in_range, bias, 0.0)
 
     @torch.compiler.disable
-    def _flex_attention(self, q, k, v, query_content):
+    def _flex_attention(self, q, k, v, query_content, key_content):
         block_mask = self._block_mask(q)
         if self.logit_bias is None:
             return _flex_attention_call(q, k, v, block_mask=block_mask)
 
-        self._flex_bias_curves = self.logit_bias(
+        self._flex_bias_curves, pairwise = self.logit_bias.prepare(
             dtype=q.dtype,
             query=query_content,
+            key=key_content,
         )
+        self._flex_pair_query = None
+        self._flex_pair_key = None
+        self._flex_pair_distance = None
+        self._flex_pair_gate = None
+        if pairwise is not None:
+            (
+                pair_query,
+                pair_key,
+                pair_distance,
+                self._flex_pair_gate,
+            ) = pairwise
+            # FlexAttention backward requires separately captured tensors when
+            # a score modifier performs multiple indexed reads. Component
+            # clones retain the factorized O(BHLr) storage contract.
+            self._flex_pair_query = tuple(
+                component.clone()
+                for component in pair_query.unbind(dim=-1)
+            )
+            self._flex_pair_key = tuple(
+                component.clone()
+                for component in pair_key.unbind(dim=-1)
+            )
+            self._flex_pair_distance = tuple(
+                component.clone()
+                for component in pair_distance.unbind(dim=-1)
+            )
+            self._flex_pair_scale = len(self._flex_pair_query) ** -0.5
         return _flex_attention_call(
             q,
             k,
@@ -354,7 +413,13 @@ class Attention(torch.nn.Module):
             )
             v = torch.cat((v, position_values), dim=-1)
         if self.attn_impl == "flex":
-            attn = self._flex_attention(q, k, v, q_content)
+            attn = self._flex_attention(
+                q,
+                k,
+                v,
+                q_content,
+                k_content,
+            )
         else:
             attn = F.scaled_dot_product_attention(
                 q,

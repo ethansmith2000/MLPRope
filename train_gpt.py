@@ -24,7 +24,7 @@ from accelerate import Accelerator
 from accelerate.logging import get_logger
 from accelerate.utils import DataLoaderConfiguration, set_seed
 from datasets import load_dataset
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 from transformers import AutoConfig, AutoTokenizer, default_data_collator, get_scheduler
 
@@ -119,6 +119,11 @@ DEFAULT_CONFIG = {
     "preprocessing_num_workers": min(8, os.cpu_count() or 1),
     "overwrite_cache": False,
     "block_size": 1024,
+    # ``block_size`` remains a compatibility alias for training_length.
+    "training_length": None,
+    "model_position_extent": None,
+    "evaluation_lengths": None,
+    "scalar_normalization_extent": None,
     "per_device_train_batch_size": 8,
     "gradient_accumulation_steps": 1,
     "num_train_epochs": 1,
@@ -159,6 +164,7 @@ DEFAULT_CONFIG = {
     "n_head": 8,
     "ff_mult": 4,
     "ff_hidden_dim": None,
+    "use_rope": True,
     "rope_theta": 10000.0,
     "qk_norm": True,
     # Legacy convenience preset. Nested qk/logit_bias configs are source of truth.
@@ -275,8 +281,9 @@ def position_run_tag(cfg: dict) -> str:
             "model_context": {
                 "hidden_size": cfg["hidden_size"],
                 "n_head": cfg["n_head"],
+                "use_rope": cfg["use_rope"],
                 "rope_theta": cfg["rope_theta"],
-                "extent": cfg.get("rel_extent") or cfg["block_size"],
+                "extent": cfg.get("rel_extent") or cfg["model_position_extent"],
             },
         }
         digest = hashlib.sha256(
@@ -338,9 +345,55 @@ def load_config(cli_args):
                 },
             )
 
+    training_length = int(cfg["training_length"] or cfg["block_size"])
+    if training_length < 2:
+        raise ValueError("training_length must be at least 2")
+    cfg["training_length"] = training_length
+    cfg["block_size"] = training_length
+
+    raw_evaluation_lengths = cfg["evaluation_lengths"]
+    if raw_evaluation_lengths is None:
+        evaluation_lengths = [training_length]
+    elif not isinstance(raw_evaluation_lengths, list):
+        raise TypeError("evaluation_lengths must be a list of integers or null")
+    else:
+        evaluation_lengths = []
+        for length in raw_evaluation_lengths:
+            if isinstance(length, bool) or not isinstance(length, int):
+                raise TypeError("evaluation_lengths must contain only integers")
+            if length < 2:
+                raise ValueError("evaluation_lengths must be at least 2")
+            if length not in evaluation_lengths:
+                evaluation_lengths.append(length)
+        if training_length not in evaluation_lengths:
+            evaluation_lengths.insert(0, training_length)
+    cfg["evaluation_lengths"] = evaluation_lengths
+
+    model_position_extent = int(
+        cfg["model_position_extent"] or max(evaluation_lengths)
+    )
+    if model_position_extent < max(training_length, *evaluation_lengths):
+        raise ValueError(
+            "model_position_extent must cover training_length and every "
+            "evaluation length"
+        )
+    cfg["model_position_extent"] = model_position_extent
+    scalar_normalization_extent = int(
+        cfg["scalar_normalization_extent"] or training_length
+    )
+    if scalar_normalization_extent <= 0:
+        raise ValueError("scalar_normalization_extent must be positive")
+    cfg["scalar_normalization_extent"] = scalar_normalization_extent
+    if cfg["rel_extent"] is not None and int(cfg["rel_extent"]) < max(
+        evaluation_lengths
+    ):
+        raise ValueError("rel_extent must cover every evaluation length")
+
     model_dim = int(cfg["hidden_size"])
     heads = int(cfg["n_head"])
     rope_theta = float(cfg["rope_theta"])
+    if not isinstance(cfg["use_rope"], bool):
+        raise TypeError("use_rope must be a boolean")
     qk_config, qk_source = resolve_channel_config(
         "qk",
         preset_fragment=preset_config.get("qk"),
@@ -370,6 +423,11 @@ def load_config(cli_args):
 
     cfg["qk"] = qk_config
     cfg["logit_bias"] = logit_config
+    for channel_config in (qk_config, logit_config):
+        if channel_config["enabled"] and channel_config["input"]["scalars"]:
+            channel_config["input"][
+                "normalization_extent"
+            ] = scalar_normalization_extent
     cfg["residual_stream"] = normalize_residual_stream_config(
         overrides.get("residual_stream", cfg["residual_stream"]),
         model_dim=model_dim,
@@ -390,13 +448,15 @@ def load_config(cli_args):
         enabled_sources.append(logit_source)
     if cfg["residual_stream"]["enabled"] or cfg["attention_write"]["enabled"]:
         enabled_sources.append(2)
+    if not cfg["use_rope"]:
+        enabled_sources.append(2)
     # Baseline and wholly legacy active channels retain historical tags.
     cfg["position_source_schema"] = (
         1 if not enabled_sources or all(source == 1 for source in enabled_sources) else 2
     )
 
     cfg["pos_variant"] = preset or (
-        "rope"
+        ("rope" if cfg["use_rope"] else "none")
         if (
             not qk_config["enabled"]
             and not logit_config["enabled"]
@@ -437,7 +497,7 @@ def load_config(cli_args):
         or cfg["residual_stream"]["enabled"]
         or cfg["attention_write"]["enabled"]
     ):
-        rel_extent = cfg["rel_extent"] or cfg["block_size"]
+        rel_extent = cfg["rel_extent"] or cfg["model_position_extent"]
         variant_tag = f"{variant_tag}-e{rel_extent}"
     run_name = cfg["run_name"] or f"{variant_tag}-{model_tag}"
     cfg["run_name"] = run_name
@@ -548,9 +608,9 @@ def make_model(args, vocab_size):
         ff_mult=args.ff_mult,
         ff_hidden_dim=args.ff_hidden_dim,
         vocab_size=vocab_size,
-        max_seq_len=args.block_size,
+        max_seq_len=args.model_position_extent,
         gradient_checkpointing=args.gradient_checkpointing,
-        use_rope=True,
+        use_rope=args.use_rope,
         rope_theta=args.rope_theta,
         qk_norm=args.qk_norm,
         rel_extent=args.rel_extent,
@@ -654,33 +714,116 @@ def load_tokenized_datasets(args, tokenizer):
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
+class RechunkedTokenDataset(Dataset):
+    """Expose a fixed-width token dataset at another contiguous width."""
+
+    def __init__(self, source, target_length: int):
+        if target_length < 2:
+            raise ValueError("target_length must be at least 2")
+        if len(source) == 0:
+            raise ValueError("Cannot rechunk an empty dataset")
+        source_length = len(source[0]["input_ids"])
+        if source_length < 1:
+            raise ValueError("Source token rows must not be empty")
+        self.source = source
+        self.source_length = source_length
+        self.target_length = int(target_length)
+        self._length = (len(source) * source_length) // self.target_length
+
+    def __len__(self):
+        return self._length
+
+    def __getitem__(self, index):
+        if index < 0:
+            index += self._length
+        if index < 0 or index >= self._length:
+            raise IndexError(index)
+        start = index * self.target_length
+        remaining = self.target_length
+        tokens = []
+        while remaining:
+            row_index, row_offset = divmod(start, self.source_length)
+            row = self.source[row_index]["input_ids"]
+            take = min(remaining, self.source_length - row_offset)
+            tokens.extend(row[row_offset:row_offset + take])
+            start += take
+            remaining -= take
+        return {"input_ids": tokens}
+
+
+def build_evaluation_datasets(validation_dataset, evaluation_lengths):
+    source_length = len(validation_dataset[0]["input_ids"])
+    return {
+        length: (
+            validation_dataset
+            if length == source_length
+            else RechunkedTokenDataset(validation_dataset, length)
+        )
+        for length in evaluation_lengths
+    }
+
+
 @torch.no_grad()
-def evaluate(args, model, eval_dataloader, accelerator, step):
+def evaluate(
+    args,
+    model,
+    eval_dataloaders,
+    accelerator,
+    step,
+    *,
+    include_extrapolation: bool = False,
+):
     model.eval()
-    losses = []
-    for idx, batch in enumerate(eval_dataloader):
-        input_ids = batch["input_ids"][:, :-1]
-        targets = batch["input_ids"][:, 1:]
-        loss = model(input_ids=input_ids, targets=targets)
-        losses.append(accelerator.gather_for_metrics(loss.detach().float()))
-        if args.num_validation_batches is not None and idx + 1 >= args.num_validation_batches:
-            break
-    eval_loss = torch.cat([loss.reshape(-1) for loss in losses]).mean()
-    eval_loss_value = eval_loss.item()
-    perplexity = math.exp(eval_loss_value) if eval_loss_value < 20 else float("inf")
-    logger.info("step %s: eval_loss %.4f perplexity %.4f", step, eval_loss_value, perplexity)
+    evaluation_metrics = {}
+    active_dataloaders = (
+        eval_dataloaders
+        if include_extrapolation
+        else {args.training_length: eval_dataloaders[args.training_length]}
+    )
+    for context_length, eval_dataloader in active_dataloaders.items():
+        losses = []
+        for idx, batch in enumerate(eval_dataloader):
+            input_ids = batch["input_ids"][:, :-1]
+            targets = batch["input_ids"][:, 1:]
+            loss = model(input_ids=input_ids, targets=targets)
+            losses.append(accelerator.gather_for_metrics(loss.detach().float()))
+            if (
+                args.num_validation_batches is not None
+                and idx + 1 >= args.num_validation_batches
+            ):
+                break
+        eval_loss = torch.cat([loss.reshape(-1) for loss in losses]).mean()
+        eval_loss_value = eval_loss.item()
+        perplexity = (
+            math.exp(eval_loss_value) if eval_loss_value < 20 else float("inf")
+        )
+        evaluation_metrics[f"eval_loss/context_{context_length}"] = eval_loss_value
+        evaluation_metrics[f"perplexity/context_{context_length}"] = (
+            perplexity if math.isfinite(perplexity) else None
+        )
+        if context_length == args.training_length:
+            evaluation_metrics["eval_loss"] = eval_loss_value
+            evaluation_metrics["perplexity"] = (
+                perplexity if math.isfinite(perplexity) else None
+            )
+        logger.info(
+            "step %s context %s: eval_loss %.4f perplexity %.4f",
+            step,
+            context_length,
+            eval_loss_value,
+            perplexity,
+        )
     diagnostic_model = accelerator.unwrap_model(model)
     while hasattr(diagnostic_model, "_orig_mod"):
         diagnostic_model = diagnostic_model._orig_mod
     position_metrics, position_profiles = diagnostic_model.position_diagnostics(
-        sequence_length=args.block_size,
+        sequence_length=args.training_length,
     )
     if accelerator.is_main_process:
         metrics = {
             "step": int(step),
-            "eval_loss": eval_loss_value,
-            "perplexity": perplexity if math.isfinite(perplexity) else None,
             "timestamp": time.time(),
+            **evaluation_metrics,
             **position_metrics,
         }
         with open(os.path.join(args.output_dir, "metrics.jsonl"), "a") as f:
@@ -698,8 +841,7 @@ def evaluate(args, model, eval_dataloader, accelerator, step):
     if args.with_tracking:
         accelerator.log(
             {
-                "eval_loss": eval_loss_value,
-                "perplexity": perplexity,
+                **evaluation_metrics,
                 **position_metrics,
             },
             step=step,
@@ -767,8 +909,12 @@ def main():
             "logit_bias": args.logit_bias,
             "residual_stream": args.residual_stream,
             "attention_write": args.attention_write,
+            "use_rope": args.use_rope,
             "attn_impl": args.attn_impl,
-            "rel_extent": args.rel_extent or args.block_size,
+            "training_length": args.training_length,
+            "model_position_extent": args.model_position_extent,
+            "evaluation_lengths": args.evaluation_lengths,
+            "rel_extent": args.rel_extent or args.model_position_extent,
             "position_schema_version": args.position_schema_version,
             "position_source_schema": args.position_source_schema,
             **counts,
@@ -847,17 +993,24 @@ def main():
         generator=train_generator,
         **loader_kwargs,
     )
-    eval_dataloader = DataLoader(
+    evaluation_datasets = build_evaluation_datasets(
         lm_datasets["validation"],
-        batch_size=args.per_device_train_batch_size,
-        **loader_kwargs,
+        args.evaluation_lengths,
     )
+    eval_dataloaders = {
+        length: DataLoader(
+            evaluation_dataset,
+            batch_size=args.per_device_train_batch_size,
+            **loader_kwargs,
+        )
+        for length, evaluation_dataset in evaluation_datasets.items()
+    }
 
     model = model.to(accelerator.device)
     if len(tokenizer) > model.token_embedding.weight.shape[0]:
         model.resize_token_embeddings(len(tokenizer))
     # Batches are shifted by one token before entering the model.
-    model.prepare_flex_masks(args.block_size - 1, accelerator.device)
+    model.prepare_flex_masks(args.training_length - 1, accelerator.device)
 
     optimizer = make_optimizer(args, model)
     steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -869,9 +1022,17 @@ def main():
         num_training_steps=max_train_steps * accelerator.num_processes,
     )
 
-    model, optimizer, train_dataloader, eval_dataloader, lr_scheduler = accelerator.prepare(
-        model, optimizer, train_dataloader, eval_dataloader, lr_scheduler,
+    eval_lengths = list(eval_dataloaders)
+    prepared = accelerator.prepare(
+        model,
+        optimizer,
+        train_dataloader,
+        *(eval_dataloaders[length] for length in eval_lengths),
+        lr_scheduler,
     )
+    model, optimizer, train_dataloader, *prepared_tail = prepared
+    lr_scheduler = prepared_tail.pop()
+    eval_dataloaders = dict(zip(eval_lengths, prepared_tail, strict=True))
     if args.compile:
         model = torch.compile(
             model,
@@ -1001,11 +1162,18 @@ def main():
                         os.path.join(args.output_dir, f"step_{completed_steps}")
                     )
             if _interval_due(args.validate_every, completed_steps):
-                evaluate(args, model, eval_dataloader, accelerator, completed_steps)
+                evaluate(args, model, eval_dataloaders, accelerator, completed_steps)
             if completed_steps >= max_train_steps:
                 break
 
-    evaluate(args, model, eval_dataloader, accelerator, completed_steps)
+    evaluate(
+        args,
+        model,
+        eval_dataloaders,
+        accelerator,
+        completed_steps,
+        include_extrapolation=True,
+    )
     if args.with_tracking:
         accelerator.end_training()
     save_model(

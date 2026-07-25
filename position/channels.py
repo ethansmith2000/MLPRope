@@ -175,13 +175,18 @@ class GroupedContentConditioner(torch.nn.Module):
                 self.gate_weight,
                 self.gate_bias,
             )
-            return base * (1.0 + self.gate_init + gate_delta)
+            # Keep the content multiplier in [0, 2]. The original unconstrained
+            # affine gate could grow positional addends into the thousands.
+            gate = torch.tanh(gate_delta + self.gate_init)
+            return base * (1.0 + gate)
 
         joined = torch.cat((content, base), dim=-1)
         hidden = self._linear(joined, self.down, self.down_bias)
         hidden = torch.nn.functional.gelu(hidden)
         delta = self._linear(hidden, self.up, self.up_bias)
-        return base + delta
+        # Preserve the exact baseline at zero initialization while bounding the
+        # learned local correction to one unit per latent coordinate.
+        return base + torch.tanh(delta + self.gate_init)
 
 
 class HeadCoupledFeaturePipeline(torch.nn.Module):
@@ -210,6 +215,7 @@ class HeadCoupledFeaturePipeline(torch.nn.Module):
         self.head_dim = head_dim
         self.model_dim = model_dim
         self.extent = extent
+        self.rope_theta = rope_theta
         self.head_coupling = head_coupling
         self.basis_dim = int(input_cfg["basis_dim"])
         self.groups = heads if head_coupling == "per_head_independent" else 1
@@ -224,6 +230,7 @@ class HeadCoupledFeaturePipeline(torch.nn.Module):
             basis_dim=self.basis_dim,
             theta=theta,
             scalars=input_cfg["scalars"],
+            normalization_extent=input_cfg.get("normalization_extent"),
         )
         self.mapper = build_mapper(
             kind=mapper_cfg["kind"],
@@ -290,10 +297,20 @@ class QKPositionChannel(PositionChannel):
         self.head_dim = head_dim
         self.model_dim = model_dim
         self.extent = extent
+        self.rope_theta = rope_theta
         self.application = config["application"]
         self.geometry = config["geometry"]
         self.qk_coupling = config["qk_coupling"]
         self.head_coupling = config["head_coupling"]
+        self.output_config = config["output"]
+        self.learn_amplitude = self.output_config["learn_amplitude"]
+        self.learn_phase = self.output_config["learn_phase"]
+        self.fixed_amplitude_phase = (
+            self.application == "additive"
+            and self.geometry == "amplitude_phase"
+            and not self.learn_amplitude
+            and not self.learn_phase
+        )
         mapper_cfg = config["mapper"]
         readout_groups = _readout_groups(self.head_coupling, heads)
 
@@ -309,7 +326,11 @@ class QKPositionChannel(PositionChannel):
                 input_cfg=config["input"],
             )
 
-        if self.qk_coupling == "separate":
+        if self.fixed_amplitude_phase:
+            self.pipeline = None
+            self.q_pipeline = None
+            self.k_pipeline = None
+        elif self.qk_coupling == "separate":
             self.q_pipeline = make_pipeline()
             self.k_pipeline = copy.deepcopy(self.q_pipeline)
             self.pipeline = None
@@ -338,7 +359,6 @@ class QKPositionChannel(PositionChannel):
         self.amplitude_conditioner = None
         self.q_amplitude_conditioner = None
         self.k_amplitude_conditioner = None
-        self.output_config = config["output"]
         self.conditioning_config = config["conditioning"]
 
         from position.rotary import build_rope_cache
@@ -366,21 +386,27 @@ class QKPositionChannel(PositionChannel):
                 pass
         elif self.application == "additive" and self.geometry == "amplitude_phase":
             if self.qk_coupling == "shared":
-                self.amplitude_head = GroupedLinearReadout(
-                    readout_groups, head_dim, head_dim // 2, init="zeros"
-                )
-                self.phase_head = GroupedLinearReadout(
-                    readout_groups, head_dim, head_dim // 2, init="zeros"
-                )
+                if self.learn_amplitude:
+                    self.amplitude_head = GroupedLinearReadout(
+                        readout_groups, head_dim, head_dim // 2, init="zeros"
+                    )
+                if self.learn_phase:
+                    self.phase_head = GroupedLinearReadout(
+                        readout_groups, head_dim, head_dim // 2, init="zeros"
+                    )
             else:
-                self.q_amplitude_head = GroupedLinearReadout(
-                    readout_groups, head_dim, head_dim // 2, init="zeros"
-                )
-                self.q_phase_head = GroupedLinearReadout(
-                    readout_groups, head_dim, head_dim // 2, init="zeros"
-                )
-                self.k_amplitude_head = copy.deepcopy(self.q_amplitude_head)
-                self.k_phase_head = copy.deepcopy(self.q_phase_head)
+                if self.learn_amplitude:
+                    self.q_amplitude_head = GroupedLinearReadout(
+                        readout_groups, head_dim, head_dim // 2, init="zeros"
+                    )
+                    self.k_amplitude_head = copy.deepcopy(
+                        self.q_amplitude_head
+                    )
+                if self.learn_phase:
+                    self.q_phase_head = GroupedLinearReadout(
+                        readout_groups, head_dim, head_dim // 2, init="zeros"
+                    )
+                    self.k_phase_head = copy.deepcopy(self.q_phase_head)
         elif self.application == "rotary" and self.geometry in {
             "phase",
             "scaled_phase",
@@ -538,19 +564,38 @@ class QKPositionChannel(PositionChannel):
 
     def _amplitude_phase_addend(
         self,
-        features: torch.Tensor,
-        amplitude_head: GroupedLinearReadout,
-        phase_head: GroupedLinearReadout,
+        features: torch.Tensor | None,
+        amplitude_head: GroupedLinearReadout | None,
+        phase_head: GroupedLinearReadout | None,
         sequence_length: int,
         *,
+        dtype: torch.dtype | None = None,
         content: torch.Tensor | None = None,
         amplitude_conditioner: GroupedContentConditioner | None = None,
         phase_conditioner: GroupedContentConditioner | None = None,
     ) -> torch.Tensor:
-        amplitude = self._amplitude(
-            self._apply_phase_head(features, amplitude_head)
+        target_dtype = (
+            features.dtype
+            if features is not None
+            else dtype or self.base_cos.dtype
         )
-        phase = self._apply_phase_head(features, phase_head)
+        fixed = self.base_cos[:sequence_length].to(dtype=target_dtype)
+        zero = fixed[None].expand(self.heads, -1, -1).new_zeros(
+            self.heads,
+            sequence_length,
+            self.head_dim // 2,
+        )
+        amplitude_raw = (
+            self._apply_phase_head(features, amplitude_head)
+            if amplitude_head is not None
+            else zero
+        )
+        phase = (
+            self._apply_phase_head(features, phase_head)
+            if phase_head is not None
+            else zero
+        )
+        amplitude = self._amplitude(amplitude_raw)
         if self.conditioning_config["kind"] != "none":
             if content is None:
                 raise ValueError(
@@ -606,7 +651,10 @@ class QKPositionChannel(PositionChannel):
                 f"Sequence length {sequence_length} exceeds Q/K position extent "
                 f"{self.extent}."
             )
-        if self.qk_coupling == "separate":
+        if self.fixed_amplitude_phase:
+            q_features = None
+            k_features = None
+        elif self.qk_coupling == "separate":
             q_features = self.q_pipeline(sequence_length, dtype=dtype)
             k_features = self.k_pipeline(sequence_length, dtype=dtype)
         else:
@@ -635,6 +683,7 @@ class QKPositionChannel(PositionChannel):
                     self.amplitude_head,
                     self.phase_head,
                     sequence_length,
+                    dtype=dtype,
                     content=q_content,
                     amplitude_conditioner=self.amplitude_conditioner,
                     phase_conditioner=self.conditioner,
@@ -644,6 +693,7 @@ class QKPositionChannel(PositionChannel):
                     self.amplitude_head,
                     self.phase_head,
                     sequence_length,
+                    dtype=dtype,
                     content=k_content,
                     amplitude_conditioner=self.amplitude_conditioner,
                     phase_conditioner=self.conditioner,
@@ -654,6 +704,7 @@ class QKPositionChannel(PositionChannel):
                     self.q_amplitude_head,
                     self.q_phase_head,
                     sequence_length,
+                    dtype=dtype,
                     content=q_content,
                     amplitude_conditioner=self.q_amplitude_conditioner,
                     phase_conditioner=self.q_conditioner,
@@ -663,6 +714,7 @@ class QKPositionChannel(PositionChannel):
                     self.k_amplitude_head,
                     self.k_phase_head,
                     sequence_length,
+                    dtype=dtype,
                     content=k_content,
                     amplitude_conditioner=self.k_amplitude_conditioner,
                     phase_conditioner=self.k_conditioner,
@@ -787,13 +839,29 @@ class QKPositionChannel(PositionChannel):
             metrics[f"{prefix}/rms"] = values.pow(2).mean().sqrt().item()
             metrics[f"{prefix}/abs_max"] = values.abs().max().item()
 
-        basis_modules = (
-            (self.q_pipeline.basis, self.k_pipeline.basis)
-            if self.qk_coupling == "separate"
-            else (self.pipeline.basis, self.pipeline.basis)
-        )
-        q_frequency = basis_modules[0].frequencies().detach().float()
-        k_frequency = basis_modules[1].frequencies().detach().float()
+        if self.fixed_amplitude_phase:
+            q_frequency = 1.0 / (
+                self.rope_theta
+                ** (
+                    torch.arange(
+                        0,
+                        self.head_dim,
+                        2,
+                        device=self.base_cos.device,
+                        dtype=torch.float32,
+                    )
+                    / self.head_dim
+                )
+            )
+            k_frequency = q_frequency
+        else:
+            basis_modules = (
+                (self.q_pipeline.basis, self.k_pipeline.basis)
+                if self.qk_coupling == "separate"
+                else (self.pipeline.basis, self.pipeline.basis)
+            )
+            q_frequency = basis_modules[0].frequencies().detach().float()
+            k_frequency = basis_modules[1].frequencies().detach().float()
         metrics["frequency_mean"] = q_frequency.mean().item()
         metrics["frequency_min"] = q_frequency.min().item()
         metrics["frequency_max"] = q_frequency.max().item()
@@ -967,6 +1035,128 @@ class InklingProfileBank(torch.nn.Module):
         return mixture * gate, routing
 
 
+class FactorizedPairwiseLogit(torch.nn.Module):
+    """Low-rank content/offset interaction with an exact zero-effect gate."""
+
+    def __init__(
+        self,
+        *,
+        groups: int,
+        heads: int,
+        head_dim: int,
+        rank: int,
+        position_mode: str,
+        gate_init: float,
+    ):
+        super().__init__()
+        self.groups = groups
+        self.heads = heads
+        self.rank = rank
+        self.position_mode = position_mode
+        self.query_content = torch.nn.Parameter(
+            torch.empty(groups, head_dim, rank)
+        )
+        self.key_content = torch.nn.Parameter(
+            torch.empty(groups, head_dim, rank)
+        )
+        self.relative_position = torch.nn.Parameter(
+            torch.empty(groups, head_dim, rank)
+        )
+        if position_mode in {"query_absolute", "full_absolute"}:
+            self.query_position = torch.nn.Parameter(
+                torch.empty(groups, head_dim, rank)
+            )
+        else:
+            self.register_parameter("query_position", None)
+        if position_mode == "full_absolute":
+            self.key_position = torch.nn.Parameter(
+                torch.empty(groups, head_dim, rank)
+            )
+        else:
+            self.register_parameter("key_position", None)
+        self.gate = torch.nn.Parameter(
+            torch.full((groups,), float(gate_init))
+        )
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        for parameter in (
+            self.query_content,
+            self.key_content,
+            self.relative_position,
+            self.query_position,
+            self.key_position,
+        ):
+            if parameter is not None:
+                for weight in parameter:
+                    torch.nn.init.xavier_normal_(weight)
+
+    def _project_content(
+        self,
+        content: torch.Tensor,
+        weight: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.groups == 1:
+            return torch.einsum("bhld,dr->bhlr", content, weight[0])
+        return torch.einsum("bhld,hdr->bhlr", content, weight)
+
+    def _project_position(
+        self,
+        position: torch.Tensor,
+        weight: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.groups == 1:
+            return torch.einsum("hld,dr->hlr", position, weight[0])
+        return torch.einsum("hld,hdr->hlr", position, weight)
+
+    @staticmethod
+    def _unit_rms(value: torch.Tensor) -> torch.Tensor:
+        return value * torch.rsqrt(
+            value.float().square().mean(dim=-1, keepdim=True) + 1e-6
+        ).to(dtype=value.dtype)
+
+    def forward(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        position_features: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        query_length = query.shape[-2]
+        key_length = key.shape[-2]
+        if max(query_length, key_length) > position_features.shape[-2]:
+            raise ValueError(
+                "Pairwise logit sequence length exceeds position-feature extent."
+            )
+
+        query_factor = self._project_content(query, self.query_content)
+        key_factor = self._project_content(key, self.key_content)
+        if self.query_position is not None:
+            query_factor = query_factor + self._project_position(
+                position_features[:, :query_length],
+                self.query_position,
+            )[None]
+        if self.key_position is not None:
+            key_factor = key_factor + self._project_position(
+                position_features[:, :key_length],
+                self.key_position,
+            )[None]
+        distance_factor = self._project_position(
+            position_features,
+            self.relative_position,
+        )
+        gate = (
+            self.gate.expand(self.heads)
+            if self.groups == 1
+            else self.gate
+        )
+        return (
+            self._unit_rms(query_factor),
+            self._unit_rms(key_factor),
+            self._unit_rms(distance_factor),
+            gate,
+        )
+
+
 class LogitBiasChannel(PositionChannel):
     """Relative-distance scalar logit curves with a fixed ``[heads, extent]`` contract."""
 
@@ -1003,8 +1193,9 @@ class LogitBiasChannel(PositionChannel):
         conditioning = config["conditioning"]
         self.conditioning_kind = conditioning["kind"]
         self.inkling = None
+        self.pairwise = None
         self._last_routing_summary: dict[str, torch.Tensor] = {}
-        if self.conditioning_kind != "none":
+        if self.conditioning_kind in {"inkling_table", "inkling_cosnet"}:
             self.inkling = InklingProfileBank(
                 kind=self.conditioning_kind,
                 groups=_readout_groups(self.head_coupling, heads),
@@ -1013,30 +1204,71 @@ class LogitBiasChannel(PositionChannel):
                 extent=extent,
                 config=conditioning,
             )
+        elif self.conditioning_kind == "pairwise_low_rank":
+            self.pairwise = FactorizedPairwiseLogit(
+                groups=_readout_groups(self.head_coupling, heads),
+                heads=heads,
+                head_dim=head_dim,
+                rank=conditioning["pair_rank"],
+                position_mode=conditioning["position_mode"],
+                gate_init=conditioning["gate_init"],
+            )
+
+    def prepare(
+        self,
+        *,
+        dtype: torch.dtype | None = None,
+        query: torch.Tensor | None = None,
+        key: torch.Tensor | None = None,
+    ) -> tuple[
+        torch.Tensor,
+        tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None,
+    ]:
+        features = self.pipeline(dtype=dtype)
+        if self.head_coupling == "shared_head":
+            base = self.scalar_head(features[:1], self.heads)
+        else:
+            base = self.scalar_head(features, self.heads)
+        if self.inkling is not None:
+            if query is None:
+                raise ValueError(
+                    f"{self.conditioning_kind} logit bias requires normalized "
+                    "query content."
+                )
+            conditional, routing = self.inkling(query)
+            with torch.no_grad():
+                routing_f = routing.detach().float()
+                entropy = -(
+                    routing_f.clamp_min(1e-9).log() * routing_f
+                ).sum(-1)
+                self._last_routing_summary = {
+                    "routing_entropy_mean": entropy.mean(),
+                    "routing_max_probability": routing_f.max(
+                        dim=-1
+                    ).values.mean(),
+                    "inkling_gate_abs_mean": (
+                        self.inkling.gate.detach().float().abs().mean()
+                    ),
+                }
+            return base[None, :, None, :] + conditional, None
+        if self.pairwise is not None:
+            if query is None or key is None:
+                raise ValueError(
+                    "pairwise_low_rank logit bias requires normalized query "
+                    "and key content."
+                )
+            return base, self.pairwise(query, key, features)
+        return base, None
 
     def forward(
         self,
         *,
         dtype: torch.dtype | None = None,
         query: torch.Tensor | None = None,
+        key: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        base = self.base_curves(dtype=dtype)
-        if self.inkling is None:
-            return base
-        if query is None:
-            raise ValueError(
-                f"{self.conditioning_kind} logit bias requires normalized query content."
-            )
-        conditional, routing = self.inkling(query)
-        with torch.no_grad():
-            routing_f = routing.detach().float()
-            entropy = -(routing_f.clamp_min(1e-9).log() * routing_f).sum(-1)
-            self._last_routing_summary = {
-                "routing_entropy_mean": entropy.mean(),
-                "routing_max_probability": routing_f.max(dim=-1).values.mean(),
-                "inkling_gate_abs_mean": self.inkling.gate.detach().float().abs().mean(),
-            }
-        return base[None, :, None, :] + conditional
+        base, _ = self.prepare(dtype=dtype, query=query, key=key)
+        return base
 
     def base_curves(
         self,
@@ -1050,12 +1282,22 @@ class LogitBiasChannel(PositionChannel):
 
     def reset_output_parameters(self) -> None:
         self.scalar_head.reset_parameters()
+        if self.pairwise is not None:
+            with torch.no_grad():
+                self.pairwise.gate.fill_(
+                    float(self.config["conditioning"]["gate_init"])
+                )
 
     def routing_summary(self) -> dict[str, float]:
-        return {
+        summary = {
             key: value.item()
             for key, value in self._last_routing_summary.items()
         }
+        if self.pairwise is not None:
+            gate = self.pairwise.gate.detach().float()
+            summary["pairwise_gate_mean"] = gate.mean().item()
+            summary["pairwise_gate_abs_max"] = gate.abs().max().item()
+        return summary
 
 
 class ResidualPositionChannel(PositionChannel):

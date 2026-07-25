@@ -53,6 +53,7 @@ class FrozenFourierBasis(torch.nn.Module):
         basis_dim: int,
         theta: float,
         scalars: list[str] | tuple[str, ...] = (),
+        normalization_extent: int | None = None,
     ):
         super().__init__()
         _validate_basis_args(extent, basis_dim, theta, scalars)
@@ -60,6 +61,7 @@ class FrozenFourierBasis(torch.nn.Module):
         self.basis_dim = int(basis_dim)
         self.theta = float(theta)
         self.scalars = tuple(scalars)
+        self.normalization_extent = int(normalization_extent or extent)
         self.output_dim = self.basis_dim + len(self.scalars)
         self.register_buffer(
             "basis",
@@ -82,7 +84,7 @@ class FrozenFourierBasis(torch.nn.Module):
         features = _append_scalar_features(
             self.basis[:length],
             length=length,
-            extent=self.extent,
+            normalization_extent=self.normalization_extent,
             scalars=self.scalars,
         )
         if dtype is not None:
@@ -111,6 +113,7 @@ class LearnedTemperatureFourierBasis(torch.nn.Module):
         basis_dim: int,
         theta: float,
         scalars: list[str] | tuple[str, ...] = (),
+        normalization_extent: int | None = None,
     ):
         super().__init__()
         _validate_basis_args(extent, basis_dim, theta, scalars)
@@ -118,6 +121,7 @@ class LearnedTemperatureFourierBasis(torch.nn.Module):
         self.basis_dim = int(basis_dim)
         self.theta = float(theta)
         self.scalars = tuple(scalars)
+        self.normalization_extent = int(normalization_extent or extent)
         self.output_dim = self.basis_dim + len(self.scalars)
         self.log_temperature = torch.nn.Parameter(torch.zeros(()))
 
@@ -149,7 +153,7 @@ class LearnedTemperatureFourierBasis(torch.nn.Module):
         features = _append_scalar_features(
             features,
             length=length,
-            extent=self.extent,
+            normalization_extent=self.normalization_extent,
             scalars=self.scalars,
         )
         return features if dtype is None else features.to(dtype=dtype)
@@ -166,6 +170,7 @@ class LearnedFrequencyFourierBasis(torch.nn.Module):
         basis_dim: int,
         theta: float,
         scalars: list[str] | tuple[str, ...] = (),
+        normalization_extent: int | None = None,
     ):
         super().__init__()
         _validate_basis_args(extent, basis_dim, theta, scalars)
@@ -173,6 +178,7 @@ class LearnedFrequencyFourierBasis(torch.nn.Module):
         self.basis_dim = int(basis_dim)
         self.theta = float(theta)
         self.scalars = tuple(scalars)
+        self.normalization_extent = int(normalization_extent or extent)
         self.output_dim = self.basis_dim + len(self.scalars)
         self.log_frequency_residual = torch.nn.Parameter(
             torch.zeros(self.basis_dim // 2)
@@ -206,7 +212,7 @@ class LearnedFrequencyFourierBasis(torch.nn.Module):
         features = _append_scalar_features(
             features,
             length=length,
-            extent=self.extent,
+            normalization_extent=self.normalization_extent,
             scalars=self.scalars,
         )
         return features if dtype is None else features.to(dtype=dtype)
@@ -241,7 +247,7 @@ def _append_scalar_features(
     fourier: torch.Tensor,
     *,
     length: int,
-    extent: int,
+    normalization_extent: int,
     scalars: tuple[str, ...],
 ) -> torch.Tensor:
     if not scalars:
@@ -251,7 +257,7 @@ def _append_scalar_features(
         device=fourier.device,
         dtype=torch.float32,
     )
-    denominator = float(max(extent - 1, 1))
+    denominator = float(max(normalization_extent - 1, 1))
     values: list[torch.Tensor] = []
     for scalar in scalars:
         if scalar == "position":
@@ -262,7 +268,7 @@ def _append_scalar_features(
             values.append(
                 positions.log1p()
                 / torch.tensor(
-                    float(max(extent, 2)),
+                    float(max(normalization_extent, 2)),
                     device=fourier.device,
                 ).log()
             )
@@ -279,6 +285,7 @@ def build_position_basis(
     basis_dim: int,
     theta: float,
     scalars: list[str] | tuple[str, ...] = (),
+    normalization_extent: int | None = None,
 ) -> torch.nn.Module:
     basis_types = {
         "frozen_fourier": FrozenFourierBasis,
@@ -292,4 +299,12 @@ def build_position_basis(
             f"Unknown position basis kind {kind!r}; expected one of "
             f"{sorted(basis_types)}."
         ) from exc
-    return basis_type(extent, basis_dim, theta, scalars)
+    if normalization_extent is not None and normalization_extent <= 0:
+        raise ValueError("normalization_extent must be positive.")
+    return basis_type(
+        extent,
+        basis_dim,
+        theta,
+        scalars,
+        normalization_extent,
+    )

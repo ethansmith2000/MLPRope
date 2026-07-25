@@ -943,3 +943,404 @@ frequency, and 2,402,368 for scalar augmentation. The small count differences
 are intrinsic to the tested basis parameters/features rather than mapper or
 geometry changes. The suite runs under non-autostarting one-shot supervisor
 management; WandB group is `phase3-basis-screen-5k`.
+
+### 5k basis-screen result
+
+All eight runs completed cleanly. Final eval loss by seed:
+
+- frozen Fourier: `4.4041` (seed `123`), `4.4018` (seed `456`);
+- learned temperature: `4.4039`, `4.4025`;
+- learned frequencies: `4.4041`, `4.4026`;
+- normalized/log-position scalars: `4.3992`, `4.3896`.
+
+Two-seed mean eval loss is `4.4030` for frozen Fourier, `4.4032` for learned
+temperature, `4.4034` for learned frequencies, and `4.3944` for scalar
+augmentation. Learning the Fourier temperature or individual frequencies
+provides no measurable gain at this horizon. Adding normalized and logarithmic
+absolute-position scalars improves both seeds and lowers mean loss by `0.0086`
+relative to frozen Fourier, despite adding only 12,288 position parameters.
+Scalar augmentation is the basis variant worth carrying into the next geometry
+or conditioning screen.
+
+---
+
+## 2026-07-24 — Phase 3 scalar geometry-transfer screen launched
+
+Launched an isolated eight-run, two-seed, 5k-step screen under
+`sweep_configs/phase3_geometry_transfer/` and
+`model-output/position_bias_phase3_geometry_transfer/`. Normalized-position and
+log-position scalars, frozen Fourier inputs, linear relative-logit bias,
+coupling, mapper, and FlexAttention are held fixed. At seeds `123` and `456`,
+the Q/K geometry is:
+
+- canonical additive amplitude+phase at amplitude `0.3`;
+- rotary phase residual;
+- projected-phase rotary;
+- scaled-phase rotary.
+
+All configs passed CPU dry runs, acquired GPUs through `gpu-claim`, and
+completed their first 500-step validation. Canonical, projected-phase, and
+scaled-phase runs each have 2,402,368 position parameters. The naturally
+leaner phase-residual geometry has 1,806,400, so comparisons involving that
+variant include a capacity difference; the other three are exactly matched.
+The suite runs under non-autostarting one-shot supervisor management; WandB
+group is `phase3-geometry-transfer-5k`.
+
+### 5k scalar geometry-transfer result
+
+All eight runs completed cleanly. Final eval loss by seed:
+
+- canonical amplitude+phase: `4.3980` (seed `123`), `4.3895` (seed `456`);
+- phase residual: `4.4866`, `4.4723`;
+- projected phase: `4.4893`, `4.4731`;
+- scaled phase: `4.4617`, `4.4569`.
+
+Two-seed mean eval loss is `4.3938` for canonical, `4.4795` for phase residual,
+`4.4812` for projected phase, and `4.4593` for scaled phase. Canonical therefore
+retains a large advantage when scalar augmentation is held fixed; none of the
+rotary alternatives is close enough to promote from this screen.
+
+---
+
+## 2026-07-24 — Phase 3 one-seed frontier screen launched
+
+Launched seven new 5k-step runs at seed `123` under
+`sweep_configs/phase3_frontier_screen/` and
+`model-output/position_bias_phase3_frontier_screen/`. Canonical amplitude `0.3`,
+normalized/log-position scalars, and frozen Fourier input are fixed. The new
+mechanisms are:
+
+- local-residual and content-gated Q/K conditioning, each with hidden width `32`;
+- Inkling table and cosine-network relative-logit bias;
+- zero-gated per-layer residual-stream position reinjection;
+- zero-gated key-position and relative-offset attention-output writes.
+
+The exact linear-logit anchor is not rerun: the completed geometry-transfer run
+at this seed and horizon is reused (`eval_loss=4.3980`). All seven new configs
+passed CPU dry runs. They were submitted under non-autostarting one-shot
+supervisor management through the shared lifetime-locking `gpu-claim` queue;
+four immediately acquired free GPUs and three are waiting without bypassing
+foreign claims. This is a mechanism screen rather than a parameter-matched
+capacity comparison. WandB group is `phase3-frontier-screen-5k`.
+
+### 5k frontier-screen result
+
+All seven new runs completed. The reused anchor is `4.3980`; final eval losses
+are `4.3982` for key-position write, `4.3984` for relative-offset write,
+`4.3985` for per-layer residual reinjection, `4.4030` for Inkling table, and
+`4.4196` for Inkling cosnet. The first three learned gates remained small and
+were empirically indistinguishable from the anchor; neither Inkling variant
+improved it.
+
+The original local-residual and content-gate Q/K conditioners failed
+optimization at `6.0208` and `6.2365`. They completed without runtime errors or
+non-finite values, but their positional addends reached RMS values in the
+hundreds and maxima in the thousands. These are treated as unstable mechanisms,
+not competitive results.
+
+---
+
+## 2026-07-24 — Bounded Q/K conditioning retry launched
+
+Bounded the content-gate multiplier with `tanh` to `[0, 2]` and bounded each
+local-residual latent correction to `[-1, 1]`; both still reproduce the
+unconditioned model exactly at zero initialization and retain immediate
+gradients. Added a focused extreme-logit bound test. All 23 playground tests and
+25 position-channel regression tests pass.
+
+Launched isolated seed-`123`, 5k-step retries for the two conditioners under
+`sweep_configs/phase3_conditioning_retry/` and
+`model-output/position_bias_phase3_conditioning_retry/`. Both configs passed CPU
+dry runs and acquired GPUs through `gpu-claim`; WandB group is
+`phase3-conditioning-bounded-retry-5k`.
+
+### Bounded conditioning retry result
+
+Bounding the direct conditioner outputs did not rescue either mechanism.
+Content-gate conditioning was non-finite by the first 500-step validation.
+Local-residual conditioning remained finite but moved only from `6.3530` at
+step 500 to `6.1283` at step 5,000. Its underlying positional trunk still grew
+to RMS values in the hundreds and maxima in the thousands. Both direct Q/K
+content-conditioning mechanisms are retired from the current search.
+
+---
+
+## 2026-07-24 — Canonical coupling-transfer screen launched
+
+Launched four new seed-`123`, 5k-step structural-sharing runs under
+`sweep_configs/phase3_coupling_transfer/` and
+`model-output/position_bias_phase3_coupling_transfer/`. Canonical amplitude
+`0.3`, normalized/log-position scalars, frozen Fourier input, linear logit bias,
+and all optimization settings are fixed. The structures are:
+
+- fully shared Q/K with independent heads;
+- fully separate Q/K with independent heads;
+- separate Q/K readouts over a shared-head positional curve;
+- separate Q/K readouts over a jointly mapped all-head curve.
+
+The completed shared-trunk/separate-readout, independent-head run remains the
+anchor (`eval_loss=4.3980`) and is not rerun. All four new configs passed CPU
+dry runs and were submitted through `gpu-claim`; three immediately acquired
+free GPUs and one is waiting behind active claims. WandB group is
+`phase3-coupling-transfer-5k`.
+
+### 5k canonical coupling-transfer result
+
+All four runs completed cleanly. Against the reused `4.3980` anchor:
+
+- fully shared Q/K: `4.3984`;
+- fully separate Q/K: `4.3989`;
+- separate readouts over a shared-head curve: `4.4116`;
+- separate readouts over a joint-head curve: `4.3900`.
+
+Q/K sharing itself has negligible effect at this horizon. Shared-head coupling
+loses `0.0136`, while joint-head coupling gains `0.0080`; however, the joint-head
+run has 6,531,136 position parameters versus 2,402,368 for the anchor because
+its inferred Fourier basis expands from head width to model width. The gain
+therefore requires a basis-width and generic-capacity control.
+
+---
+
+## 2026-07-24 — Structural/scalar/mapper follow-up launched
+
+Launched eight targeted seed-`123`/`456`, 5k-step runs under
+`sweep_configs/phase3_structural_followup/` and
+`model-output/position_bias_phase3_structural_followup/`:
+
+- joint-head coupling with explicit `basis_dim=96`, exactly matching the
+  anchor's 2,402,368 position parameters;
+- the wide joint-head and efficient shared-Q/K variants at seed `456`;
+- the canonical anchor with FFN width `3328` as a generic-capacity control;
+- normalized-position-only and log-position-only scalar ablations;
+- non-residual rank-32 low-rank and hidden-128 MLP positional mappers.
+
+The existing no-scalar and both-scalar runs provide the remaining scalar
+anchors, so they are not repeated. All eight configs passed CPU dry runs and
+were submitted through `gpu-claim`; five immediately acquired free GPUs and
+three are waiting behind active claims. WandB group is
+`phase3-structural-followup-5k`.
+
+---
+
+## 2026-07-25 — Factorized pair-aware logit screen launched
+
+Added `pairwise_low_rank` relative-logit conditioning:
+
+```text
+b(i,j) = b_static(i-j)
+       + g_h / sqrt(r) · Σ_m Q_m(q_i, φ(i)) K_m(k_j, φ(j)) D_m(φ(i-j))
+```
+
+The content and position factors are independently projected and RMS-normalized;
+the unconstrained per-head outer gate initializes to zero. This preserves the
+completed static linear-logit anchor exactly without using saturating
+activations. FlexAttention contracts rank components directly in `score_mod`
+without constructing a dense pairwise bias tensor.
+
+Launched three seed-`123`, rank-`8`, 5k-step variants under
+`sweep_configs/phase3_pairwise_logit/` and
+`model-output/position_bias_phase3_pairwise_logit/`:
+
+- relative-only Fourier offset (`φ(i-j)`), preserving translation invariance;
+- query-absolute enrichment (`φ(i-j)` plus `φ(i)`);
+- full-absolute enrichment (`φ(i-j)`, `φ(i)`, and `φ(j)`).
+
+Canonical amplitude-`0.3` Q/K, normalized/log-position Q/K scalars, and the
+static linear-logit base are held fixed. The completed geometry-transfer anchor
+at this seed and horizon is reused (`eval_loss=4.3980`). All three configs passed
+CPU dry runs; the full CUDA forward/backward smoke produced finite loss and a
+nonzero zero-gate gradient. All 51 position tests pass. The jobs acquired three
+GPUs through `gpu-claim` and reached steady training at roughly 2.25 steps/s.
+WandB group is `phase3-pairwise-logit-5k`.
+
+### 5k factorized pair-aware logit result
+
+All three runs completed cleanly. Against the reused canonical static-logit
+anchor at `4.3980`:
+
+- relative-only: `4.3986`;
+- query-absolute: `4.3917`;
+- full-absolute: `4.3964`.
+
+The relative-only interaction is a null result and full-absolute enrichment
+provides only `0.0016`. Query-absolute is the screen winner by `0.0063` against
+the anchor and merits another-seed confirmation, but the gap remains too small
+for a single-seed conclusion.
+
+---
+
+## 2026-07-25 — AddRoPE component and residual-stream screens launched
+
+Added independent `learn_amplitude` and `learn_phase` controls for canonical
+AddRoPE. Disabled heads are not instantiated; disabling both produces a
+parameter-free fixed Fourier Q/K carrier. Added top-level `use_rope=false`,
+including a valid no-explicit-PE path and residual-only position models while
+continuing to reject rotary Q/K channels without RoPE.
+
+Launched three new seed-`123`, 5k-step AddRoPE component runs under
+`sweep_configs/phase3_addrope_components/`:
+
+- fixed amplitude-`0.3` Fourier carrier;
+- learned amplitude with fixed phase;
+- fixed amplitude with learned phase.
+
+The completed learned-amplitude + learned-phase canonical run (`4.3980`) is the
+fourth cell of the 2x2 design and is reused. Q/K scalar inputs and static linear
+logit bias otherwise remain fixed.
+
+Launched seven seed-`123`, 5k-step residual-sector runs under
+`sweep_configs/phase3_residual_sector/`:
+
+- standard RoPE control;
+- no explicit positional encoding;
+- sinusoidal residual input;
+- learned absolute residual input;
+- linear Fourier residual input;
+- MLP Fourier residual input;
+- zero-gated, layer-specific linear-Fourier reinjection.
+
+Q/K and logit position channels are disabled throughout this sector; all but the
+RoPE control use `use_rope=false`. The ten new configs passed CPU dry runs and
+all 55 position tests pass. Eight runs immediately acquired GPUs through
+`gpu-claim`; the two remaining residual runs are queued behind lifetime claims.
+WandB groups are `phase3-addrope-components-5k` and
+`phase3-residual-sector-5k`.
+
+The fixed-carrier run reached step 500, then its diagnostics attempted to read a
+basis module intentionally absent from the parameter-free carrier. Training was
+finite (`eval_loss=5.7130`); this was a reporting-only failure. Fixed-carrier
+diagnostics now derive frequencies directly from `rope_theta`, with a regression
+test, and only that run was requeued from scratch through `gpu-claim`.
+
+### 5k AddRoPE-component and residual-sector results
+
+All corrected runs completed. AddRoPE component isolation, against the reused
+combined amplitude+phase anchor at `4.3980`:
+
+- learned amplitude only: `4.4015`;
+- learned phase only: `4.4021`;
+- fixed amplitude-`0.3` Fourier carrier: `4.4154`.
+
+Amplitude-only and phase-only are indistinguishable at this resolution. Each
+recovers most of the combined mechanism's gain over the fixed carrier, while
+the combined model remains marginally best. The canonical stack therefore
+retains both controls; further component ranking is shelved.
+
+Residual-stream sole-mechanism results:
+
+- RoPE control: `4.5166`;
+- sinusoidal input: `4.7284`;
+- linear Fourier input: `4.7896`;
+- MLP Fourier input: `4.8028`;
+- per-layer reinjection: `4.8598`;
+- learned absolute input: `4.8930`;
+- no explicit position: `4.9309`.
+
+Residual position helps over no explicit PE, but even the strongest residual
+variant remains `0.2118` behind RoPE. Residual-only PE is not promoted and is
+not combined with the canonical attention-local stack.
+
+---
+
+## 2026-07-25 — Canonical stack frozen for final promotion
+
+The active research default is now:
+
+- canonical additive amplitude+phase AddRoPE, `amplitude_init=0.3`;
+- frozen Fourier Q/K input plus normalized- and log-position scalars;
+- linear Q/K mapper with shared trunk and separate Q/K readouts;
+- per-head-independent position maps;
+- static linear relative-logit bias under FlexAttention.
+
+The existing 10k two-seed result established canonical AddRoPE plus linear
+relative logits (`4.0508` mean versus RoPE `4.1417`). The two-seed 5k basis
+screen independently established scalar augmentation (`0.0086` mean gain).
+The next promotion isolates their union at 10k without changing coupling,
+mapper, amplitude, or attention implementation.
+
+The following axes are frozen from active expansion: learned rotary
+phase/projected/scaled variants, learned Fourier temperatures/frequencies,
+nonlinear and low-rank mapper searches, further Q/K/head-coupling sweeps,
+residual-only position, attention-output writes, Inkling profile banks, direct
+content-conditioned Q/K, and amplitude/component ranking. Additive
+pair-normalized geometry, query-position writes, and learned base-RoPE
+frequencies remain backlog rather than active experiments.
+
+### Final-decision bundle
+
+Launched the three pre-registered decision runs through `gpu-claim`:
+
+- scalar-augmented canonical AddRoPE + static linear logits at 10k, seeds
+  `123` and `456`;
+- rank-8 query-absolute pairwise logits at 5k, seed `456`.
+
+The 10k runs compare with the no-scalar canonical mean `4.0508`; the pairwise
+run compares with the exact scalar/static seed-`456` anchor at `4.3895`.
+Pairwise conditioning remains excluded from the 10k stack pending replication.
+
+The scalar-promoted 10k runs completed at `4.0452` (seed `123`) and `4.0488`
+(seed `456`), mean `4.0470`. This is a `0.0038` mean improvement over the
+no-scalar canonical mean `4.0508`, below the pre-registered `~0.007` attribution
+threshold. At 5k the existing FFN-width capacity control reached `4.3911`,
+outperforming both the no-scalar (`4.4066`) and scalar (`4.3980`) seed-`123`
+anchors. Scalars remain part of the consolidated model for the frozen
+extrapolation comparison, but their small gain is not position-specific evidence.
+
+The seed-`456` query-absolute pairwise confirmation finished at `4.3998`, which
+is `0.0103` worse than its exact scalar/static anchor (`4.3895`). Combined with
+the seed-`123` improvement of only `0.0063`, the two-seed result does not
+replicate. Pairwise content conditioning is not promoted, and the gated
+position-only query/offset surface is intentionally not implemented.
+
+---
+
+## 2026-07-25 — Length-extrapolation evaluation added
+
+Training configuration now separates `training_length`,
+`model_position_extent`, and `evaluation_lengths`. Longer validation examples
+are contiguous rechunks of the existing tokenized validation stream, and one
+evaluation record reports the in-distribution loss plus length-qualified losses.
+A one-step CUDA smoke evaluated 1024, 1536, and 2048-token rows successfully.
+
+The frozen comparison is limited to RoPE, free additive Q/K plus static linear
+relative logits, and scalar-augmented canonical AddRoPE plus static linear
+relative logits. Each will train at 1024 with position extent 2048 and be
+evaluated at 1024, 1536, and 2048.
+
+### Compact Q/K basis result
+
+Against the native-width `basis_dim=96` scalar canonical anchor at `4.3980`:
+
+- `basis_dim=16`: `4.4037`;
+- `basis_dim=32`: `4.4040`;
+- `basis_dim=64`: `4.4142`.
+
+All compact cells remain close, and width 16 is the best compact result despite
+being the smallest. It is the efficiency default for future exploratory work;
+the native-width model remains the conservative quality default because this
+screen is single-seed and retains a `0.0057` loss gap.
+
+### Frozen-finalist extrapolation result
+
+Final evaluation losses after training on length 1024 with position extent 2048:
+
+- scalar canonical, initially normalized to model extent 2048:
+  `4.0451` / `4.0378` / `4.0840` at
+  1024 / 1536 / 2048;
+- free additive + linear logit: `4.0607` / `4.0550` / `4.1040`;
+- RoPE: `4.1284` / `4.1121` / `4.1514`.
+
+The scalar canonical model is best at every evaluated length. Its 1024-to-2048
+change is `+0.0388`, versus `+0.0434` for free additive and `+0.0230` for RoPE:
+RoPE degrades least in relative terms, but its absolute 2048 loss remains
+`0.0675` worse than canonical. The 1536 losses are slightly lower for every
+model, so only the common-model comparisons and the 2048 tail should be treated
+as extrapolation evidence rather than assuming monotonic loss with context.
+
+The initial scalar run also exposed an important semantic distinction: scalar
+features were normalized by the allocated model extent, making their training
+range roughly `[0, 0.5]`. Added independent `scalar_normalization_extent`,
+defaulting to training length, so positions beyond the training horizon produce
+genuinely out-of-range scalar values. RoPE and free-additive results are
+unaffected; only the canonical scalar finalist is rerun with normalization
+extent 1024 before closing this comparison.
