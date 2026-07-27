@@ -33,12 +33,29 @@ content-conditioned paths are zero-gated where possible.
 ```yaml
 position_schema_version: 2
 use_rope: true
+post_position_qk_norm: false
+qk_norm_mode: legacy_layernorm   # legacy_layernorm | method_aware_rms
+position_content_dim: 64
+position_content_coupling: separate  # shared | separate
 
 qk: { ... }
 logit_bias: { ... }
 residual_stream: { ... }
 attention_write: { ... }
 ```
+
+`qk_norm_mode=method_aware_rms` uses one learned per-head RMSNorm at the
+geometry-appropriate site: additive channels use
+`project -> add position -> RMSNorm`, while rotary channels use
+`project -> RMSNorm -> rotate`. New null-conditioning experiments use this
+mode. `post_position_qk_norm` is a legacy control and cannot be combined with
+`method_aware_rms`.
+
+`post_position_qk_norm: true` applies a parameter-free per-head RMS
+normalization after all additive/rotary Q/K position operations. The existing
+learned QK LayerNorm remains before position injection. This isolates positional
+direction from magnitude changes without adding capacity or applying another
+mean-subtracting LayerNorm.
 
 `position_source_schema` is written by the trainer. It is `1` only when all
 active channels came from legacy v1; otherwise it is `2`.
@@ -62,14 +79,22 @@ qk:
     hidden_dim: 128
   output:
     amplitude_init: 0.1
+    amplitude_max: 1.0
     amplitude_parameterization: signed
     learn_amplitude: true
     learn_phase: true
     phase_scale: 1.0
+    additive_normalization: none
+    additive_gain_init: 0.1
+    additive_gain_max: 1.0
+    learn_additive_gain: true
     scale_init: 1.0
+    scale_max: 4.0
     scale_parameterization: exp
   conditioning:
     kind: none
+    source: dedicated
+    activation: tanh
     hidden_dim: 64
     gate_init: 0.0
   qk_coupling: shared
@@ -81,12 +106,20 @@ qk:
 | Application | Geometry | Output and operation |
 | --- | --- | --- |
 | `additive` | `free` | free `[H,L,D]` addend; multiplicative RoPE is skipped |
+| `additive` | `pair_normalized` | free split-half pair coordinates projected to radius `amplitude_init` |
 | `additive` | `amplitude_phase` | canonical `a·cis(ωp+δ)` addend |
 | `rotary` | `phase` | strict `R(θ+δ)` |
 | `rotary` | `projected_phase` | predict a free pair-vector, project onto the RoPE tangent |
+| `rotary` | `unit_pair` | add a zero-init Cartesian pair residual, normalize to a unit pair, then rotate |
 | `rotary` | `scaled_phase` | `s·R(θ+δ)`, with positive/exact-one initialization |
 
 Invalid application/geometry pairs fail during config loading.
+
+`pair_normalized` first constructs the same arbitrary `D`-dimensional output as
+`free`, interprets its first and second halves as paired Cartesian coordinates,
+and normalizes every pair before multiplying by the fixed
+`output.amplitude_init`. Unlike `amplitude_phase`, it does not preserve or
+predict an explicit base Fourier phase.
 
 ### Canonical amplitude+phase AddRoPE
 
@@ -96,6 +129,13 @@ For each pair:
 e_q(p) = a_q(p) · [cos(ωp + δ_q(p)), sin(ωp + δ_q(p))]
 q'(p)  = q(p) + e_q(p)
 ```
+
+Despite the historical name, this mode does **not** apply RoPE to Q/K. The
+phase delta rotates the Fourier addend itself and multiplicative RoPE is
+disabled. A rotary channel instead computes `q'=R(θ+δ)q`. Thus:
+
+- additive Fourier/AddRoPE: `q + a·cis(θ+δ)`;
+- modified RoPE: `R(θ+δ)q`.
 
 K has its own amplitude/phase readouts when coupling permits. The default
 amplitude is `0.1`, deliberately below the poor fixed-unit Phase-1c control.
@@ -111,7 +151,14 @@ independently control the two output heads:
 Disabled component heads and the fully fixed carrier trunk are not instantiated,
 so parameter counts reflect the active mechanism rather than dead parameters.
 `signed` amplitude is unconstrained around that initialization; `softplus`
-keeps it positive.
+keeps it positive. `bounded_sigmoid` maps into `[0, amplitude_max]` and
+initializes exactly at `amplitude_init`.
+
+For additive channels, `additive_normalization=rms` normalizes each token/head
+position branch before applying a bounded gain in
+`[0, additive_gain_max]`. The gain begins at `additive_gain_init` and may be
+fixed with `learn_additive_gain=false`. This controls branch contribution
+before the optional top-level post-position Q/K RMS normalization.
 
 This is distinct from historical v1 `feature_map=add_rope`, which upgrades to
 `euclidean_affine` over Fourier coordinates.
@@ -126,7 +173,14 @@ This is distinct from historical v1 `feature_map=add_rope`, which upgrades to
 
 The zero output remains exact RoPE. `scaled_phase` predicts phase plus pairwise
 radial scale. `scale_parameterization=exp` uses `scale_init*exp(raw)`;
-`linear` uses `scale_init+raw`.
+`linear` uses `scale_init+raw`. `bounded_log` uses
+`scale_init*exp(tanh(raw)*log(scale_max))`, restricting pair scales to
+`[scale_init/scale_max, scale_init*scale_max]`.
+
+`unit_pair` constructs and normalizes
+`[cos(θ)+dx, sin(θ)+dy]`, then converts the valid unit pair back to a relative
+phase for the shared rotary kernel. Zero-initialized `[dx,dy]` is exact RoPE;
+the nonzero base carrier avoids zero-vector normalization.
 
 ## Position inputs
 
@@ -171,7 +225,7 @@ linear/low-rank/MLP mapper when adding scalars or reducing `basis_dim`.
 | --- | --- |
 | `identity` | passthrough |
 | `euclidean_affine` | `(1+scale)·x + offset`, zeros |
-| `linear` | full affine, Xavier/zero |
+| `linear` | full affine, Xavier/zero; adds its input when `residual=true` |
 | `low_rank` | linear `down→up`; residual optional |
 | `bottleneck_mlp` | `down→GELU→up`; rank width |
 | `mlp` | `down→GELU→up`; independent hidden width |
@@ -201,22 +255,91 @@ Head coupling:
 Recent Phase-2 results favor `shared_trunk_separate_readouts` for additive
 linear Q/K.
 
-## Local Q/K content conditioning
+## Dedicated positional content and Q/K conditioning
+
+Content-conditioned Q/K and relative-logit mechanisms receive independent
+low-rank projections of the block-normalized residual:
+
+```text
+c_q = RMS(P_q(norm_x))
+c_k = RMS(P_k(norm_x))
+```
+
+The default width is `64`. `position_content_coupling=shared` reuses one
+projection; `separate` gives Q and K independent projections. New configs do
+not derive conditioning content from attention Q/K. Legacy `source=qk` and
+`source=residual` values remain loadable only to reproduce historical runs.
 
 ```yaml
 conditioning:
-  kind: none               # none | local_residual | content_gate
+  kind: none               # none | adaptive_gain | additive_phase | rope_phase
+  source: dedicated
+  activation: tanh         # tanh | gelu | linear | scaled_sigmoid
   hidden_dim: 64
   gate_init: 0.0
+  target: both             # q | k | both
+  coupling: shared_trunk_separate_readouts  # shared | shared_trunk_separate_readouts
+  phase_bound: 0.25
 ```
 
-- `local_residual`: `base + up(GELU(down([content,base])))`, zero-init up;
-- `content_gate`: `base * (1 + gate_init + Linear(content))`, zero-init linear.
+- `local_residual`: `base + activation(up(GELU(down([content,base]))))`,
+  zero-init up;
+- `content_gate`: a zero-init content projection followed by either legacy
+  `1+tanh(raw)` or `2*sigmoid(raw+bias)` scaling. For `scaled_sigmoid`,
+  `gate_init` is the initial multiplier and must lie in `(0,2)`.
+- `phase_rotation`: only valid for additive `pair_normalized`. A local content
+  network predicts `phase_bound*raw` radians and rotates each
+  already-normalized Cartesian pair. It cannot alter pair radius. `target`
+  selects Q, K, or both; `coupling=shared` reuses one output head, while
+  `shared_trunk_separate_readouts` gives Q and K distinct zero-initialized
+  phase heads over one content trunk.
 
-Conditioning consumes normalized Q/K locally at the same token. It does not
-look across sequence positions, so the Q/K path remains KV-cache compatible.
+- `adaptive_gain`: a zero-initialized scalar head gives
+  `gain=exp(raw)=1` and scales each token/head after Q/K RMSNorm;
+- `additive_phase`: a zero-initialized `D/2` content head changes only the
+  phase of the established additive Fourier carrier;
+- `rope_phase`: a zero-initialized `D/2` content head changes the actual RoPE
+  rotation after Q/K RMSNorm.
+
+These new actuators are token-local and KV-cache compatible. Their final
+projections initialize to zero and have no second zero gate.
 For canonical AddRoPE, conditioning acts on amplitude and phase latents before
 cosine/sine synthesis; it never perturbs pair coordinates independently.
+
+Evaluation diagnostics use one real validation sequence for conditioned
+channels and report branch/QK RMS ratios, p95 ratios, content-to-combined
+cosines, and bounded additive gains. Static zero-content summaries remain
+available when no example is supplied.
+
+## Local result collection
+
+`position_results.py` scans one or more output roots for `metrics.jsonl`.
+Runs may be selected with repeatable `--run-glob`, `--run-regex`, and
+`--exclude-glob` filters. `--step-min`, `--step-max`, and `--every` select a
+history interval; omit `--history` to reduce each run to its final and best
+retained evaluations.
+
+Post-processing presets are:
+
+- `core`: evaluation losses and perplexity;
+- `qk-health`: core metrics plus cross-layer branch maxima, contribution ratios,
+  content/combined cosine, rotary scale, and additive gain summaries;
+- `all`: every final numeric metric.
+
+Additional metric globs may be supplied with repeatable `--metric`. Output
+formats are terminal table, Markdown, CSV, JSON, and JSONL; `--output` writes
+the rendered result to a file.
+
+```bash
+# Final Q/K-health summary for one family.
+python position_results.py model-output/position_bias_phase4_safe_conditioning \
+  --run-glob 'phase4-safe-*' --preset qk-health
+
+# Gate trajectories from steps 1000 through 3000 as CSV.
+python position_results.py model-output \
+  --run-glob '*gate*' --history --step-min 1000 --step-max 3000 \
+  --every 1000 --metric 'position/*/qk/additive_gain_*' --format csv
+```
 
 ## Relative logit channel and Inkling
 
@@ -269,6 +392,8 @@ b(i,j) = b_static(i-j)
 vectors. The per-head outer gate `g_h` is unconstrained and initializes to zero:
 the static linear-logit anchor is therefore exact, while the gate immediately
 receives a gradient. No `tanh` is applied to the factors.
+The content factors consume the dedicated `c_q` and `c_k` projections rather
+than the attention Q/K vectors.
 
 `position_mode` controls which absolute terms are available:
 
@@ -317,7 +442,7 @@ logit-only configurations are allowed.
 ```yaml
 attention_write:
   enabled: false
-  mode: key_position      # key_position | relative_offset
+  mode: key_position      # key_position | relative_offset | query_position
   input: {kind: frozen_fourier, basis_dim: null, theta: null, scalars: []}
   mapper: {kind: identity, residual: false, rank: 32, hidden_dim: 128}
   head_coupling: per_head_independent
@@ -337,6 +462,16 @@ sin(i-j) = sin(i)cos(j) - cos(i)sin(j)
 Relative mode therefore requires pure paired Fourier values (no scalar inputs).
 The mapped summary is merged to model dimension and zero-gated into the
 attention output.
+
+`query_position` is deliberately different: it does not append anything to V
+or use attention weights. It writes the literal query index after `to_out`:
+
+```text
+out_i = O(attn_i) + W_zero(position_i)
+```
+
+The final projection initializes to zero and has no scalar gate, so the write
+is an exact null while the projection receives a gradient on the first step.
 
 ## Parameter-matched controls
 

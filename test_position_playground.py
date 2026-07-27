@@ -20,7 +20,7 @@ from position import (
     normalize_position_config_v2,
     normalize_residual_stream_config,
 )
-from train_gpt import RechunkedTokenDataset, load_config
+from train_gpt import RechunkedTokenDataset, load_config, make_model
 from transformer import (
     Attention,
     Transformer,
@@ -38,11 +38,16 @@ def qk_config(
     qk_coupling: str = "shared",
     head_coupling: str = "per_head_independent",
     conditioning: str = "none",
+    conditioning_source: str = "qk",
+    conditioning_target: str = "both",
+    conditioning_coupling: str = "shared_trunk_separate_readouts",
+    phase_bound: float = 0.25,
     scalars: list[str] | None = None,
     amplitude_init: float = 0.1,
     scale_init: float = 1.0,
     learn_amplitude: bool = True,
     learn_phase: bool = True,
+    mapper_residual: bool | None = None,
 ) -> dict:
     scalars = list(scalars or [])
     basis_dim = 32 if head_coupling == "per_head_joint" else 8
@@ -60,8 +65,11 @@ def qk_config(
             },
             "mapper": {
                 "kind": mapper_kind,
-                "residual": mapper_kind
-                in {"low_rank", "bottleneck_mlp", "mlp"},
+                "residual": (
+                    mapper_kind in {"low_rank", "bottleneck_mlp", "mlp"}
+                    if mapper_residual is None
+                    else mapper_residual
+                ),
                 "rank": 4,
                 "hidden_dim": 12,
             },
@@ -73,6 +81,10 @@ def qk_config(
             },
             "conditioning": {
                 "kind": conditioning,
+                "source": conditioning_source,
+                "target": conditioning_target,
+                "coupling": conditioning_coupling,
+                "phase_bound": phase_bound,
                 "hidden_dim": 12,
             },
             "qk_coupling": qk_coupling,
@@ -110,6 +122,7 @@ def logit_config(
             },
             "conditioning": {
                 "kind": kind,
+                "source": "qk",
                 "num_profiles": 4,
                 "router_hidden_dim": 8,
                 "num_frequencies": 3,
@@ -201,6 +214,22 @@ class PositionBasisTest(unittest.TestCase):
         output = mapper(torch.randn(2, 5, 8))
         self.assertGreater(torch.count_nonzero(output).item(), 0)
 
+    def test_linear_residual_mapper_honors_residual_flag(self):
+        mapper = FeatureMapper(
+            kind="linear",
+            groups=1,
+            input_dim=8,
+            output_dim=8,
+            residual=True,
+            rank=4,
+            hidden_dim=12,
+        )
+        with torch.no_grad():
+            mapper.weight.zero_()
+            mapper.bias.zero_()
+        features = torch.randn(1, 5, 8)
+        torch.testing.assert_close(mapper(features), features)
+
 
 class GeometryAndContentTest(unittest.TestCase):
     def _channel(self, config: dict):
@@ -232,6 +261,217 @@ class GeometryAndContentTest(unittest.TestCase):
             amplitude,
             torch.full_like(amplitude, 0.125),
         )
+
+    def test_free_residual_additive_mapper_preserves_basis_skip(self):
+        config = qk_config(
+            "additive",
+            "free",
+            mapper_kind="linear",
+            mapper_residual=True,
+            qk_coupling="shared_trunk_separate_readouts",
+        )
+        channel = self._channel(config)
+        with torch.no_grad():
+            channel.pipeline.mapper.weight.zero_()
+            channel.pipeline.mapper.bias.zero_()
+        output = channel(9)
+        basis = channel.pipeline.basis(9)
+        expected = basis.unsqueeze(0).expand(4, -1, -1)
+        torch.testing.assert_close(output.q, expected)
+        torch.testing.assert_close(output.k, expected)
+
+    def test_pair_normalized_additive_geometry_has_fixed_pair_radius(self):
+        config = qk_config(
+            "additive",
+            "pair_normalized",
+            mapper_kind="linear",
+            qk_coupling="shared_trunk_separate_readouts",
+            amplitude_init=0.3,
+        )
+        output = self._channel(config)(9)
+        for values in (output.q, output.k):
+            pair_radius = (
+                values[..., :4].square() + values[..., 4:].square()
+            ).sqrt()
+            torch.testing.assert_close(
+                pair_radius,
+                torch.full_like(pair_radius, 0.3),
+                atol=2e-5,
+                rtol=2e-5,
+            )
+
+    def test_phase_rotation_conditioning_starts_as_exact_anchor(self):
+        config = qk_config(
+            "additive",
+            "pair_normalized",
+            mapper_kind="linear",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="phase_rotation",
+            conditioning_source="residual",
+            amplitude_init=0.3,
+        )
+        channel = self._channel(config)
+        content = torch.randn(2, 4, 9, 32)
+        output = channel(9, q_content=content, k_content=content)
+        raw = channel.pipeline(9)
+        expected_q = channel._normalize_additive_pairs(
+            channel._apply_add_readout(raw, channel.q_add_readout)
+        )
+        expected_k = channel._normalize_additive_pairs(
+            channel._apply_add_readout(raw, channel.k_add_readout)
+        )
+        torch.testing.assert_close(
+            output.q,
+            expected_q.unsqueeze(0).expand(2, -1, -1, -1),
+        )
+        torch.testing.assert_close(
+            output.k,
+            expected_k.unsqueeze(0).expand(2, -1, -1, -1),
+        )
+
+    def test_phase_rotation_is_linear_and_preserves_pair_radius(self):
+        config = qk_config(
+            "additive",
+            "pair_normalized",
+            mapper_kind="linear",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="phase_rotation",
+            conditioning_source="residual",
+            conditioning_target="both",
+            conditioning_coupling="shared_trunk_separate_readouts",
+            phase_bound=0.25,
+            amplitude_init=0.3,
+        )
+        channel = self._channel(config)
+        conditioner = channel.phase_rotation_conditioner
+        with torch.no_grad():
+            conditioner.q_up.normal_(std=0.2)
+            conditioner.k_up.normal_(std=0.2)
+        content = torch.randn(2, 4, 9, 32)
+        output = channel(9, q_content=content, k_content=content)
+        for branch, values in (("q", output.q), ("k", output.k)):
+            phase = conditioner.phase(content, branch)
+            self.assertTrue(torch.isfinite(phase).all())
+            pair_radius = (
+                values[..., :4].square() + values[..., 4:].square()
+            ).sqrt()
+            torch.testing.assert_close(
+                pair_radius,
+                torch.full_like(pair_radius, 0.3),
+                atol=2e-5,
+                rtol=2e-5,
+            )
+
+    def test_phase_rotation_targeting_and_zero_init_gradients(self):
+        config = qk_config(
+            "additive",
+            "pair_normalized",
+            mapper_kind="linear",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="phase_rotation",
+            conditioning_source="residual",
+            conditioning_target="q",
+            amplitude_init=0.3,
+        )
+        channel = self._channel(config)
+        content = torch.randn(2, 4, 9, 32)
+        output = channel(9, q_content=content, k_content=content)
+        probe = torch.randn_like(output.q)
+        (output.q * probe).sum().backward()
+        conditioner = channel.phase_rotation_conditioner
+        self.assertIsNotNone(conditioner.q_up.grad)
+        self.assertGreater(conditioner.q_up.grad.abs().sum().item(), 0)
+        self.assertIsNone(conditioner.k_up)
+        self.assertEqual(output.k.ndim, 3)
+
+    def test_additive_content_phase_starts_at_carrier_anchor_and_opens(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="additive_phase",
+            conditioning_source="dedicated",
+            conditioning_coupling="shared_trunk_separate_readouts",
+            amplitude_init=0.3,
+        )
+        channel = self._channel(config)
+        content = torch.randn(2, 4, 9, 8)
+        output = channel(9, q_content=content, k_content=content)
+        expected = torch.cat(
+            (
+                0.3 * channel.base_cos[:9],
+                0.3 * channel.base_sin[:9],
+            ),
+            dim=-1,
+        )[None, None].expand(2, 4, -1, -1)
+        torch.testing.assert_close(output.q, expected)
+        torch.testing.assert_close(output.k, expected)
+
+        probe = torch.randn_like(output.q)
+        (output.q * probe).sum().backward()
+        actuator = channel.content_actuator
+        self.assertGreater(actuator.q_up.grad.abs().sum().item(), 0)
+
+    def test_rope_content_phase_and_adaptive_gain_are_exact_nulls(self):
+        content = torch.randn(2, 4, 9, 8)
+        phase_channel = self._channel(
+            qk_config(
+                "rotary",
+                "phase",
+                conditioning="rope_phase",
+                conditioning_source="dedicated",
+            )
+        )
+        phase = phase_channel(9, q_content=content, k_content=content)
+        self.assertEqual(torch.count_nonzero(phase.q).item(), 0)
+        self.assertEqual(torch.count_nonzero(phase.k).item(), 0)
+
+        gain_channel = self._channel(
+            qk_config(
+                "rotary",
+                "phase",
+                conditioning="adaptive_gain",
+                conditioning_source="dedicated",
+            )
+        )
+        gain = gain_channel(9, q_content=content, k_content=content)
+        torch.testing.assert_close(gain.q_gain, torch.ones_like(gain.q_gain))
+        torch.testing.assert_close(gain.k_gain, torch.ones_like(gain.k_gain))
+
+    def test_dedicated_position_content_is_low_rank_and_configurable(self):
+        config = qk_config(
+            "rotary",
+            "phase",
+            conditioning="rope_phase",
+            conditioning_source="dedicated",
+        )
+        for coupling in ("shared", "separate"):
+            with self.subTest(coupling=coupling):
+                attention = Attention(
+                    32,
+                    4,
+                    qk_config=config,
+                    position_content_dim=6,
+                    position_content_coupling=coupling,
+                    qk_norm_mode="method_aware_rms",
+                )
+                q_content, k_content = attention.position_content(
+                    torch.randn(2, 7, 32)
+                )
+                self.assertEqual(q_content.shape, (2, 4, 7, 6))
+                torch.testing.assert_close(
+                    q_content.square().mean(-1),
+                    torch.ones_like(q_content[..., 0]),
+                    atol=2e-5,
+                    rtol=2e-5,
+                )
+                if coupling == "shared":
+                    torch.testing.assert_close(q_content, k_content)
+                else:
+                    self.assertIsNot(
+                        attention.position_content.q_projection,
+                        attention.position_content.k_projection,
+                    )
 
     def test_addrope_components_can_be_isolated(self):
         configs = {
@@ -289,6 +529,15 @@ class GeometryAndContentTest(unittest.TestCase):
         self.assertEqual(projected.q.shape, (4, 9, 4))
         self.assertEqual(torch.count_nonzero(projected.q).item(), 0)
 
+        unit_pair = self._channel(qk_config("rotary", "unit_pair"))(9)
+        self.assertEqual(unit_pair.q.shape, (4, 9, 4))
+        torch.testing.assert_close(
+            unit_pair.q,
+            torch.zeros_like(unit_pair.q),
+            atol=1e-6,
+            rtol=0,
+        )
+
         scaled = self._channel(
             qk_config("rotary", "scaled_phase", scale_init=1.0)
         )(9)
@@ -297,6 +546,47 @@ class GeometryAndContentTest(unittest.TestCase):
             scaled.q_scale,
             torch.ones_like(scaled.q_scale),
         )
+
+    def test_bounded_amplitude_and_additive_gain_control_branch_rms(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            qk_coupling="shared_trunk_separate_readouts",
+            amplitude_init=0.3,
+        )
+        config["output"].update(
+            {
+                "amplitude_parameterization": "bounded_sigmoid",
+                "amplitude_max": 1.0,
+                "additive_normalization": "rms",
+                "additive_gain_init": 0.2,
+                "additive_gain_max": 0.5,
+            }
+        )
+        channel = self._channel(config)
+        with torch.no_grad():
+            channel.q_amplitude_head.bias.fill_(1000.0)
+            channel.k_amplitude_head.bias.fill_(-1000.0)
+        output = channel(8)
+        torch.testing.assert_close(
+            output.q.float().square().mean(dim=-1).sqrt(),
+            torch.full_like(output.q[..., 0], 0.2),
+            atol=2e-5,
+            rtol=2e-5,
+        )
+        self.assertLessEqual(output.k.abs().max().item(), 0.2)
+
+    def test_bounded_rotary_scale_limits_pair_anisotropy(self):
+        config = qk_config("rotary", "scaled_phase")
+        config["output"].update(
+            {"scale_parameterization": "bounded_log", "scale_max": 2.0}
+        )
+        channel = self._channel(config)
+        with torch.no_grad():
+            channel.scale_head.bias.fill_(1000.0)
+        output = channel(8)
+        self.assertLessEqual(output.q_scale.max().item(), 2.0)
+        self.assertGreaterEqual(output.k_scale.min().item(), 0.5)
 
     def test_local_conditioners_are_initially_controlled(self):
         base_config = qk_config(
@@ -372,6 +662,45 @@ class GeometryAndContentTest(unittest.TestCase):
         self.assertTrue(torch.all(corrected >= base))
         self.assertTrue(torch.all(corrected <= base + 1.0))
 
+    def test_scaled_sigmoid_gate_starts_at_one_and_stays_bounded(self):
+        content = torch.randn(2, 1, 3, 4)
+        base = torch.ones(1, 3, 2)
+        conditioner = GroupedContentConditioner(
+            kind="content_gate",
+            groups=1,
+            content_dim=4,
+            output_dim=2,
+            hidden_dim=4,
+            gate_init=1.0,
+            activation="scaled_sigmoid",
+        )
+        expected = base.unsqueeze(0).expand(2, -1, -1, -1)
+        torch.testing.assert_close(conditioner(base, content), expected)
+        with torch.no_grad():
+            conditioner.gate_bias.fill_(1000.0)
+        self.assertLessEqual(conditioner(base, content).max().item(), 2.0)
+
+    def test_residual_content_source_uses_dedicated_conditioners(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="content_gate",
+        )
+        config["conditioning"].update(
+            {
+                "source": "residual",
+                "activation": "scaled_sigmoid",
+                "gate_init": 1.0,
+            }
+        )
+        channel = self._channel(config)
+        self.assertEqual(channel.q_conditioner.content_dim, 32)
+        self.assertIsNot(channel.q_conditioner, channel.k_conditioner)
+        residual = torch.randn(2, 4, 8, 32)
+        output = channel(8, q_content=residual, k_content=residual)
+        self.assertEqual(output.q.shape, (2, 4, 8, 8))
+
     def test_amplitude_phase_conditioning_preserves_latent_synthesis(self):
         config = qk_config(
             "additive",
@@ -443,6 +772,38 @@ class GeometryAndContentTest(unittest.TestCase):
         handle.remove()
         self.assertEqual(captured["shape"], (2, 8, 32))
         self.assertEqual(output.shape, (2, 8, 64))
+
+    def test_real_content_position_diagnostics_report_mixture(self):
+        config = qk_config(
+            "additive",
+            "free",
+            mapper_kind="linear",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="content_gate",
+        )
+        model = Transformer(
+            dim=32,
+            depth=1,
+            heads=4,
+            ff_mult=2,
+            vocab_size=64,
+            max_seq_len=16,
+            qk_config=config,
+            logit_bias_config={"enabled": False},
+        ).eval()
+        ids = torch.randint(0, 64, (1, 8))
+        metrics, _ = model.position_diagnostics(
+            sequence_length=8,
+            input_ids=ids,
+        )
+        self.assertIn(
+            "position/layer_00/qk/addend_q_to_q_ratio_p95",
+            metrics,
+        )
+        self.assertIn(
+            "position/layer_00/qk/q_content_combined_cosine_mean",
+            metrics,
+        )
 
 
 class ResidualAndWriteTest(unittest.TestCase):
@@ -531,6 +892,48 @@ class ResidualAndWriteTest(unittest.TestCase):
         self.assertFalse(residual_only.blocks[0].attn.multiplicative_rope)
         self.assertEqual(residual_only(ids).shape, (2, 8, 64))
 
+    def test_post_position_qk_norm_is_parameter_free_unit_rms(self):
+        attention = Attention(
+            32,
+            4,
+            max_seq_len=16,
+            post_position_qk_norm=True,
+        )
+        value = torch.randn(2, 4, 8, 8) * 7.0 + 3.0
+        normalized = attention._unit_rms(value)
+        torch.testing.assert_close(
+            normalized.float().square().mean(dim=-1),
+            torch.ones_like(normalized[..., 0].float()),
+            atol=2e-6,
+            rtol=2e-6,
+        )
+        self.assertEqual(
+            sum(p.numel() for p in attention.parameters()),
+            sum(
+                p.numel()
+                for p in Attention(32, 4, max_seq_len=16).parameters()
+            ),
+        )
+
+    def test_static_qk_channel_does_not_build_or_request_content(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            learn_amplitude=False,
+            learn_phase=False,
+        )
+        config["conditioning"]["source"] = "dedicated"
+        attention = Attention(
+            32,
+            4,
+            max_seq_len=16,
+            qk_config=config,
+            qk_norm_mode="method_aware_rms",
+        )
+        self.assertIsNone(attention.position_content)
+        output = attention(torch.randn(2, 8, 32))
+        self.assertEqual(output.shape, (2, 8, 32))
+
     def test_rope_disable_rejects_rotary_qk_channel(self):
         common = self._common()
         common["qk_config"] = qk_config("rotary", "phase")
@@ -539,6 +942,32 @@ class ResidualAndWriteTest(unittest.TestCase):
                 **common,
                 use_rope=False,
             )
+
+    def test_method_aware_rms_normalizes_after_additive_position(self):
+        config = qk_config(
+            "additive",
+            "free",
+            qk_coupling="shared",
+        )
+        attention = Attention(
+            32,
+            4,
+            max_seq_len=16,
+            qk_config=config,
+            qk_norm_mode="method_aware_rms",
+        )
+        captured = {}
+        def capture_q_input(_module, args):
+            captured["q_input"] = args[0]
+
+        handle = attention.q_norm.register_forward_pre_hook(capture_q_input)
+        x = torch.randn(2, 7, 32)
+        attention(x)
+        handle.remove()
+        projected = attention._split_heads(attention.to_q(x))
+        addend = attention.qk_position(7, dtype=projected.dtype).q[None]
+        torch.testing.assert_close(captured["q_input"], projected + addend)
+        self.assertIsInstance(attention.q_norm, torch.nn.RMSNorm)
 
     def test_attention_write_modes_and_zero_gate(self):
         ids = torch.randint(0, 64, (2, 8))
@@ -568,6 +997,35 @@ class ResidualAndWriteTest(unittest.TestCase):
                     atol=1e-6,
                     rtol=1e-5,
                 )
+
+    def test_query_position_write_is_exact_null_with_live_final_gradient(self):
+        config = normalize_attention_write_config(
+            {
+                "enabled": True,
+                "mode": "query_position",
+            },
+            model_dim=32,
+            heads=4,
+            rope_theta=10_000.0,
+        )
+        torch.manual_seed(17)
+        baseline = Transformer(**self._common()).eval()
+        torch.manual_seed(17)
+        candidate = Transformer(
+            **self._common(),
+            attention_write_config=config,
+        ).eval()
+        candidate.load_state_dict(baseline.state_dict(), strict=False)
+        ids = torch.randint(0, 64, (2, 8))
+        torch.testing.assert_close(baseline(ids), candidate(ids))
+
+        candidate(ids).sum().backward()
+        channel = candidate.blocks[0].attn.position_write
+        self.assertIsNone(channel.gate)
+        self.assertGreater(
+            channel.query_projection.weight.grad.abs().sum().item(),
+            0,
+        )
 
 
 class InklingAndConfigTest(unittest.TestCase):
@@ -773,6 +1231,12 @@ class InklingAndConfigTest(unittest.TestCase):
         self.assertFalse(config.use_rope)
         self.assertEqual(config.pos_variant, "none")
         self.assertEqual(config.position_source_schema, 2)
+
+    def test_post_position_qk_norm_round_trips(self):
+        config = self._load_payload({"post_position_qk_norm": True})
+        self.assertTrue(config.post_position_qk_norm)
+        model = make_model(config, 64)
+        self.assertTrue(model.blocks[0].attn.post_position_qk_norm)
 
     def test_training_model_and_evaluation_lengths_are_independent(self):
         config = self._load_payload(

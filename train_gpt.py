@@ -37,6 +37,7 @@ from position import (
     deep_merge,
     legacy_position_run_tag,
     normalize_attention_write_config,
+    normalize_position_content_config,
     normalize_residual_stream_config,
     resolve_channel_config,
     v2_position_run_tag,
@@ -167,6 +168,10 @@ DEFAULT_CONFIG = {
     "use_rope": True,
     "rope_theta": 10000.0,
     "qk_norm": True,
+    "post_position_qk_norm": False,
+    "qk_norm_mode": "legacy_layernorm",
+    "position_content_dim": 64,
+    "position_content_coupling": "separate",
     # Legacy convenience preset. Nested qk/logit_bias configs are source of truth.
     # Phase 1: rope | add_rope | linear | low_rank | bottleneck_mlp | mlp_rope.
     # Content-routed presets: inkling_table | inkling_cosnet.
@@ -282,6 +287,12 @@ def position_run_tag(cfg: dict) -> str:
                 "hidden_size": cfg["hidden_size"],
                 "n_head": cfg["n_head"],
                 "use_rope": cfg["use_rope"],
+                "post_position_qk_norm": cfg["post_position_qk_norm"],
+                "qk_norm_mode": cfg["qk_norm_mode"],
+                "position_content_dim": cfg["position_content_dim"],
+                "position_content_coupling": cfg[
+                    "position_content_coupling"
+                ],
                 "rope_theta": cfg["rope_theta"],
                 "extent": cfg.get("rel_extent") or cfg["model_position_extent"],
             },
@@ -394,6 +405,28 @@ def load_config(cli_args):
     rope_theta = float(cfg["rope_theta"])
     if not isinstance(cfg["use_rope"], bool):
         raise TypeError("use_rope must be a boolean")
+    if not isinstance(cfg["post_position_qk_norm"], bool):
+        raise TypeError("post_position_qk_norm must be a boolean")
+    if cfg["qk_norm_mode"] not in {
+        "legacy_layernorm",
+        "method_aware_rms",
+    }:
+        raise ValueError(
+            "qk_norm_mode must be 'legacy_layernorm' or 'method_aware_rms'"
+        )
+    if (
+        cfg["qk_norm_mode"] == "method_aware_rms"
+        and cfg["post_position_qk_norm"]
+    ):
+        raise ValueError(
+            "method_aware_rms requires post_position_qk_norm=false"
+        )
+    content_cfg = normalize_position_content_config(
+        cfg["position_content_dim"],
+        cfg["position_content_coupling"],
+    )
+    cfg["position_content_dim"] = content_cfg["dim"]
+    cfg["position_content_coupling"] = content_cfg["coupling"]
     qk_config, qk_source = resolve_channel_config(
         "qk",
         preset_fragment=preset_config.get("qk"),
@@ -613,6 +646,10 @@ def make_model(args, vocab_size):
         use_rope=args.use_rope,
         rope_theta=args.rope_theta,
         qk_norm=args.qk_norm,
+        post_position_qk_norm=args.post_position_qk_norm,
+        qk_norm_mode=args.qk_norm_mode,
+        position_content_dim=args.position_content_dim,
+        position_content_coupling=args.position_content_coupling,
         rel_extent=args.rel_extent,
         qk_config=args.qk,
         logit_bias_config=args.logit_bias,
@@ -780,11 +817,14 @@ def evaluate(
         if include_extrapolation
         else {args.training_length: eval_dataloaders[args.training_length]}
     )
+    diagnostic_input_ids = None
     for context_length, eval_dataloader in active_dataloaders.items():
         losses = []
         for idx, batch in enumerate(eval_dataloader):
             input_ids = batch["input_ids"][:, :-1]
             targets = batch["input_ids"][:, 1:]
+            if context_length == args.training_length and diagnostic_input_ids is None:
+                diagnostic_input_ids = input_ids[:1].detach()
             loss = model(input_ids=input_ids, targets=targets)
             losses.append(accelerator.gather_for_metrics(loss.detach().float()))
             if (
@@ -818,6 +858,7 @@ def evaluate(
         diagnostic_model = diagnostic_model._orig_mod
     position_metrics, position_profiles = diagnostic_model.position_diagnostics(
         sequence_length=args.training_length,
+        input_ids=diagnostic_input_ids,
     )
     if accelerator.is_main_process:
         metrics = {
@@ -910,6 +951,10 @@ def main():
             "residual_stream": args.residual_stream,
             "attention_write": args.attention_write,
             "use_rope": args.use_rope,
+            "post_position_qk_norm": args.post_position_qk_norm,
+            "qk_norm_mode": args.qk_norm_mode,
+            "position_content_dim": args.position_content_dim,
+            "position_content_coupling": args.position_content_coupling,
             "attn_impl": args.attn_impl,
             "training_length": args.training_length,
             "model_position_extent": args.model_position_extent,

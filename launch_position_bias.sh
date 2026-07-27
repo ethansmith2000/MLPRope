@@ -21,7 +21,7 @@ LOG_DIR="${SCRIPT_DIR}/logs"
 CONFIG_DIR="${SCRIPT_DIR}/sweep_configs"
 WANDB_PROJECT="${WANDB_PROJECT:-mlprope-position-bias}"
 WANDB_ENTITY="${WANDB_ENTITY:-ethansmith2000}"
-EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | phase1b | phase1c | phase2_coupling | phase2_followup | phase3_geometry | phase3_amplitude_followup | phase3_promotion | phase3_basis_screen | phase3_geometry_transfer | phase3_frontier_screen | phase3_conditioning_retry | phase3_coupling_transfer | phase3_structural_followup | phase3_pairwise_logit | phase3_addrope_components | phase3_residual_sector | phase3_final_decision | phase3_compact_basis | phase4_extrapolation | individual | all
+EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | ... | phase4_phase_conditioning | phase5_null_conditioning | individual | all
 if [[ "${EXPERIMENT_FAMILY}" == "phase1b" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1b"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase1c" ]]; then
@@ -60,6 +60,16 @@ elif [[ "${EXPERIMENT_FAMILY}" == "phase3_compact_basis" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase3_compact_basis"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase4_extrapolation" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase4_extrapolation"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase4_post_qk_norm" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase4_post_qk_norm"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase4_safe_conditioning" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase4_safe_conditioning"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase4_additive_geometry" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase4_additive_geometry"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase4_phase_conditioning" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase4_phase_conditioning"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase5_null_conditioning" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase5_null_conditioning"
 else
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1"
 fi
@@ -91,7 +101,12 @@ if [[ -z "${GPU_SELECTOR:-}" ]]; then
     || "${EXPERIMENT_FAMILY}" == "phase3_residual_sector" \
     || "${EXPERIMENT_FAMILY}" == "phase3_final_decision" \
     || "${EXPERIMENT_FAMILY}" == "phase3_compact_basis" \
-    || "${EXPERIMENT_FAMILY}" == "phase4_extrapolation" ]]; then
+    || "${EXPERIMENT_FAMILY}" == "phase4_extrapolation" \
+    || "${EXPERIMENT_FAMILY}" == "phase4_post_qk_norm" \
+    || "${EXPERIMENT_FAMILY}" == "phase4_safe_conditioning" \
+    || "${EXPERIMENT_FAMILY}" == "phase4_additive_geometry" \
+    || "${EXPERIMENT_FAMILY}" == "phase4_phase_conditioning" \
+    || "${EXPERIMENT_FAMILY}" == "phase5_null_conditioning" ]]; then
     GPU_SELECTOR="any"
   else
     GPU_SELECTOR="6,7"
@@ -132,6 +147,16 @@ elif [[ "${EXPERIMENT_FAMILY}" == "phase3_compact_basis" ]]; then
   CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase3_compact_basis"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase4_extrapolation" ]]; then
   CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase4_extrapolation"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase4_post_qk_norm" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase4_post_qk_norm"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase4_safe_conditioning" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase4_safe_conditioning"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase4_additive_geometry" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase4_additive_geometry"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase4_phase_conditioning" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase4_phase_conditioning"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase5_null_conditioning" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase5_null_conditioning"
 fi
 PIDS=()
 JOB_NAMES=()
@@ -347,6 +372,7 @@ emit_v2_playground_seed_variant() {
   local residual_json='{"enabled": false}'
   local write_json='{"enabled": false}'
   local use_rope=true
+  local post_position_qk_norm=false
   if [[ $# -ge 6 ]]; then
     residual_json="$6"
   fi
@@ -356,14 +382,17 @@ emit_v2_playground_seed_variant() {
   if [[ $# -ge 8 ]]; then
     use_rope="$8"
   fi
+  if [[ $# -ge 9 ]]; then
+    post_position_qk_norm="$9"
+  fi
   local cfg_file="${CONFIG_DIR}/${job_name}.json"
   write_common_config "${cfg_file}" \
-    "\"seed\": ${seed}, \"use_rope\": ${use_rope}, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${logit_json}, \"residual_stream\": ${residual_json}, \"attention_write\": ${write_json}, \"attn_impl\": \"${attn_impl}\", \"run_name\": \"${job_name}\""
+    "\"seed\": ${seed}, \"use_rope\": ${use_rope}, \"post_position_qk_norm\": ${post_position_qk_norm}, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${logit_json}, \"residual_stream\": ${residual_json}, \"attention_write\": ${write_json}, \"attn_impl\": \"${attn_impl}\", \"run_name\": \"${job_name}\""
   run_job "${job_name}" "${cfg_file}"
 }
 
 # Extended Q/K helper. Geometry:
-#   additive/free | additive/amplitude_phase
+#   additive/free | additive/pair_normalized | additive/amplitude_phase
 #   rotary/phase | rotary/projected_phase | rotary/scaled_phase
 # Input kind:
 #   frozen_fourier | learned_temperature_fourier | learned_frequency_fourier
@@ -389,6 +418,50 @@ v2_qk_playground_json() {
 JSON
 }
 
+v2_safe_qk_json() {
+  local application="$1"
+  local geometry="$2"
+  local conditioning="${3:-none}"
+  local content_source="${4:-residual}"
+  local activation="${5:-scaled_sigmoid}"
+  local gate_init="${6:-1.0}"
+  local additive_normalization="none"
+  if [[ "${application}" == "additive" ]]; then
+    additive_normalization="rms"
+  fi
+  cat <<JSON
+{"enabled": true, "application": "${application}", "geometry": "${geometry}", "input": {"kind": "frozen_fourier", "basis_dim": null, "theta": null, "scalars": ["normalized_position", "log_position"]}, "mapper": {"kind": "linear", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "output": {"amplitude_init": 0.3, "amplitude_max": 1.0, "amplitude_parameterization": "bounded_sigmoid", "learn_amplitude": true, "learn_phase": true, "phase_scale": 1.0, "additive_normalization": "${additive_normalization}", "additive_gain_init": 0.212132, "additive_gain_max": 0.5, "learn_additive_gain": true, "scale_init": 1.0, "scale_max": 2.0, "scale_parameterization": "bounded_log"}, "conditioning": {"kind": "${conditioning}", "source": "${content_source}", "activation": "${activation}", "hidden_dim": 32, "gate_init": ${gate_init}}, "qk_coupling": "shared_trunk_separate_readouts", "head_coupling": "per_head_independent"}
+JSON
+}
+
+v2_phase_conditioned_pair_json() {
+  local target="$1" # q | k | both
+  local conditioner_coupling="$2" # shared | shared_trunk_separate_readouts
+  local phase_bound="${3:-0.25}"
+  cat <<JSON
+{"enabled": true, "application": "additive", "geometry": "pair_normalized", "input": {"kind": "frozen_fourier", "basis_dim": null, "theta": null, "scalars": []}, "mapper": {"kind": "linear", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "output": {"amplitude_init": 0.3, "amplitude_parameterization": "signed", "learn_amplitude": true, "learn_phase": true, "phase_scale": 1.0, "additive_normalization": "none", "scale_init": 1.0, "scale_parameterization": "exp"}, "conditioning": {"kind": "phase_rotation", "source": "residual", "activation": "tanh", "hidden_dim": 32, "gate_init": 0.0, "target": "${target}", "coupling": "${conditioner_coupling}", "phase_bound": ${phase_bound}}, "qk_coupling": "shared_trunk_separate_readouts", "head_coupling": "per_head_independent"}
+JSON
+}
+
+v2_null_conditioned_qk_json() {
+  local kind="$1" # adaptive_gain | additive_phase | rope_phase
+  local coupling="$2" # shared | shared_trunk_separate_readouts
+  local application="rotary"
+  local geometry="phase"
+  local learn_amplitude=true
+  local learn_phase=false
+  local amplitude_init=0.3
+  if [[ "${kind}" == "additive_phase" ]]; then
+    application="additive"
+    geometry="amplitude_phase"
+    learn_amplitude=false
+    learn_phase=false
+  fi
+  cat <<JSON
+{"enabled": true, "application": "${application}", "geometry": "${geometry}", "input": {"kind": "frozen_fourier", "basis_dim": null, "theta": null, "scalars": []}, "mapper": {"kind": "identity", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "output": {"amplitude_init": ${amplitude_init}, "amplitude_parameterization": "signed", "learn_amplitude": ${learn_amplitude}, "learn_phase": ${learn_phase}, "phase_scale": 1.0, "scale_init": 1.0, "scale_parameterization": "exp"}, "conditioning": {"kind": "${kind}", "source": "dedicated", "activation": "linear", "hidden_dim": 32, "target": "both", "coupling": "${coupling}", "phase_bound": 0.25}, "qk_coupling": "shared", "head_coupling": "per_head_independent"}
+JSON
+}
+
 v2_inkling_json() {
   local kind="$1" # inkling_table | inkling_cosnet
   local profiles="${2:-8}"
@@ -403,8 +476,9 @@ v2_pairwise_logit_json() {
   local position_mode="$1" # relative_only | query_absolute | full_absolute
   local pair_rank="${2:-8}"
   local head_coupling="${3:-per_head_independent}"
+  local content_source="${4:-qk}"
   cat <<JSON
-{"enabled": true, "application": "logit_bias", "geometry": "scalar_curve", "input": {"kind": "frozen_fourier", "basis_dim": null, "theta": null, "scalars": []}, "mapper": {"kind": "linear", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "conditioning": {"kind": "pairwise_low_rank", "pair_rank": ${pair_rank}, "position_mode": "${position_mode}", "gate_init": 0.0}, "head_coupling": "${head_coupling}"}
+{"enabled": true, "application": "logit_bias", "geometry": "scalar_curve", "input": {"kind": "frozen_fourier", "basis_dim": null, "theta": null, "scalars": []}, "mapper": {"kind": "linear", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "conditioning": {"kind": "pairwise_low_rank", "source": "${content_source}", "pair_rank": ${pair_rank}, "position_mode": "${position_mode}", "gate_init": 0.0}, "head_coupling": "${head_coupling}"}
 JSON
 }
 
@@ -530,6 +604,36 @@ want_phase3_compact_basis_family() {
 want_phase4_extrapolation_family() {
   local family="$1"
   [[ "${EXPERIMENT_FAMILY}" == "phase4_extrapolation" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase4_post_qk_norm_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase4_post_qk_norm" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase4_safe_conditioning_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase4_safe_conditioning" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase4_additive_geometry_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase4_additive_geometry" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase4_phase_conditioning_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase4_phase_conditioning" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase5_null_conditioning_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase5_null_conditioning" \
     || "${EXPERIMENT_FAMILY}" == "${family}" ]]
 }
 
@@ -1438,6 +1542,256 @@ if want_phase4_extrapolation_family "extrapolation_story"; then
     "\"seed\": ${seed}, ${length_json}, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${canonical_qk}, \"logit_bias\": ${linear_logit}, \"residual_stream\": {\"enabled\": false}, \"attention_write\": {\"enabled\": false}, \"attn_impl\": \"flex\", \"run_name\": \"${job_name}\"" \
     10000 1000
   run_job "${job_name}" "${cfg_file}"
+fi
+
+# Post-position RMS normalization screen. Existing seed-123 5k anchors are reused
+# for canonical AddRoPE, scaled rotary, and the two bounded conditioners. Free
+# additive receives both cells because no exact scalar-augmented 5k anchor exists.
+if want_phase4_post_qk_norm_family "post_qk_norm_story"; then
+  seed=123
+  steps_tag="s${MAX_TRAIN_STEPS}"
+  suffix="${steps_tag}-h${HIDDEN_SIZE}d${DEPTH}"
+  scalar_features='["normalized_position", "log_position"]'
+  disabled_channel='{"enabled": false}'
+  linear_logit="$(v2_logit_json linear false)"
+  canonical_qk="$(
+    v2_qk_playground_json \
+      additive amplitude_phase linear false \
+      shared_trunk_separate_readouts frozen_fourier none \
+      per_head_independent 0.3 "${scalar_features}"
+  )"
+  free_qk="$(
+    v2_qk_playground_json \
+      additive free linear false \
+      shared_trunk_separate_readouts frozen_fourier none \
+      per_head_independent 0.3 "${scalar_features}"
+  )"
+  local_qk="$(
+    v2_qk_playground_json \
+      additive amplitude_phase linear false \
+      shared_trunk_separate_readouts frozen_fourier local_residual \
+      per_head_independent 0.3 "${scalar_features}" 32
+  )"
+  gated_qk="$(
+    v2_qk_playground_json \
+      additive amplitude_phase linear false \
+      shared_trunk_separate_readouts frozen_fourier content_gate \
+      per_head_independent 0.3 "${scalar_features}" 32
+  )"
+  scaled_qk="$(
+    v2_qk_playground_json \
+      rotary scaled_phase linear false \
+      shared_trunk_separate_readouts frozen_fourier none \
+      per_head_independent 0.3 "${scalar_features}"
+  )"
+
+  emit_v2_playground_seed_variant \
+    "phase4-postnorm-canonical-seed${seed}-${suffix}" \
+    "${seed}" flex "${canonical_qk}" "${linear_logit}" \
+    "${disabled_channel}" "${disabled_channel}" true true
+  emit_v2_playground_seed_variant \
+    "phase4-postnorm-free-control-seed${seed}-${suffix}" \
+    "${seed}" flex "${free_qk}" "${linear_logit}"
+  emit_v2_playground_seed_variant \
+    "phase4-postnorm-free-seed${seed}-${suffix}" \
+    "${seed}" flex "${free_qk}" "${linear_logit}" \
+    "${disabled_channel}" "${disabled_channel}" true true
+  emit_v2_playground_seed_variant \
+    "phase4-postnorm-local-residual-seed${seed}-${suffix}" \
+    "${seed}" flex "${local_qk}" "${linear_logit}" \
+    "${disabled_channel}" "${disabled_channel}" true true
+  emit_v2_playground_seed_variant \
+    "phase4-postnorm-content-gate-seed${seed}-${suffix}" \
+    "${seed}" flex "${gated_qk}" "${linear_logit}" \
+    "${disabled_channel}" "${disabled_channel}" true true
+  emit_v2_playground_seed_variant \
+    "phase4-postnorm-scaled-rotary-seed${seed}-${suffix}" \
+    "${seed}" flex "${scaled_qk}" "${linear_logit}" \
+    "${disabled_channel}" "${disabled_channel}" true true
+fi
+
+# Safe contribution and content-source redesign. All additive variants normalize
+# the completed position branch, mix it through a bounded gain, and normalize Q/K
+# again after injection. Conditioning source and activation are isolated.
+if want_phase4_safe_conditioning_family "safe_conditioning_story"; then
+  seed=123
+  steps_tag="s${MAX_TRAIN_STEPS}"
+  suffix="${steps_tag}-h${HIDDEN_SIZE}d${DEPTH}"
+  disabled_channel='{"enabled": false}'
+  linear_logit="$(v2_logit_json linear false)"
+  safe_control="$(v2_safe_qk_json additive amplitude_phase none residual linear 0.0)"
+  residual_sigmoid_gate="$(
+    v2_safe_qk_json additive amplitude_phase content_gate residual scaled_sigmoid 1.0
+  )"
+  qk_sigmoid_gate="$(
+    v2_safe_qk_json additive amplitude_phase content_gate qk scaled_sigmoid 1.0
+  )"
+  residual_tanh_gate="$(
+    v2_safe_qk_json additive amplitude_phase content_gate residual tanh 0.0
+  )"
+  residual_gelu_local="$(
+    v2_safe_qk_json additive amplitude_phase local_residual residual gelu 0.0
+  )"
+  residual_tanh_local="$(
+    v2_safe_qk_json additive amplitude_phase local_residual residual tanh 0.0
+  )"
+  bounded_scaled_rotary="$(
+    v2_safe_qk_json rotary scaled_phase none qk linear 0.0
+  )"
+  unit_pair_rotary="$(
+    v2_safe_qk_json rotary unit_pair none qk linear 0.0
+  )"
+
+  for spec in \
+    "safe-control|${safe_control}" \
+    "residual-sigmoid-gate|${residual_sigmoid_gate}" \
+    "qk-sigmoid-gate|${qk_sigmoid_gate}" \
+    "residual-tanh-gate|${residual_tanh_gate}" \
+    "residual-gelu-local|${residual_gelu_local}" \
+    "residual-tanh-local|${residual_tanh_local}" \
+    "bounded-scaled-rotary|${bounded_scaled_rotary}" \
+    "unit-pair-rotary|${unit_pair_rotary}"
+  do
+    label="${spec%%|*}"
+    qk_json="${spec#*|}"
+    emit_v2_playground_seed_variant \
+      "phase4-safe-${label}-seed${seed}-${suffix}" \
+      "${seed}" flex "${qk_json}" "${linear_logit}" \
+      "${disabled_channel}" "${disabled_channel}" true true
+  done
+fi
+
+# Close the two remaining additive-geometry cells against the completed
+# phase3-promotion seed-123 anchors: free direct + linear logit (4.0615) and
+# canonical AddRoPE + linear logit (4.0525/4.0515 at amplitudes 0.3/1.0).
+# Every new cell uses the same basis, mapper parameters, Q/K coupling, head
+# coupling, and static linear-logit channel as the free-direct anchor.
+if want_phase4_additive_geometry_family "additive_geometry_story"; then
+  seed=123
+  linear_logit="$(v2_logit_json linear false)"
+  residual_qk="$(
+    v2_qk_playground_json \
+      additive free linear true \
+      shared_trunk_separate_readouts frozen_fourier none \
+      per_head_independent 0.1 '[]'
+  )"
+  pair03_qk="$(
+    v2_qk_playground_json \
+      additive pair_normalized linear false \
+      shared_trunk_separate_readouts frozen_fourier none \
+      per_head_independent 0.3 '[]'
+  )"
+  pair10_qk="$(
+    v2_qk_playground_json \
+      additive pair_normalized linear false \
+      shared_trunk_separate_readouts frozen_fourier none \
+      per_head_independent 1.0 '[]'
+  )"
+
+  for spec in \
+    "free-residual|${residual_qk}" \
+    "pair-normalized-a03|${pair03_qk}" \
+    "pair-normalized-a10|${pair10_qk}"
+  do
+    label="${spec%%|*}"
+    qk_json="${spec#*|}"
+    job_name="phase4-geometry-${label}-seed${seed}-s10000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${linear_logit}, \"residual_stream\": {\"enabled\": false}, \"attention_write\": {\"enabled\": false}, \"attn_impl\": \"flex\", \"run_name\": \"${job_name}\"" \
+      10000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Content may only rotate the completed fixed-radius additive pair. The
+# conditioner receives block-normalized residual content, has no position
+# input, starts at exactly zero phase, and is bounded to +/-0.25 radians.
+# The completed unconditioned radius-0.3 run (4.0524) is the exact anchor.
+if want_phase4_phase_conditioning_family "phase_conditioning_story"; then
+  seed=123
+  linear_logit="$(v2_logit_json linear false)"
+  for spec in \
+    "q-only|q|shared_trunk_separate_readouts" \
+    "k-only|k|shared_trunk_separate_readouts" \
+    "both-shared|both|shared" \
+    "both-separate-readouts|both|shared_trunk_separate_readouts"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    target="${remainder%%|*}"
+    conditioner_coupling="${remainder#*|}"
+    qk_json="$(
+      v2_phase_conditioned_pair_json \
+        "${target}" "${conditioner_coupling}" 0.25
+    )"
+    job_name="phase4-phase-conditioning-${label}-seed${seed}-s10000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${linear_logit}, \"residual_stream\": {\"enabled\": false}, \"attention_write\": {\"enabled\": false}, \"attn_impl\": \"flex\", \"run_name\": \"${job_name}\"" \
+      10000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Anchor-relative null conditioning with a dedicated 64-d residual-content
+# stream and one geometry-aware Q/K RMSNorm. No mechanisms are combined.
+if want_phase5_null_conditioning_family "null_conditioning_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  linear_logit="$(v2_logit_json linear false)"
+  additive_anchor="$(
+    v2_qk_playground_json \
+      additive amplitude_phase identity false \
+      shared frozen_fourier none \
+      per_head_independent 0.3 '[]' "${POS_MLP_HIDDEN}" null false false
+  )"
+  pairwise_logit="$(
+    v2_pairwise_logit_json query_absolute 8 per_head_independent dedicated
+  )"
+
+  # Fresh controls under the current code: conventional RoPE with the legacy
+  # Q/K LayerNorm, then RoPE with the new pre-rotation RMSNorm. The latter
+  # isolates the contribution of the linear logit bias in rope-rms-anchor.
+  job_name="phase5-null-standard-rope-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+  cfg_file="${CONFIG_DIR}/${job_name}.json"
+  write_common_config "${cfg_file}" \
+    "\"seed\": ${seed}, \"qk_norm_mode\": \"legacy_layernorm\", \"post_position_qk_norm\": false, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${disabled_channel}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+    5000 1000
+  run_job "${job_name}" "${cfg_file}"
+
+  job_name="phase5-null-rope-rms-no-logit-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+  cfg_file="${CONFIG_DIR}/${job_name}.json"
+  write_common_config "${cfg_file}" \
+    "\"seed\": ${seed}, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${disabled_channel}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"flex\", \"run_name\": \"${job_name}\"" \
+    5000 1000
+  run_job "${job_name}" "${cfg_file}"
+
+  for spec in \
+    "rope-rms-anchor|${disabled_channel}|${linear_logit}|{\"enabled\": false}" \
+    "additive-rms-anchor|${additive_anchor}|${linear_logit}|{\"enabled\": false}" \
+    "adaptive-gain-shared|$(v2_null_conditioned_qk_json adaptive_gain shared)|${linear_logit}|{\"enabled\": false}" \
+    "adaptive-gain-separate|$(v2_null_conditioned_qk_json adaptive_gain shared_trunk_separate_readouts)|${linear_logit}|{\"enabled\": false}" \
+    "additive-phase-shared|$(v2_null_conditioned_qk_json additive_phase shared)|${linear_logit}|{\"enabled\": false}" \
+    "additive-phase-separate|$(v2_null_conditioned_qk_json additive_phase shared_trunk_separate_readouts)|${linear_logit}|{\"enabled\": false}" \
+    "rope-phase-shared|$(v2_null_conditioned_qk_json rope_phase shared)|${linear_logit}|{\"enabled\": false}" \
+    "rope-phase-separate|$(v2_null_conditioned_qk_json rope_phase shared_trunk_separate_readouts)|${linear_logit}|{\"enabled\": false}" \
+    "pairwise-query-absolute|${disabled_channel}|${pairwise_logit}|{\"enabled\": false}" \
+    "query-position-write|${disabled_channel}|${linear_logit}|{\"enabled\": true, \"mode\": \"query_position\"}"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    qk_json="${remainder%%|*}"
+    remainder="${remainder#*|}"
+    logit_json="${remainder%%|*}"
+    write_json="${remainder#*|}"
+    job_name="phase5-null-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"position_content_dim\": 64, \"position_content_coupling\": \"separate\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${logit_json}, \"residual_stream\": {\"enabled\": false}, \"attention_write\": ${write_json}, \"attn_impl\": \"flex\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
 fi
 
 if [[ "${SUBMIT_JOBS}" == "true" && "${PARALLEL}" == "true" && ${#PIDS[@]} -gt 0 ]]; then

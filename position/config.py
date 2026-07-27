@@ -10,9 +10,11 @@ POSITION_SCHEMA_VERSION = 2
 Application = Literal["additive", "rotary", "logit_bias"]
 Geometry = Literal[
     "free",
+    "pair_normalized",
     "amplitude_phase",
     "phase",
     "projected_phase",
+    "unit_pair",
     "scaled_phase",
     "scalar_curve",
 ]
@@ -80,17 +82,28 @@ V2_INPUT_KEYS = {
 V2_MAPPER_KEYS = {"kind", "residual", "rank", "hidden_dim"}
 V2_OUTPUT_KEYS = {
     "amplitude_init",
+    "amplitude_max",
     "amplitude_parameterization",
     "learn_amplitude",
     "learn_phase",
     "phase_scale",
+    "additive_normalization",
+    "additive_gain_init",
+    "additive_gain_max",
+    "learn_additive_gain",
     "scale_init",
+    "scale_max",
     "scale_parameterization",
 }
 V2_CONDITIONING_KEYS = {
     "kind",
+    "source",
+    "activation",
     "hidden_dim",
     "gate_init",
+    "target",
+    "coupling",
+    "phase_bound",
     "pair_rank",
     "position_mode",
     "num_profiles",
@@ -98,6 +111,8 @@ V2_CONDITIONING_KEYS = {
     "profile_init_std",
     "num_frequencies",
 }
+
+POSITION_CONTENT_COUPLINGS = {"shared", "separate"}
 
 # Legacy v1 names that must not appear on a v2 channel (except enabled).
 V1_ONLY_KEYS = {"feature_map", "sharing", "apply", "rank", "mlp_hidden"}
@@ -196,17 +211,28 @@ V2_CHANNEL_DEFAULTS = {
         },
         "output": {
             "amplitude_init": 0.1,
+            "amplitude_max": 1.0,
             "amplitude_parameterization": "signed",
             "learn_amplitude": True,
             "learn_phase": True,
             "phase_scale": 1.0,
+            "additive_normalization": "none",
+            "additive_gain_init": 0.1,
+            "additive_gain_max": 1.0,
+            "learn_additive_gain": True,
             "scale_init": 1.0,
+            "scale_max": 4.0,
             "scale_parameterization": "exp",
         },
         "conditioning": {
             "kind": "none",
+            "source": "qk",
+            "activation": "tanh",
             "hidden_dim": 64,
             "gate_init": 0.0,
+            "target": "both",
+            "coupling": "shared_trunk_separate_readouts",
+            "phase_bound": 0.25,
             "pair_rank": 16,
             "position_mode": "relative_only",
             "num_profiles": 8,
@@ -236,17 +262,28 @@ V2_CHANNEL_DEFAULTS = {
         },
         "output": {
             "amplitude_init": 0.1,
+            "amplitude_max": 1.0,
             "amplitude_parameterization": "signed",
             "learn_amplitude": True,
             "learn_phase": True,
             "phase_scale": 1.0,
+            "additive_normalization": "none",
+            "additive_gain_init": 0.1,
+            "additive_gain_max": 1.0,
+            "learn_additive_gain": True,
             "scale_init": 1.0,
+            "scale_max": 4.0,
             "scale_parameterization": "exp",
         },
         "conditioning": {
             "kind": "none",
+            "source": "qk",
+            "activation": "tanh",
             "hidden_dim": 64,
             "gate_init": 0.0,
+            "target": "both",
+            "coupling": "shared_trunk_separate_readouts",
+            "phase_bound": 0.25,
             "pair_rank": 16,
             "position_mode": "relative_only",
             "num_profiles": 8,
@@ -296,6 +333,21 @@ ATTENTION_WRITE_DEFAULTS = {
     "head_coupling": "per_head_independent",
     "gate_init": 0.0,
 }
+
+
+def normalize_position_content_config(
+    content_dim: int = 64,
+    coupling: str = "separate",
+) -> dict:
+    """Validate the dedicated low-rank content stream used by position modules."""
+    content_dim = int(content_dim)
+    if content_dim <= 0:
+        raise ValueError("position_content_dim must be positive")
+    if coupling not in POSITION_CONTENT_COUPLINGS:
+        raise ValueError(
+            "position_content_coupling must be 'shared' or 'separate'"
+        )
+    return {"dim": content_dim, "coupling": coupling}
 
 _FEATURE_MAP_TO_MAPPER = {
     "identity": ("identity", False),
@@ -540,9 +592,11 @@ def normalize_position_config_v2(
     if channel_name == "qk":
         allowed_pairs = {
             ("additive", "free"),
+            ("additive", "pair_normalized"),
             ("additive", "amplitude_phase"),
             ("rotary", "phase"),
             ("rotary", "projected_phase"),
+            ("rotary", "unit_pair"),
             ("rotary", "scaled_phase"),
         }
         if (application, geometry) not in allowed_pairs:
@@ -715,10 +769,22 @@ def normalize_position_config_v2(
     amplitude_parameterization = output_cfg.get(
         "amplitude_parameterization", "signed"
     )
-    if amplitude_parameterization not in {"signed", "softplus"}:
+    if amplitude_parameterization not in {
+        "signed",
+        "softplus",
+        "bounded_sigmoid",
+    }:
         raise ValueError(
             f"{channel_name}.output.amplitude_parameterization must be "
-            "'signed' or 'softplus'"
+            "'signed', 'softplus', or 'bounded_sigmoid'"
+        )
+    amplitude_max = float(output_cfg.get("amplitude_max", 1.0))
+    if (
+        amplitude_parameterization == "bounded_sigmoid"
+        and amplitude_max <= amplitude_init
+    ):
+        raise ValueError(
+            f"{channel_name}.output.amplitude_max must exceed amplitude_init"
         )
     learn_amplitude = output_cfg.get("learn_amplitude", True)
     learn_phase = output_cfg.get("learn_phase", True)
@@ -730,8 +796,16 @@ def normalize_position_config_v2(
         (not learn_amplitude or not learn_phase)
         and not (
             channel_name == "qk"
-            and application == "additive"
-            and geometry == "amplitude_phase"
+            and (
+                (application == "additive" and geometry == "amplitude_phase")
+                or (
+                    application == "rotary"
+                    and geometry == "phase"
+                    and normalized["conditioning"].get("kind")
+                    in {"adaptive_gain", "rope_phase"}
+                    and learn_amplitude
+                )
+            )
         )
     ):
         raise ValueError(
@@ -744,10 +818,38 @@ def normalize_position_config_v2(
     scale_init = float(output_cfg.get("scale_init", 1.0))
     if scale_init <= 0:
         raise ValueError(f"{channel_name}.output.scale_init must be positive")
+    scale_max = float(output_cfg.get("scale_max", 4.0))
     scale_parameterization = output_cfg.get("scale_parameterization", "exp")
-    if scale_parameterization not in {"exp", "linear"}:
+    if scale_parameterization == "bounded_log" and scale_max <= 1:
+        raise ValueError(f"{channel_name}.output.scale_max must exceed 1")
+    if scale_parameterization not in {"exp", "linear", "bounded_log"}:
         raise ValueError(
-            f"{channel_name}.output.scale_parameterization must be 'exp' or 'linear'"
+            f"{channel_name}.output.scale_parameterization must be "
+            "'exp', 'linear', or 'bounded_log'"
+        )
+    additive_normalization = output_cfg.get("additive_normalization", "none")
+    if additive_normalization not in {"none", "rms"}:
+        raise ValueError(
+            f"{channel_name}.output.additive_normalization must be 'none' or 'rms'"
+        )
+    additive_gain_init = float(output_cfg.get("additive_gain_init", 0.1))
+    additive_gain_max = float(output_cfg.get("additive_gain_max", 1.0))
+    if not 0 < additive_gain_init < additive_gain_max:
+        raise ValueError(
+            f"{channel_name}.output requires "
+            "0 < additive_gain_init < additive_gain_max"
+        )
+    learn_additive_gain = output_cfg.get("learn_additive_gain", True)
+    if not isinstance(learn_additive_gain, bool):
+        raise TypeError(
+            f"{channel_name}.output.learn_additive_gain must be a boolean"
+        )
+    if additive_normalization != "none" and not (
+        channel_name == "qk" and application == "additive"
+    ):
+        raise ValueError(
+            f"{channel_name}.output.additive_normalization requires "
+            "qk application='additive'"
         )
 
     conditioning_cfg = _require_dict(
@@ -760,8 +862,26 @@ def normalize_position_config_v2(
             f"{sorted(unknown_conditioning)}"
         )
     conditioning_kind = conditioning_cfg.get("kind", "none")
+    raw_conditioning = raw_config.get("conditioning", {})
+    default_content_source = (
+        "dedicated"
+        if conditioning_kind in {
+            "adaptive_gain",
+            "additive_phase",
+            "rope_phase",
+        }
+        else "qk"
+    )
     allowed_conditioning = (
-        {"none", "local_residual", "content_gate"}
+        {
+            "none",
+            "local_residual",
+            "content_gate",
+            "phase_rotation",
+            "adaptive_gain",
+            "additive_phase",
+            "rope_phase",
+        }
         if channel_name == "qk"
         else {"none", "inkling_table", "inkling_cosnet", "pairwise_low_rank"}
     )
@@ -772,8 +892,15 @@ def normalize_position_config_v2(
         )
     conditioning = {
         "kind": conditioning_kind,
+        "source": raw_conditioning.get("source", default_content_source),
+        "activation": conditioning_cfg.get("activation", "tanh"),
         "hidden_dim": int(conditioning_cfg.get("hidden_dim", 64)),
         "gate_init": float(conditioning_cfg.get("gate_init", 0.0)),
+        "target": conditioning_cfg.get("target", "both"),
+        "coupling": conditioning_cfg.get(
+            "coupling", "shared_trunk_separate_readouts"
+        ),
+        "phase_bound": float(conditioning_cfg.get("phase_bound", 0.25)),
         "pair_rank": int(conditioning_cfg.get("pair_rank", 16)),
         "position_mode": conditioning_cfg.get(
             "position_mode", "relative_only"
@@ -787,6 +914,87 @@ def normalize_position_config_v2(
         ),
         "num_frequencies": int(conditioning_cfg.get("num_frequencies", 16)),
     }
+    if conditioning["source"] not in {"dedicated", "qk", "residual"}:
+        raise ValueError(
+            f"{channel_name}.conditioning.source must be 'dedicated'; "
+            "'qk' and 'residual' are accepted only for legacy configs"
+        )
+    if channel_name != "qk" and conditioning["source"] == "residual":
+        raise ValueError(
+            f"{channel_name}.conditioning.source='residual' is only supported "
+            "for the Q/K channel"
+        )
+    if conditioning["target"] not in {"q", "k", "both"}:
+        raise ValueError(
+            f"{channel_name}.conditioning.target must be 'q', 'k', or 'both'"
+        )
+    if conditioning["coupling"] not in {
+        "shared",
+        "shared_trunk_separate_readouts",
+    }:
+        raise ValueError(
+            f"{channel_name}.conditioning.coupling must be 'shared' or "
+            "'shared_trunk_separate_readouts'"
+        )
+    if conditioning["phase_bound"] <= 0:
+        raise ValueError(
+            f"{channel_name}.conditioning.phase_bound must be positive"
+        )
+    if conditioning["activation"] not in {
+        "tanh",
+        "gelu",
+        "linear",
+        "scaled_sigmoid",
+    }:
+        raise ValueError(
+            f"{channel_name}.conditioning.activation is unsupported"
+        )
+    if (
+        conditioning_kind == "content_gate"
+        and conditioning["activation"] not in {"tanh", "scaled_sigmoid"}
+    ):
+        raise ValueError(
+            f"{channel_name}: content_gate activation must be "
+            "'tanh' or 'scaled_sigmoid'"
+        )
+    if (
+        conditioning_kind == "local_residual"
+        and conditioning["activation"] == "scaled_sigmoid"
+    ):
+        raise ValueError(
+            f"{channel_name}: local_residual does not support scaled_sigmoid"
+        )
+    if conditioning_kind == "phase_rotation" and not (
+        channel_name == "qk"
+        and application == "additive"
+        and geometry == "pair_normalized"
+    ):
+        raise ValueError(
+            f"{channel_name}: phase_rotation conditioning requires "
+            "application='additive', geometry='pair_normalized'"
+        )
+    if conditioning_kind == "adaptive_gain" and channel_name != "qk":
+        raise ValueError("adaptive_gain conditioning is only valid for Q/K")
+    if conditioning_kind == "additive_phase" and not (
+        channel_name == "qk"
+        and application == "additive"
+        and geometry == "amplitude_phase"
+    ):
+        raise ValueError(
+            "additive_phase conditioning requires additive amplitude_phase Q/K"
+        )
+    if conditioning_kind == "rope_phase" and not (
+        channel_name == "qk" and application == "rotary"
+    ):
+        raise ValueError("rope_phase conditioning requires rotary Q/K")
+    if (
+        conditioning_kind == "content_gate"
+        and conditioning["activation"] == "scaled_sigmoid"
+        and not 0 < conditioning["gate_init"] < 2
+    ):
+        raise ValueError(
+            f"{channel_name}: scaled_sigmoid gate_init must lie in (0, 2)"
+        )
     for key in (
         "hidden_dim",
         "num_profiles",
@@ -812,6 +1020,7 @@ def normalize_position_config_v2(
     if (
         conditioning_kind != "none"
         and geometry == "amplitude_phase"
+        and conditioning_kind not in {"additive_phase"}
         and (not learn_amplitude or not learn_phase)
     ):
         raise ValueError(
@@ -832,11 +1041,17 @@ def normalize_position_config_v2(
         },
         "output": {
             "amplitude_init": amplitude_init,
+            "amplitude_max": amplitude_max,
             "amplitude_parameterization": amplitude_parameterization,
             "learn_amplitude": learn_amplitude,
             "learn_phase": learn_phase,
             "phase_scale": phase_scale,
+            "additive_normalization": additive_normalization,
+            "additive_gain_init": additive_gain_init,
+            "additive_gain_max": additive_gain_max,
+            "learn_additive_gain": learn_additive_gain,
             "scale_init": scale_init,
+            "scale_max": scale_max,
             "scale_parameterization": scale_parameterization,
         },
         "conditioning": conditioning,
@@ -1133,9 +1348,10 @@ def normalize_attention_write_config(
     if not isinstance(normalized["enabled"], bool):
         raise TypeError("attention_write.enabled must be a boolean")
     mode = normalized["mode"]
-    if mode not in {"key_position", "relative_offset"}:
+    if mode not in {"key_position", "relative_offset", "query_position"}:
         raise ValueError(
-            "attention_write.mode must be 'key_position' or 'relative_offset'"
+            "attention_write.mode must be 'key_position', 'relative_offset', "
+            "or 'query_position'"
         )
     head_coupling = normalized["head_coupling"]
     probe = normalize_position_config_v2(

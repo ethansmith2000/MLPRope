@@ -34,6 +34,8 @@ class QKPositionOutput:
     k: torch.Tensor
     q_scale: torch.Tensor | None = None
     k_scale: torch.Tensor | None = None
+    q_gain: torch.Tensor | None = None
+    k_gain: torch.Tensor | None = None
 
 
 class GroupedLinearReadout(torch.nn.Module):
@@ -114,6 +116,7 @@ class GroupedContentConditioner(torch.nn.Module):
         output_dim: int,
         hidden_dim: int,
         gate_init: float,
+        activation: str = "tanh",
     ):
         super().__init__()
         self.kind = kind
@@ -122,6 +125,7 @@ class GroupedContentConditioner(torch.nn.Module):
         self.output_dim = output_dim
         self.hidden_dim = hidden_dim
         self.gate_init = float(gate_init)
+        self.activation = activation
         if kind == "local_residual":
             self.down = torch.nn.Parameter(
                 torch.empty(groups, content_dim + output_dim, hidden_dim)
@@ -177,6 +181,9 @@ class GroupedContentConditioner(torch.nn.Module):
             )
             # Keep the content multiplier in [0, 2]. The original unconstrained
             # affine gate could grow positional addends into the thousands.
+            if self.activation == "scaled_sigmoid":
+                offset = math.log(self.gate_init / (2.0 - self.gate_init))
+                return base * (2.0 * torch.sigmoid(gate_delta + offset))
             gate = torch.tanh(gate_delta + self.gate_init)
             return base * (1.0 + gate)
 
@@ -184,9 +191,207 @@ class GroupedContentConditioner(torch.nn.Module):
         hidden = self._linear(joined, self.down, self.down_bias)
         hidden = torch.nn.functional.gelu(hidden)
         delta = self._linear(hidden, self.up, self.up_bias)
-        # Preserve the exact baseline at zero initialization while bounding the
-        # learned local correction to one unit per latent coordinate.
-        return base + torch.tanh(delta + self.gate_init)
+        if self.activation == "tanh":
+            delta = torch.tanh(delta + self.gate_init)
+        elif self.activation == "gelu":
+            delta = torch.nn.functional.gelu(delta + self.gate_init)
+        elif self.activation == "linear":
+            delta = delta + self.gate_init
+        return base + delta
+
+
+class GroupedPhaseRotationConditioner(torch.nn.Module):
+    """Content-driven bounded rotations of fixed-radius additive pairs."""
+
+    def __init__(
+        self,
+        *,
+        groups: int,
+        content_dim: int,
+        pair_dim: int,
+        hidden_dim: int,
+        target: str,
+        coupling: str,
+        phase_bound: float,
+    ):
+        super().__init__()
+        self.groups = groups
+        self.content_dim = content_dim
+        self.pair_dim = pair_dim
+        self.hidden_dim = hidden_dim
+        self.target = target
+        self.coupling = coupling
+        self.phase_bound = float(phase_bound)
+        self.down = torch.nn.Parameter(
+            torch.empty(groups, content_dim, hidden_dim)
+        )
+        self.down_bias = torch.nn.Parameter(torch.zeros(groups, hidden_dim))
+        for weight in self.down:
+            torch.nn.init.xavier_normal_(weight)
+
+        self.up = None
+        self.up_bias = None
+        self.q_up = None
+        self.q_up_bias = None
+        self.k_up = None
+        self.k_up_bias = None
+        if coupling == "shared":
+            self.up = torch.nn.Parameter(
+                torch.zeros(groups, hidden_dim, pair_dim)
+            )
+            self.up_bias = torch.nn.Parameter(torch.zeros(groups, pair_dim))
+        else:
+            if target in {"q", "both"}:
+                self.q_up = torch.nn.Parameter(
+                    torch.zeros(groups, hidden_dim, pair_dim)
+                )
+                self.q_up_bias = torch.nn.Parameter(
+                    torch.zeros(groups, pair_dim)
+                )
+            if target in {"k", "both"}:
+                self.k_up = torch.nn.Parameter(
+                    torch.zeros(groups, hidden_dim, pair_dim)
+                )
+                self.k_up_bias = torch.nn.Parameter(
+                    torch.zeros(groups, pair_dim)
+                )
+
+    def _linear(
+        self,
+        values: torch.Tensor,
+        weight: torch.Tensor,
+        bias: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.groups == 1:
+            output = torch.einsum("bhld,do->bhlo", values, weight[0])
+            return output + bias[0]
+        output = torch.einsum("bhld,hdo->bhlo", values, weight)
+        return output + bias[None, :, None, :]
+
+    def phase(self, content: torch.Tensor, branch: str) -> torch.Tensor:
+        if branch not in {"q", "k"}:
+            raise ValueError(f"Unknown phase-conditioning branch: {branch!r}")
+        if content.ndim != 4:
+            raise ValueError(
+                "Phase conditioning expects [batch, heads, sequence, content_dim]"
+            )
+        hidden = torch.nn.functional.gelu(
+            self._linear(content, self.down, self.down_bias)
+        )
+        if self.coupling == "shared":
+            up, bias = self.up, self.up_bias
+        elif branch == "q":
+            up, bias = self.q_up, self.q_up_bias
+        else:
+            up, bias = self.k_up, self.k_up_bias
+        if up is None or bias is None:
+            return hidden.new_zeros(*hidden.shape[:-1], self.pair_dim)
+        raw = self._linear(hidden, up, bias)
+        # ``phase_bound`` is a linear scale, not a saturating bound. Any real
+        # phase remains a valid unit-circle rotation after sin/cos synthesis.
+        return self.phase_bound * raw
+
+    def reset_output_parameters(self) -> None:
+        for parameter in (
+            self.up,
+            self.up_bias,
+            self.q_up,
+            self.q_up_bias,
+            self.k_up,
+            self.k_up_bias,
+        ):
+            if parameter is not None:
+                torch.nn.init.zeros_(parameter)
+
+
+class GroupedContentActuator(torch.nn.Module):
+    """Zero-output content head for anchor-relative phase or gain deltas."""
+
+    def __init__(
+        self,
+        *,
+        groups: int,
+        content_dim: int,
+        output_dim: int,
+        hidden_dim: int,
+        target: str,
+        coupling: str,
+    ):
+        super().__init__()
+        self.groups = groups
+        self.output_dim = output_dim
+        self.target = target
+        self.coupling = coupling
+        self.down = torch.nn.Parameter(
+            torch.empty(groups, content_dim, hidden_dim)
+        )
+        self.down_bias = torch.nn.Parameter(torch.zeros(groups, hidden_dim))
+        for weight in self.down:
+            torch.nn.init.xavier_normal_(weight)
+
+        self.up = self.up_bias = None
+        self.q_up = self.q_up_bias = None
+        self.k_up = self.k_up_bias = None
+        if coupling == "shared":
+            self.up = torch.nn.Parameter(
+                torch.zeros(groups, hidden_dim, output_dim)
+            )
+            self.up_bias = torch.nn.Parameter(torch.zeros(groups, output_dim))
+        else:
+            if target in {"q", "both"}:
+                self.q_up = torch.nn.Parameter(
+                    torch.zeros(groups, hidden_dim, output_dim)
+                )
+                self.q_up_bias = torch.nn.Parameter(
+                    torch.zeros(groups, output_dim)
+                )
+            if target in {"k", "both"}:
+                self.k_up = torch.nn.Parameter(
+                    torch.zeros(groups, hidden_dim, output_dim)
+                )
+                self.k_up_bias = torch.nn.Parameter(
+                    torch.zeros(groups, output_dim)
+                )
+
+    def _linear(
+        self,
+        values: torch.Tensor,
+        weight: torch.Tensor,
+        bias: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.groups == 1:
+            output = torch.einsum("bhld,do->bhlo", values, weight[0])
+            return output + bias[0]
+        output = torch.einsum("bhld,hdo->bhlo", values, weight)
+        return output + bias[None, :, None, :]
+
+    def forward(self, content: torch.Tensor, branch: str) -> torch.Tensor:
+        if branch not in {"q", "k"}:
+            raise ValueError(f"Unknown content-actuator branch: {branch!r}")
+        hidden = torch.nn.functional.gelu(
+            self._linear(content, self.down, self.down_bias)
+        )
+        if branch not in ({self.target} if self.target != "both" else {"q", "k"}):
+            return hidden.new_zeros(*hidden.shape[:-1], self.output_dim)
+        if self.coupling == "shared":
+            up, bias = self.up, self.up_bias
+        elif branch == "q":
+            up, bias = self.q_up, self.q_up_bias
+        else:
+            up, bias = self.k_up, self.k_up_bias
+        return self._linear(hidden, up, bias)
+
+    def reset_output_parameters(self) -> None:
+        for parameter in (
+            self.up,
+            self.up_bias,
+            self.q_up,
+            self.q_up_bias,
+            self.k_up,
+            self.k_up_bias,
+        ):
+            if parameter is not None:
+                torch.nn.init.zeros_(parameter)
 
 
 class HeadCoupledFeaturePipeline(torch.nn.Module):
@@ -288,6 +493,7 @@ class QKPositionChannel(PositionChannel):
         heads: int,
         head_dim: int,
         model_dim: int,
+        content_dim: int,
         extent: int,
         rope_theta: float,
     ):
@@ -296,6 +502,7 @@ class QKPositionChannel(PositionChannel):
         self.heads = heads
         self.head_dim = head_dim
         self.model_dim = model_dim
+        self.content_dim = content_dim
         self.extent = extent
         self.rope_theta = rope_theta
         self.application = config["application"]
@@ -305,6 +512,7 @@ class QKPositionChannel(PositionChannel):
         self.output_config = config["output"]
         self.learn_amplitude = self.output_config["learn_amplitude"]
         self.learn_phase = self.output_config["learn_phase"]
+        self.conditioning_config = config["conditioning"]
         self.fixed_amplitude_phase = (
             self.application == "additive"
             and self.geometry == "amplitude_phase"
@@ -356,10 +564,39 @@ class QKPositionChannel(PositionChannel):
         self.conditioner = None
         self.q_conditioner = None
         self.k_conditioner = None
+        self.phase_rotation_conditioner = None
+        self.content_actuator = None
         self.amplitude_conditioner = None
         self.q_amplitude_conditioner = None
         self.k_amplitude_conditioner = None
-        self.conditioning_config = config["conditioning"]
+        self.additive_gain = None
+        self.q_additive_gain = None
+        self.k_additive_gain = None
+
+        if (
+            self.application == "additive"
+            and self.output_config["additive_normalization"] == "rms"
+        ):
+            gain_init = self.output_config["additive_gain_init"]
+            gain_max = self.output_config["additive_gain_max"]
+            gain_logit = math.log(gain_init / (gain_max - gain_init))
+
+            def make_gain() -> torch.Tensor:
+                value = torch.full((readout_groups, 1, 1), gain_logit)
+                if self.output_config["learn_additive_gain"]:
+                    return torch.nn.Parameter(value)
+                self.register_buffer(
+                    f"_fixed_additive_gain_{len(self._buffers)}",
+                    value,
+                    persistent=True,
+                )
+                return value
+
+            if self.qk_coupling == "shared":
+                self.additive_gain = make_gain()
+            else:
+                self.q_additive_gain = make_gain()
+                self.k_additive_gain = make_gain()
 
         from position.rotary import build_rope_cache
 
@@ -367,7 +604,10 @@ class QKPositionChannel(PositionChannel):
         self.register_buffer("base_sin", base_sin, persistent=False)
         self.register_buffer("base_cos", base_cos, persistent=False)
 
-        if self.application == "additive" and self.geometry == "free":
+        if self.application == "additive" and self.geometry in {
+            "free",
+            "pair_normalized",
+        }:
             if self.qk_coupling == "shared_trunk_separate_readouts":
                 self.q_add_readout = GroupedLinearReadout(
                     readout_groups,
@@ -411,7 +651,9 @@ class QKPositionChannel(PositionChannel):
             "phase",
             "scaled_phase",
         }:
-            if self.qk_coupling == "shared":
+            if not self.learn_phase:
+                pass
+            elif self.qk_coupling == "shared":
                 self.phase_head = GroupedLinearReadout(
                     readout_groups,
                     head_dim,
@@ -450,7 +692,10 @@ class QKPositionChannel(PositionChannel):
                         readout_groups, head_dim, head_dim // 2, init="zeros"
                     )
                     self.k_scale_head = copy.deepcopy(self.q_scale_head)
-        elif self.application == "rotary" and self.geometry == "projected_phase":
+        elif self.application == "rotary" and self.geometry in {
+            "projected_phase",
+            "unit_pair",
+        }:
             if self.qk_coupling == "shared":
                 self.projected_phase_head = GroupedLinearReadout(
                     readout_groups, head_dim, head_dim, init="zeros"
@@ -469,11 +714,37 @@ class QKPositionChannel(PositionChannel):
             )
 
         conditioning_kind = self.conditioning_config["kind"]
-        if conditioning_kind != "none":
+        if conditioning_kind == "phase_rotation":
+            self.phase_rotation_conditioner = GroupedPhaseRotationConditioner(
+                groups=readout_groups,
+                content_dim=content_dim,
+                pair_dim=head_dim // 2,
+                hidden_dim=self.conditioning_config["hidden_dim"],
+                target=self.conditioning_config["target"],
+                coupling=self.conditioning_config["coupling"],
+                phase_bound=self.conditioning_config["phase_bound"],
+            )
+        elif conditioning_kind in {
+            "adaptive_gain",
+            "additive_phase",
+            "rope_phase",
+        }:
+            output_dim = (
+                1 if conditioning_kind == "adaptive_gain" else head_dim // 2
+            )
+            self.content_actuator = GroupedContentActuator(
+                groups=readout_groups,
+                content_dim=content_dim,
+                output_dim=output_dim,
+                hidden_dim=self.conditioning_config["hidden_dim"],
+                target=self.conditioning_config["target"],
+                coupling=self.conditioning_config["coupling"],
+            )
+        elif conditioning_kind != "none":
             output_dim = (
                 head_dim
                 if self.application == "additive"
-                and self.geometry == "free"
+                and self.geometry in {"free", "pair_normalized"}
                 else head_dim // 2
             )
 
@@ -483,10 +754,11 @@ class QKPositionChannel(PositionChannel):
                 return GroupedContentConditioner(
                     kind=conditioning_kind,
                     groups=readout_groups,
-                    content_dim=head_dim,
+                    content_dim=content_dim,
                     output_dim=conditioned_dim,
                     hidden_dim=self.conditioning_config["hidden_dim"],
                     gate_init=self.conditioning_config["gate_init"],
+                    activation=self.conditioning_config["activation"],
                 )
 
             if self.qk_coupling == "shared":
@@ -543,6 +815,26 @@ class QKPositionChannel(PositionChannel):
         cos = self.base_cos[:sequence_length].to(projected.dtype)[None, :, :]
         return -sin * radial_x + cos * radial_y
 
+    def _unit_pair_to_phase(
+        self,
+        features: torch.Tensor,
+        head: GroupedLinearReadout,
+        sequence_length: int,
+    ) -> torch.Tensor:
+        projected = self._apply_phase_head(features, head)
+        half = projected.shape[-1] // 2
+        delta_x, delta_y = projected[..., :half], projected[..., half:]
+        base_sin = self.base_sin[:sequence_length].to(projected.dtype)[None]
+        base_cos = self.base_cos[:sequence_length].to(projected.dtype)[None]
+        pair_x = base_cos + delta_x
+        pair_y = base_sin + delta_y
+        inverse_norm = torch.rsqrt(pair_x.square() + pair_y.square() + 1e-6)
+        pair_x = pair_x * inverse_norm
+        pair_y = pair_y * inverse_norm
+        relative_sin = pair_y * base_cos - pair_x * base_sin
+        relative_cos = pair_x * base_cos + pair_y * base_sin
+        return torch.atan2(relative_sin, relative_cos)
+
     def _amplitude(
         self,
         raw: torch.Tensor,
@@ -550,6 +842,12 @@ class QKPositionChannel(PositionChannel):
         amplitude_init = self.output_config["amplitude_init"]
         if self.output_config["amplitude_parameterization"] == "signed":
             return raw + amplitude_init
+        if self.output_config["amplitude_parameterization"] == "bounded_sigmoid":
+            maximum = self.output_config["amplitude_max"]
+            offset = raw.new_tensor(
+                math.log(amplitude_init / (maximum - amplitude_init))
+            )
+            return maximum * torch.sigmoid(raw + offset)
         if amplitude_init == 0:
             offset = raw.new_tensor(-20.0)
         else:
@@ -560,7 +858,72 @@ class QKPositionChannel(PositionChannel):
         scale_init = self.output_config["scale_init"]
         if self.output_config["scale_parameterization"] == "exp":
             return raw.exp() * scale_init
+        if self.output_config["scale_parameterization"] == "bounded_log":
+            log_limit = math.log(self.output_config["scale_max"])
+            return (raw.tanh() * log_limit).exp() * scale_init
         return raw + scale_init
+
+    def _normalize_additive_output(
+        self,
+        output: torch.Tensor,
+        gain_logit: torch.Tensor,
+    ) -> torch.Tensor:
+        scale = torch.rsqrt(
+            output.float().square().mean(dim=-1, keepdim=True) + 1e-6
+        ).to(dtype=output.dtype)
+        gain = self.output_config["additive_gain_max"] * torch.sigmoid(
+            gain_logit
+        )
+        if output.ndim == 4:
+            gain = gain.unsqueeze(0)
+        return output * scale * gain.to(dtype=output.dtype)
+
+    def _normalize_additive_pairs(self, output: torch.Tensor) -> torch.Tensor:
+        half = output.shape[-1] // 2
+        pair_x, pair_y = output[..., :half], output[..., half:]
+        pair_norm = (
+            pair_x.float().square() + pair_y.float().square()
+        ).sqrt().clamp_min(1e-6)
+        inverse_norm = pair_norm.reciprocal().to(dtype=output.dtype)
+        amplitude = output.new_tensor(self.output_config["amplitude_init"])
+        return torch.cat(
+            (amplitude * pair_x * inverse_norm, amplitude * pair_y * inverse_norm),
+            dim=-1,
+        )
+
+    def _rotate_additive_pairs(
+        self,
+        output: torch.Tensor,
+        phase: torch.Tensor,
+    ) -> torch.Tensor:
+        if output.ndim == 3:
+            output = output.unsqueeze(0).expand(phase.shape[0], -1, -1, -1)
+        half = output.shape[-1] // 2
+        pair_x, pair_y = output[..., :half], output[..., half:]
+        phase_sin, phase_cos = phase.sin(), phase.cos()
+        rotated_x = pair_x * phase_cos - pair_y * phase_sin
+        rotated_y = pair_x * phase_sin + pair_y * phase_cos
+        return torch.cat((rotated_x, rotated_y), dim=-1)
+
+    def _apply_content_phase_rotation(
+        self,
+        q_output: torch.Tensor,
+        k_output: torch.Tensor,
+        q_content: torch.Tensor | None,
+        k_content: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if q_content is None or k_content is None:
+            raise ValueError(
+                "Phase-rotation conditioning requires Q/K content."
+            )
+        target = self.conditioning_config["target"]
+        if target in {"q", "both"}:
+            q_phase = self.phase_rotation_conditioner.phase(q_content, "q")
+            q_output = self._rotate_additive_pairs(q_output, q_phase)
+        if target in {"k", "both"}:
+            k_phase = self.phase_rotation_conditioner.phase(k_content, "k")
+            k_output = self._rotate_additive_pairs(k_output, k_phase)
+        return q_output, k_output
 
     def _amplitude_phase_addend(
         self,
@@ -573,6 +936,7 @@ class QKPositionChannel(PositionChannel):
         content: torch.Tensor | None = None,
         amplitude_conditioner: GroupedContentConditioner | None = None,
         phase_conditioner: GroupedContentConditioner | None = None,
+        branch: str = "q",
     ) -> torch.Tensor:
         target_dtype = (
             features.dtype
@@ -596,13 +960,22 @@ class QKPositionChannel(PositionChannel):
             else zero
         )
         amplitude = self._amplitude(amplitude_raw)
-        if self.conditioning_config["kind"] != "none":
+        if self.conditioning_config["kind"] in {
+            "local_residual",
+            "content_gate",
+        }:
             if content is None:
                 raise ValueError(
                     "Amplitude/phase content conditioning requires Q/K content."
                 )
             amplitude = amplitude_conditioner(amplitude, content)
             phase = phase_conditioner(phase, content)
+        elif self.conditioning_config["kind"] == "additive_phase":
+            if content is None:
+                raise ValueError(
+                    "additive_phase conditioning requires dedicated content"
+                )
+            phase = phase + self.content_actuator(content, branch)
         phase = phase * self.output_config["phase_scale"]
         base_sin = self.base_sin[:sequence_length].to(phase.dtype)[None, :, :]
         base_cos = self.base_cos[:sequence_length].to(phase.dtype)[None, :, :]
@@ -618,7 +991,13 @@ class QKPositionChannel(PositionChannel):
         q_content: torch.Tensor | None,
         k_content: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        if self.conditioning_config["kind"] == "none":
+        if self.conditioning_config["kind"] in {
+            "none",
+            "phase_rotation",
+            "adaptive_gain",
+            "additive_phase",
+            "rope_phase",
+        }:
             return q_output, k_output
         if self.geometry == "amplitude_phase":
             # Conditioning was applied to amplitude/phase latents before
@@ -664,7 +1043,10 @@ class QKPositionChannel(PositionChannel):
 
         q_scale = None
         k_scale = None
-        if self.application == "additive" and self.geometry == "free":
+        if self.application == "additive" and self.geometry in {
+            "free",
+            "pair_normalized",
+        }:
             if self.qk_coupling == "shared":
                 q_output, k_output = q_features, k_features
             elif self.qk_coupling == "shared_trunk_separate_readouts":
@@ -687,6 +1069,7 @@ class QKPositionChannel(PositionChannel):
                     content=q_content,
                     amplitude_conditioner=self.amplitude_conditioner,
                     phase_conditioner=self.conditioner,
+                    branch="q",
                 )
                 k_output = self._amplitude_phase_addend(
                     k_features,
@@ -697,6 +1080,7 @@ class QKPositionChannel(PositionChannel):
                     content=k_content,
                     amplitude_conditioner=self.amplitude_conditioner,
                     phase_conditioner=self.conditioner,
+                    branch="k",
                 )
             else:
                 q_output = self._amplitude_phase_addend(
@@ -708,6 +1092,7 @@ class QKPositionChannel(PositionChannel):
                     content=q_content,
                     amplitude_conditioner=self.q_amplitude_conditioner,
                     phase_conditioner=self.q_conditioner,
+                    branch="q",
                 )
                 k_output = self._amplitude_phase_addend(
                     k_features,
@@ -718,28 +1103,40 @@ class QKPositionChannel(PositionChannel):
                     content=k_content,
                     amplitude_conditioner=self.k_amplitude_conditioner,
                     phase_conditioner=self.k_conditioner,
+                    branch="k",
                 )
-        elif self.geometry == "projected_phase":
+        elif self.geometry in {"projected_phase", "unit_pair"}:
+            phase_builder = (
+                self._unit_pair_to_phase
+                if self.geometry == "unit_pair"
+                else self._project_to_phase
+            )
             if self.qk_coupling == "shared":
-                phase = self._project_to_phase(
+                phase = phase_builder(
                     q_features,
                     self.projected_phase_head,
                     sequence_length,
                 )
                 q_output, k_output = phase, phase
             else:
-                q_output = self._project_to_phase(
+                q_output = phase_builder(
                     q_features,
                     self.q_projected_phase_head,
                     sequence_length,
                 )
-                k_output = self._project_to_phase(
+                k_output = phase_builder(
                     k_features,
                     self.k_projected_phase_head,
                     sequence_length,
                 )
         else:
-            if self.qk_coupling == "shared":
+            if not self.learn_phase:
+                zero = self.base_cos[:sequence_length].to(
+                    dtype=dtype or self.base_cos.dtype
+                )[None].expand(self.heads, -1, -1)
+                q_output = zero.new_zeros(zero.shape)
+                k_output = q_output
+            elif self.qk_coupling == "shared":
                 phase = self._apply_phase_head(q_features, self.phase_head)
                 q_output, k_output = phase, phase
             else:
@@ -769,18 +1166,60 @@ class QKPositionChannel(PositionChannel):
         k_output = k_output * self.output_config["phase_scale"] if (
             self.application == "rotary"
         ) else k_output
+        if self.conditioning_config["kind"] == "rope_phase":
+            if q_content is None or k_content is None:
+                raise ValueError("rope_phase conditioning requires dedicated content")
+            q_output = q_output + self.content_actuator(q_content, "q")
+            k_output = k_output + self.content_actuator(k_content, "k")
         q_output, k_output = self._condition_outputs(
             q_output,
             k_output,
             q_content,
             k_content,
         )
+        if self.application == "additive" and self.geometry == "pair_normalized":
+            q_output = self._normalize_additive_pairs(q_output)
+            k_output = self._normalize_additive_pairs(k_output)
+        if self.conditioning_config["kind"] == "phase_rotation":
+            q_output, k_output = self._apply_content_phase_rotation(
+                q_output,
+                k_output,
+                q_content,
+                k_content,
+            )
+        if (
+            self.application == "additive"
+            and self.output_config["additive_normalization"] == "rms"
+        ):
+            if self.qk_coupling == "shared":
+                q_output = self._normalize_additive_output(
+                    q_output, self.additive_gain
+                )
+                k_output = self._normalize_additive_output(
+                    k_output, self.additive_gain
+                )
+            else:
+                q_output = self._normalize_additive_output(
+                    q_output, self.q_additive_gain
+                )
+                k_output = self._normalize_additive_output(
+                    k_output, self.k_additive_gain
+                )
+        q_gain = None
+        k_gain = None
+        if self.conditioning_config["kind"] == "adaptive_gain":
+            if q_content is None or k_content is None:
+                raise ValueError("adaptive_gain conditioning requires dedicated content")
+            q_gain = self.content_actuator(q_content, "q").exp()
+            k_gain = self.content_actuator(k_content, "k").exp()
         return QKPositionOutput(
             self.application,
             q_output,
             k_output,
             q_scale=q_scale,
             k_scale=k_scale,
+            q_gain=q_gain,
+            k_gain=k_gain,
         )
 
     def reset_output_parameters(self) -> None:
@@ -802,6 +1241,10 @@ class QKPositionChannel(PositionChannel):
         ):
             if module is not None:
                 module.reset_parameters()
+        if self.phase_rotation_conditioner is not None:
+            self.phase_rotation_conditioner.reset_output_parameters()
+        if self.content_actuator is not None:
+            self.content_actuator.reset_output_parameters()
 
     def summarize(
         self,
@@ -810,25 +1253,31 @@ class QKPositionChannel(PositionChannel):
         dtype: torch.dtype | None = None,
         q_ref: torch.Tensor | None = None,
         k_ref: torch.Tensor | None = None,
+        q_content: torch.Tensor | None = None,
+        k_content: torch.Tensor | None = None,
     ) -> dict[str, float]:
         """Compact finite diagnostics for Q/K channel outputs."""
         if self.conditioning_config["kind"] == "none":
             output = self.forward(sequence_length, dtype=dtype)
         else:
             parameter = next(self.parameters())
-            zero_content = torch.zeros(
-                1,
-                self.heads,
-                sequence_length,
-                self.head_dim,
-                device=parameter.device,
-                dtype=dtype or parameter.dtype,
-            )
+            content_dim = self.content_dim
+            if q_content is None:
+                q_content = torch.zeros(
+                    1,
+                    self.heads,
+                    sequence_length,
+                    content_dim,
+                    device=parameter.device,
+                    dtype=dtype or parameter.dtype,
+                )
+            if k_content is None:
+                k_content = torch.zeros_like(q_content)
             output = self.forward(
                 sequence_length,
                 dtype=dtype,
-                q_content=zero_content,
-                k_content=zero_content,
+                q_content=q_content,
+                k_content=k_content,
             )
         metrics: dict[str, float] = {}
 
@@ -838,6 +1287,11 @@ class QKPositionChannel(PositionChannel):
             metrics[f"{prefix}/std"] = values.std().item()
             metrics[f"{prefix}/rms"] = values.pow(2).mean().sqrt().item()
             metrics[f"{prefix}/abs_max"] = values.abs().max().item()
+
+        if q_content is not None:
+            _stats("dedicated_content_q", q_content)
+        if k_content is not None:
+            _stats("dedicated_content_k", k_content)
 
         if self.fixed_amplitude_phase:
             q_frequency = 1.0 / (
@@ -871,6 +1325,27 @@ class QKPositionChannel(PositionChannel):
 
         _stats("q", output.q)
         _stats("k", output.k)
+        if self.conditioning_config["kind"] == "phase_rotation":
+            target = self.conditioning_config["target"]
+            if target in {"q", "both"}:
+                _stats(
+                    "content_phase_q",
+                    self.phase_rotation_conditioner.phase(q_content, "q"),
+                )
+            if target in {"k", "both"}:
+                _stats(
+                    "content_phase_k",
+                    self.phase_rotation_conditioner.phase(k_content, "k"),
+                )
+        if self.conditioning_config["kind"] in {
+            "additive_phase",
+            "rope_phase",
+        }:
+            _stats("content_phase_q", self.content_actuator(q_content, "q"))
+            _stats("content_phase_k", self.content_actuator(k_content, "k"))
+        if output.q_gain is not None:
+            _stats("content_gain_q", output.q_gain)
+            _stats("content_gain_k", output.k_gain)
         diff = (output.q - output.k).detach().float()
         metrics["qk_diff_rms"] = diff.pow(2).mean().sqrt().item()
         if output.application == "rotary":
@@ -882,16 +1357,71 @@ class QKPositionChannel(PositionChannel):
         else:
             _stats("addend_q", output.q)
             _stats("addend_k", output.k)
+            if self.output_config["additive_normalization"] == "rms":
+                if self.qk_coupling == "shared":
+                    q_gain = k_gain = self.additive_gain
+                else:
+                    q_gain = self.q_additive_gain
+                    k_gain = self.k_additive_gain
+                gain_max = self.output_config["additive_gain_max"]
+                metrics["additive_gain_q_mean"] = (
+                    gain_max * torch.sigmoid(q_gain.detach().float())
+                ).mean().item()
+                metrics["additive_gain_k_mean"] = (
+                    gain_max * torch.sigmoid(k_gain.detach().float())
+                ).mean().item()
             if q_ref is not None:
-                q_rms = q_ref.detach().float().pow(2).mean().sqrt().clamp_min(1e-12)
+                q_values = q_ref.detach().float()
+                q_addend = output.q.detach().float()
+                if q_addend.ndim == 3:
+                    q_addend = q_addend.unsqueeze(0)
+                q_rms_per_token = q_values.square().mean(dim=-1).sqrt().clamp_min(
+                    1e-12
+                )
+                q_addend_rms_per_token = q_addend.square().mean(dim=-1).sqrt()
+                q_ratio = q_addend_rms_per_token / q_rms_per_token
+                q_rms = q_values.pow(2).mean().sqrt().clamp_min(1e-12)
                 metrics["addend_q_to_q_rms_ratio"] = (
-                    output.q.detach().float().pow(2).mean().sqrt() / q_rms
+                    q_addend.pow(2).mean().sqrt() / q_rms
                 ).item()
+                metrics["addend_q_to_q_ratio_p95"] = torch.quantile(
+                    q_ratio, 0.95
+                ).item()
+                metrics["q_content_combined_cosine_mean"] = (
+                    torch.nn.functional.cosine_similarity(
+                        q_values,
+                        q_values + q_addend,
+                        dim=-1,
+                    )
+                    .mean()
+                    .item()
+                )
             if k_ref is not None:
-                k_rms = k_ref.detach().float().pow(2).mean().sqrt().clamp_min(1e-12)
+                k_values = k_ref.detach().float()
+                k_addend = output.k.detach().float()
+                if k_addend.ndim == 3:
+                    k_addend = k_addend.unsqueeze(0)
+                k_rms_per_token = k_values.square().mean(dim=-1).sqrt().clamp_min(
+                    1e-12
+                )
+                k_addend_rms_per_token = k_addend.square().mean(dim=-1).sqrt()
+                k_ratio = k_addend_rms_per_token / k_rms_per_token
+                k_rms = k_values.pow(2).mean().sqrt().clamp_min(1e-12)
                 metrics["addend_k_to_k_rms_ratio"] = (
-                    output.k.detach().float().pow(2).mean().sqrt() / k_rms
+                    k_addend.pow(2).mean().sqrt() / k_rms
                 ).item()
+                metrics["addend_k_to_k_ratio_p95"] = torch.quantile(
+                    k_ratio, 0.95
+                ).item()
+                metrics["k_content_combined_cosine_mean"] = (
+                    torch.nn.functional.cosine_similarity(
+                        k_values,
+                        k_values + k_addend,
+                        dim=-1,
+                    )
+                    .mean()
+                    .item()
+                )
         return metrics
 
 
@@ -944,7 +1474,7 @@ class InklingProfileBank(torch.nn.Module):
         kind: Literal["inkling_table", "inkling_cosnet"],
         groups: int,
         heads: int,
-        head_dim: int,
+        content_dim: int,
         extent: int,
         config: dict,
     ):
@@ -956,7 +1486,7 @@ class InklingProfileBank(torch.nn.Module):
         self.num_profiles = config["num_profiles"]
         self.router = InklingRouter(
             groups=groups,
-            head_dim=head_dim,
+            head_dim=content_dim,
             hidden_dim=config["router_hidden_dim"],
             num_profiles=self.num_profiles,
         )
@@ -1043,7 +1573,8 @@ class FactorizedPairwiseLogit(torch.nn.Module):
         *,
         groups: int,
         heads: int,
-        head_dim: int,
+        content_dim: int,
+        position_dim: int,
         rank: int,
         position_mode: str,
         gate_init: float,
@@ -1054,23 +1585,23 @@ class FactorizedPairwiseLogit(torch.nn.Module):
         self.rank = rank
         self.position_mode = position_mode
         self.query_content = torch.nn.Parameter(
-            torch.empty(groups, head_dim, rank)
+            torch.empty(groups, content_dim, rank)
         )
         self.key_content = torch.nn.Parameter(
-            torch.empty(groups, head_dim, rank)
+            torch.empty(groups, content_dim, rank)
         )
         self.relative_position = torch.nn.Parameter(
-            torch.empty(groups, head_dim, rank)
+            torch.empty(groups, position_dim, rank)
         )
         if position_mode in {"query_absolute", "full_absolute"}:
             self.query_position = torch.nn.Parameter(
-                torch.empty(groups, head_dim, rank)
+                torch.empty(groups, position_dim, rank)
             )
         else:
             self.register_parameter("query_position", None)
         if position_mode == "full_absolute":
             self.key_position = torch.nn.Parameter(
-                torch.empty(groups, head_dim, rank)
+                torch.empty(groups, position_dim, rank)
             )
         else:
             self.register_parameter("key_position", None)
@@ -1167,6 +1698,7 @@ class LogitBiasChannel(PositionChannel):
         heads: int,
         head_dim: int,
         model_dim: int,
+        content_dim: int,
         extent: int,
         rope_theta: float,
     ):
@@ -1200,7 +1732,7 @@ class LogitBiasChannel(PositionChannel):
                 kind=self.conditioning_kind,
                 groups=_readout_groups(self.head_coupling, heads),
                 heads=heads,
-                head_dim=head_dim,
+                content_dim=content_dim,
                 extent=extent,
                 config=conditioning,
             )
@@ -1208,7 +1740,8 @@ class LogitBiasChannel(PositionChannel):
             self.pairwise = FactorizedPairwiseLogit(
                 groups=_readout_groups(self.head_coupling, heads),
                 heads=heads,
-                head_dim=head_dim,
+                content_dim=content_dim,
+                position_dim=head_dim,
                 rank=conditioning["pair_rank"],
                 position_mode=conditioning["position_mode"],
                 gate_init=conditioning["gate_init"],
@@ -1482,7 +2015,7 @@ def _map_batched_features(
 
 
 class AttentionPositionWriteChannel(PositionChannel):
-    """Write attended key-position or relative-offset summaries to residual."""
+    """Write attended or query-local position features to the residual stream."""
 
     def __init__(
         self,
@@ -1528,10 +2061,21 @@ class AttentionPositionWriteChannel(PositionChannel):
             raise ValueError(
                 "relative_offset attention writes require an even per-head value width"
             )
-        gate_groups = _readout_groups(self.head_coupling, heads)
-        self.gate = torch.nn.Parameter(
-            torch.full((gate_groups,), float(config["gate_init"]))
-        )
+        self.query_projection = None
+        if self.mode == "query_position":
+            self.register_parameter("gate", None)
+            self.query_projection = torch.nn.Linear(
+                model_dim,
+                model_dim,
+                bias=True,
+            )
+            torch.nn.init.zeros_(self.query_projection.weight)
+            torch.nn.init.zeros_(self.query_projection.bias)
+        else:
+            gate_groups = _readout_groups(self.head_coupling, heads)
+            self.gate = torch.nn.Parameter(
+                torch.full((gate_groups,), float(config["gate_init"]))
+            )
 
     def position_values(
         self,
@@ -1569,7 +2113,21 @@ class AttentionPositionWriteChannel(PositionChannel):
             dim=-1,
         ).flatten(-2)
 
+    def query_output(
+        self,
+        length: int,
+        *,
+        dtype: torch.dtype,
+    ) -> torch.Tensor:
+        if self.mode != "query_position" or self.query_projection is None:
+            raise ValueError("query_output is only valid for query_position mode")
+        by_head = self.pipeline(length, dtype=dtype)
+        merged = by_head.permute(1, 0, 2).reshape(length, self.model_dim)
+        return self.query_projection(merged)
+
     def forward(self, summary: torch.Tensor) -> torch.Tensor:
+        if self.mode == "query_position":
+            raise ValueError("query_position writes do not consume attention summaries")
         if self.mode == "relative_offset":
             summary = self._relative(
                 summary,
@@ -1593,8 +2151,12 @@ class AttentionPositionWriteChannel(PositionChannel):
         )
 
     def reset_output_parameters(self) -> None:
-        with torch.no_grad():
-            self.gate.fill_(float(self.config["gate_init"]))
+        if self.query_projection is not None:
+            torch.nn.init.zeros_(self.query_projection.weight)
+            torch.nn.init.zeros_(self.query_projection.bias)
+        else:
+            with torch.no_grad():
+                self.gate.fill_(float(self.config["gate_init"]))
 
 
 def build_qk_position_channel(
@@ -1603,6 +2165,7 @@ def build_qk_position_channel(
     heads: int,
     head_dim: int,
     model_dim: int,
+    content_dim: int | None = None,
     extent: int,
     rope_theta: float,
 ) -> QKPositionChannel | None:
@@ -1620,6 +2183,15 @@ def build_qk_position_channel(
         heads=heads,
         head_dim=head_dim,
         model_dim=model_dim,
+        content_dim=(
+            content_dim
+            if content_dim is not None
+            else (
+                model_dim
+                if resolved["conditioning"]["source"] == "residual"
+                else head_dim
+            )
+        ),
         extent=extent,
         rope_theta=rope_theta,
     )
@@ -1631,6 +2203,7 @@ def build_logit_bias_channel(
     heads: int,
     head_dim: int,
     model_dim: int,
+    content_dim: int | None = None,
     extent: int,
     rope_theta: float,
 ) -> LogitBiasChannel | None:
@@ -1648,6 +2221,7 @@ def build_logit_bias_channel(
         heads=heads,
         head_dim=head_dim,
         model_dim=model_dim,
+        content_dim=content_dim or head_dim,
         extent=extent,
         rope_theta=rope_theta,
     )
@@ -1780,6 +2354,7 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
 
     qk_total = 0
     logit_total = 0
+    content_total = 0
     attention_write_total = 0
     residual_stream_total = _unique_numel(
         getattr(model, "residual_position_input", None)
@@ -1795,18 +2370,23 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
                 continue
             qk_total += _unique_numel(getattr(attn, "qk_position", None))
             logit_total += _unique_numel(getattr(attn, "logit_bias", None))
+            content_total += _unique_numel(
+                getattr(attn, "position_content", None)
+            )
             attention_write_total += _unique_numel(
                 getattr(attn, "position_write", None)
             )
     position_total = (
         qk_total
         + logit_total
+        + content_total
         + attention_write_total
         + residual_stream_total
     )
     return {
         "qk_position_params": qk_total,
         "logit_bias_params": logit_total,
+        "position_content_params": content_total,
         "attention_write_params": attention_write_total,
         "residual_stream_params": residual_stream_total,
         "position_params": position_total,

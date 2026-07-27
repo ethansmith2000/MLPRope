@@ -26,9 +26,19 @@ def _qk(
     geometry: str | None = None,
     basis_kind: str = "frozen_fourier",
     conditioning: str = "none",
+    conditioning_source: str = "qk",
+    conditioning_target: str = "both",
+    conditioning_coupling: str = "shared_trunk_separate_readouts",
+    phase_bound: float = 0.25,
     scalars: list[str] | None = None,
+    mapper_residual: bool | None = None,
+    amplitude_init: float = 0.1,
 ) -> dict:
-    residual = mapper_kind in {"low_rank", "bottleneck_mlp", "mlp"}
+    residual = (
+        mapper_kind in {"low_rank", "bottleneck_mlp", "mlp"}
+        if mapper_residual is None
+        else mapper_residual
+    )
     return normalize_position_config_v2(
         "qk",
         {
@@ -52,7 +62,14 @@ def _qk(
             "head_coupling": head_coupling,
             "conditioning": {
                 "kind": conditioning,
+                "source": conditioning_source,
+                "target": conditioning_target,
+                "coupling": conditioning_coupling,
+                "phase_bound": phase_bound,
                 "hidden_dim": 12,
+            },
+            "output": {
+                "amplitude_init": amplitude_init,
             },
         },
         model_dim=64,
@@ -61,7 +78,12 @@ def _qk(
     )
 
 
-def _logit(conditioning: str = "none") -> dict:
+def _logit(
+    conditioning: str = "none",
+    *,
+    source: str = "qk",
+    position_mode: str = "relative_only",
+) -> dict:
     return normalize_position_config_v2(
         "logit_bias",
         {
@@ -83,10 +105,12 @@ def _logit(conditioning: str = "none") -> dict:
             "head_coupling": "per_head_independent",
             "conditioning": {
                 "kind": conditioning,
+                "source": source,
                 "num_profiles": 4,
                 "router_hidden_dim": 8,
                 "num_frequencies": 4,
                 "gate_init": 0.0,
+                "position_mode": position_mode,
             },
         },
         model_dim=64,
@@ -102,6 +126,43 @@ CASES = [
     (
         "additive_separate_readout",
         _qk(application="additive", qk_coupling="shared_trunk_separate_readouts"),
+        {"enabled": False},
+        "sdpa",
+    ),
+    (
+        "additive_free_residual",
+        _qk(
+            application="additive",
+            qk_coupling="shared_trunk_separate_readouts",
+            mapper_kind="linear",
+            mapper_residual=True,
+        ),
+        {"enabled": False},
+        "sdpa",
+    ),
+    (
+        "additive_pair_normalized",
+        _qk(
+            application="additive",
+            geometry="pair_normalized",
+            qk_coupling="shared_trunk_separate_readouts",
+            mapper_kind="linear",
+            amplitude_init=0.3,
+        ),
+        {"enabled": False},
+        "sdpa",
+    ),
+    (
+        "additive_content_phase_rotation",
+        _qk(
+            application="additive",
+            geometry="pair_normalized",
+            qk_coupling="shared_trunk_separate_readouts",
+            mapper_kind="linear",
+            conditioning="phase_rotation",
+            conditioning_source="residual",
+            amplitude_init=0.3,
+        ),
         {"enabled": False},
         "sdpa",
     ),
@@ -291,6 +352,75 @@ NEW_CASES = [
     ),
 ]
 
+NULL_CONDITIONING_CASES = [
+    (
+        "adaptive_qk_gain",
+        _qk(
+            application="rotary",
+            geometry="phase",
+            qk_coupling="shared",
+            conditioning="adaptive_gain",
+            conditioning_source="dedicated",
+        ),
+        {"enabled": False},
+        "sdpa",
+        None,
+        None,
+    ),
+    (
+        "additive_carrier_content_phase",
+        _qk(
+            application="additive",
+            geometry="amplitude_phase",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="additive_phase",
+            conditioning_source="dedicated",
+            amplitude_init=0.3,
+        ),
+        {"enabled": False},
+        "sdpa",
+        None,
+        None,
+    ),
+    (
+        "rope_content_phase",
+        _qk(
+            application="rotary",
+            geometry="phase",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="rope_phase",
+            conditioning_source="dedicated",
+        ),
+        {"enabled": False},
+        "sdpa",
+        None,
+        None,
+    ),
+    (
+        "dedicated_pairwise_logit",
+        {"enabled": False},
+        _logit(
+            "pairwise_low_rank",
+            source="dedicated",
+            position_mode="query_absolute",
+        ),
+        "flex",
+        None,
+        None,
+    ),
+    (
+        "query_position_write",
+        {"enabled": False},
+        {"enabled": False},
+        "sdpa",
+        None,
+        {
+            "enabled": True,
+            "mode": "query_position",
+        },
+    ),
+]
+
 
 def run_case(
     name: str,
@@ -301,6 +431,7 @@ def run_case(
     write: dict | None = None,
     *,
     compile_model: bool,
+    qk_norm_mode: str = "legacy_layernorm",
 ) -> None:
     device = torch.device("cuda")
     model = Transformer(
@@ -316,6 +447,7 @@ def run_case(
         attention_write_config=write,
         attn_impl=attn_impl,
         rel_extent=64,
+        qk_norm_mode=qk_norm_mode,
     ).to(device=device, dtype=torch.bfloat16)
     model.train()
     if attn_impl == "flex":
@@ -373,6 +505,19 @@ def main() -> None:
                 residual,
                 write,
                 compile_model=compile_model,
+            )
+        for name, qk, logit, attn_impl, residual, write in NULL_CONDITIONING_CASES:
+            if args.case and name not in args.case:
+                continue
+            run_case(
+                name,
+                qk,
+                logit,
+                attn_impl,
+                residual,
+                write,
+                compile_model=compile_model,
+                qk_norm_mode="method_aware_rms",
             )
     print("ALL_SMOKE_OK")
 

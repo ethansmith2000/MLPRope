@@ -22,6 +22,7 @@ from position import (
     ensure_channel_v2,
     interleaved_fourier_basis,
     normalize_attention_write_config,
+    normalize_position_content_config,
     normalize_residual_stream_config,
 )
 
@@ -68,6 +69,42 @@ def causal_mask(batch_idx, head_idx, query_idx, key_value_idx):
     return query_idx >= key_value_idx
 
 
+class PositionContentProjection(torch.nn.Module):
+    """Dedicated normalized low-rank content for positional mechanisms."""
+
+    def __init__(
+        self,
+        model_dim: int,
+        content_dim: int,
+        heads: int,
+        coupling: str,
+    ):
+        super().__init__()
+        self.heads = heads
+        self.coupling = coupling
+        self.q_projection = torch.nn.Linear(model_dim, content_dim, bias=False)
+        self.k_projection = (
+            self.q_projection
+            if coupling == "shared"
+            else torch.nn.Linear(model_dim, content_dim, bias=False)
+        )
+
+    @staticmethod
+    def _unit_rms(value: torch.Tensor) -> torch.Tensor:
+        scale = torch.rsqrt(
+            value.float().square().mean(dim=-1, keepdim=True) + 1e-6
+        )
+        return value * scale.to(dtype=value.dtype)
+
+    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        q_content = self._unit_rms(self.q_projection(x))
+        k_content = self._unit_rms(self.k_projection(x))
+        return (
+            q_content[:, None].expand(-1, self.heads, -1, -1).contiguous(),
+            k_content[:, None].expand(-1, self.heads, -1, -1).contiguous(),
+        )
+
+
 class Attention(torch.nn.Module):
     def __init__(
         self,
@@ -83,6 +120,10 @@ class Attention(torch.nn.Module):
         logit_bias_config: dict | None = None,
         attn_impl: AttentionImpl = "sdpa",
         attention_write_config: dict | None = None,
+        post_position_qk_norm: bool = False,
+        position_content_dim: int = 64,
+        position_content_coupling: str = "separate",
+        qk_norm_mode: str = "legacy_layernorm",
     ):
         super().__init__()
         self.dim = dim
@@ -94,6 +135,21 @@ class Attention(torch.nn.Module):
         self.max_seq_len = max_seq_len
         self.rel_extent = rel_extent or max_seq_len
         self.attn_impl = attn_impl
+        self.post_position_qk_norm = bool(post_position_qk_norm)
+        if qk_norm_mode not in {"legacy_layernorm", "method_aware_rms"}:
+            raise ValueError(
+                "qk_norm_mode must be 'legacy_layernorm' or 'method_aware_rms'"
+            )
+        if qk_norm_mode == "method_aware_rms" and self.post_position_qk_norm:
+            raise ValueError(
+                "method_aware_rms already applies one Q/K normalization; "
+                "post_position_qk_norm must be false"
+            )
+        self.qk_norm_mode = qk_norm_mode
+        self.position_content_config = normalize_position_content_config(
+            position_content_dim,
+            position_content_coupling,
+        )
         if dim % heads != 0:
             raise ValueError("dim must be divisible by heads.")
         if self.head_dim % 2 != 0:
@@ -146,11 +202,39 @@ class Attention(torch.nn.Module):
         self.to_v = torch.nn.Linear(dim, dim, bias=False)
         self.to_out = torch.nn.Linear(dim, dim, bias=True)
 
+        conditioning_configs = (
+            self.qk_config["conditioning"],
+            self.logit_bias_config["conditioning"],
+        )
+        uses_dedicated_content = any(
+            cfg["kind"] != "none" and cfg["source"] == "dedicated"
+            for cfg in conditioning_configs
+        )
+        self.position_content = (
+            PositionContentProjection(
+                dim,
+                self.position_content_config["dim"],
+                heads,
+                self.position_content_config["coupling"],
+            )
+            if uses_dedicated_content
+            else None
+        )
+
+        def conditioning_dim(config: dict) -> int:
+            source = config["conditioning"]["source"]
+            if source == "dedicated":
+                return self.position_content_config["dim"]
+            if source == "residual":
+                return dim
+            return self.head_dim
+
         self.qk_position = build_qk_position_channel(
             self.qk_config,
             heads=heads,
             head_dim=self.head_dim,
             model_dim=dim,
+            content_dim=conditioning_dim(self.qk_config),
             extent=max_seq_len,
             rope_theta=rope_theta,
         )
@@ -174,6 +258,7 @@ class Attention(torch.nn.Module):
             heads=heads,
             head_dim=self.head_dim,
             model_dim=dim,
+            content_dim=conditioning_dim(self.logit_bias_config),
             extent=self.rel_extent,
             rope_theta=rope_theta,
         )
@@ -187,8 +272,13 @@ class Attention(torch.nn.Module):
         )
 
         if qk_norm:
-            self.q_norm = torch.nn.LayerNorm(self.head_dim)
-            self.k_norm = torch.nn.LayerNorm(self.head_dim)
+            norm_type = (
+                torch.nn.RMSNorm
+                if qk_norm_mode == "method_aware_rms"
+                else torch.nn.LayerNorm
+            )
+            self.q_norm = norm_type(self.head_dim, eps=1e-6)
+            self.k_norm = norm_type(self.head_dim, eps=1e-6)
         else:
             self.q_norm = torch.nn.Identity()
             self.k_norm = torch.nn.Identity()
@@ -233,6 +323,13 @@ class Attention(torch.nn.Module):
     def _split_heads(self, x):
         batch, sequence, _ = x.shape
         return x.view(batch, sequence, self.heads, self.head_dim).transpose(1, 2)
+
+    @staticmethod
+    def _unit_rms(value: torch.Tensor) -> torch.Tensor:
+        scale = torch.rsqrt(
+            value.float().square().mean(dim=-1, keepdim=True) + 1e-6
+        )
+        return value * scale.to(dtype=value.dtype)
 
     def prepare_flex_mask(
         self,
@@ -356,40 +453,95 @@ class Attention(torch.nn.Module):
         )
 
     def forward(self, x):
-        q = self._split_heads(self.to_q(x))
-        k = self._split_heads(self.to_k(x))
+        q_projected = self._split_heads(self.to_q(x))
+        k_projected = self._split_heads(self.to_k(x))
         v = self._split_heads(self.to_v(x))
+        q_normed = self.q_norm(q_projected)
+        k_normed = self.k_norm(k_projected)
+        dedicated_q_content = None
+        dedicated_k_content = None
+        if self.position_content is not None:
+            dedicated_q_content, dedicated_k_content = self.position_content(x)
 
-        q = self.q_norm(q)
-        k = self.k_norm(k)
-        q_content = q
-        k_content = k
+        def content_for(config: dict) -> tuple[torch.Tensor, torch.Tensor]:
+            source = config["conditioning"]["source"]
+            if source == "dedicated":
+                if dedicated_q_content is None or dedicated_k_content is None:
+                    raise ValueError(
+                        "Dedicated positional content was requested but not built"
+                    )
+                return dedicated_q_content, dedicated_k_content
+            if source == "residual":
+                residual = x[:, None, :, :].expand(-1, self.heads, -1, -1)
+                return residual, residual
+            return q_normed, k_normed
+
+        position_q_content = position_k_content = None
+        if self.qk_position is not None:
+            if self.qk_config["conditioning"]["kind"] != "none":
+                position_q_content, position_k_content = content_for(
+                    self.qk_config
+                )
         q_phase_delta = None
         k_phase_delta = None
         q_scale = None
         k_scale = None
+        q_gain = None
+        k_gain = None
+        position_output = None
         if self.qk_position is not None:
             position_output = self.qk_position(
-                q.shape[-2],
-                dtype=q.dtype,
-                q_content=q_content,
-                k_content=k_content,
+                q_projected.shape[-2],
+                dtype=q_projected.dtype,
+                q_content=position_q_content,
+                k_content=position_k_content,
             )
-            if position_output.application == "additive":
-                # Additive Fourier Q/K: q' = q + e_q(p), no R(θ)q.
+            q_gain = position_output.q_gain
+            k_gain = position_output.k_gain
+
+        if self.qk_norm_mode == "method_aware_rms":
+            q = q_projected
+            k = k_projected
+            if position_output is not None and position_output.application == "additive":
                 q_addend = (
-                    position_output.q[None, :, :, :]
+                    position_output.q[None]
                     if position_output.q.ndim == 3
                     else position_output.q
                 )
                 k_addend = (
-                    position_output.k[None, :, :, :]
+                    position_output.k[None]
                     if position_output.k.ndim == 3
                     else position_output.k
                 )
                 q = q + q_addend
                 k = k + k_addend
+                q = self.q_norm(q)
+                k = self.k_norm(k)
             else:
+                q = q_normed
+                k = k_normed
+                if position_output is not None:
+                    q_phase_delta = position_output.q
+                    k_phase_delta = position_output.k
+                    q_scale = position_output.q_scale
+                    k_scale = position_output.k_scale
+        else:
+            q = q_normed
+            k = k_normed
+            if position_output is not None and position_output.application == "additive":
+                q_addend = (
+                    position_output.q[None]
+                    if position_output.q.ndim == 3
+                    else position_output.q
+                )
+                k_addend = (
+                    position_output.k[None]
+                    if position_output.k.ndim == 3
+                    else position_output.k
+                )
+                q = q + q_addend
+                k = k + k_addend
+            elif position_output is not None:
                 q_phase_delta = position_output.q
                 k_phase_delta = position_output.k
                 q_scale = position_output.q_scale
@@ -403,7 +555,18 @@ class Attention(torch.nn.Module):
                 q_scale=q_scale,
                 k_scale=k_scale,
             )
-        if self.position_write is not None:
+        if q_gain is not None:
+            q = q * q_gain.to(dtype=q.dtype)
+        if k_gain is not None:
+            k = k * k_gain.to(dtype=k.dtype)
+        if self.post_position_qk_norm:
+            q = self._unit_rms(q)
+            k = self._unit_rms(k)
+        attended_position_write = (
+            self.position_write is not None
+            and self.position_write.mode != "query_position"
+        )
+        if attended_position_write:
             position_values = self.position_write.position_values(
                 v.shape[-2],
                 dtype=v.dtype,
@@ -413,6 +576,13 @@ class Attention(torch.nn.Module):
             )
             v = torch.cat((v, position_values), dim=-1)
         if self.attn_impl == "flex":
+            if (
+                self.logit_bias is not None
+                and self.logit_bias_config["conditioning"]["kind"] != "none"
+            ):
+                q_content, k_content = content_for(self.logit_bias_config)
+            else:
+                q_content, k_content = q_normed, k_normed
             attn = self._flex_attention(
                 q,
                 k,
@@ -427,7 +597,7 @@ class Attention(torch.nn.Module):
                 v,
                 is_causal=self.is_causal,
             )
-        if self.position_write is None:
+        if not attended_position_write:
             content_attn = attn
             position_output = None
         else:
@@ -442,6 +612,14 @@ class Attention(torch.nn.Module):
         output = self.to_out(content_attn)
         if position_output is not None:
             output = output + position_output
+        if (
+            self.position_write is not None
+            and self.position_write.mode == "query_position"
+        ):
+            output = output + self.position_write.query_output(
+                x.shape[1],
+                dtype=output.dtype,
+            )[None]
         return output
 
     @torch.no_grad()
@@ -471,6 +649,73 @@ class Attention(torch.nn.Module):
             q_ref=q_ref,
             k_ref=k_ref,
         )
+
+    @torch.no_grad()
+    def qk_position_summary_from_input(
+        self,
+        x: torch.Tensor,
+    ) -> dict[str, float] | None:
+        if self.qk_position is None:
+            return None
+        q_projected = self._split_heads(self.to_q(x))
+        k_projected = self._split_heads(self.to_k(x))
+        q = self.q_norm(q_projected)
+        k = self.k_norm(k_projected)
+        source = self.qk_position.conditioning_config["source"]
+        if self.qk_position.conditioning_config["kind"] == "none":
+            q_content = k_content = None
+        elif source == "dedicated":
+            if self.position_content is None:
+                raise ValueError("Dedicated positional content projector is missing")
+            q_content, k_content = self.position_content(x)
+        elif source == "residual":
+            q_content = x[:, None, :, :].expand(-1, self.heads, -1, -1)
+            k_content = q_content
+        else:
+            q_content, k_content = q, k
+        parameter = next(self.qk_position.parameters(), None)
+        dtype = parameter.dtype if parameter is not None else x.dtype
+        summary = self.qk_position.summarize(
+            x.shape[1],
+            dtype=dtype,
+            q_ref=q,
+            k_ref=k,
+            q_content=q_content,
+            k_content=k_content,
+        )
+        position = self.qk_position(
+            x.shape[1],
+            dtype=dtype,
+            q_content=q_content,
+            k_content=k_content,
+        )
+        if position.application == "additive":
+            q_add = position.q[None] if position.q.ndim == 3 else position.q
+            k_add = position.k[None] if position.k.ndim == 3 else position.k
+            if self.qk_norm_mode == "method_aware_rms":
+                final_q = self.q_norm(q_projected + q_add)
+                final_k = self.k_norm(k_projected + k_add)
+            else:
+                final_q, final_k = q + q_add, k + k_add
+        else:
+            final_q, final_k = self._apply_rope(
+                q,
+                k,
+                q_phase_delta=position.q,
+                k_phase_delta=position.k,
+                q_scale=position.q_scale,
+                k_scale=position.k_scale,
+            )
+        if position.q_gain is not None:
+            final_q = final_q * position.q_gain
+            final_k = final_k * position.k_gain
+        summary["final_q_rms"] = (
+            final_q.detach().float().square().mean().sqrt().item()
+        )
+        summary["final_k_rms"] = (
+            final_k.detach().float().square().mean().sqrt().item()
+        )
+        return summary
 
 
 class GeGLU(torch.nn.Module):
@@ -509,6 +754,10 @@ class TransformerBlock(torch.nn.Module):
         logit_bias_config: dict | None = None,
         attn_impl: AttentionImpl = "sdpa",
         attention_write_config: dict | None = None,
+        post_position_qk_norm: bool = False,
+        position_content_dim: int = 64,
+        position_content_coupling: str = "separate",
+        qk_norm_mode: str = "legacy_layernorm",
     ):
         super().__init__()
         self.attn = Attention(
@@ -524,6 +773,10 @@ class TransformerBlock(torch.nn.Module):
             logit_bias_config=logit_bias_config,
             attention_write_config=attention_write_config,
             attn_impl=attn_impl,
+            post_position_qk_norm=post_position_qk_norm,
+            position_content_dim=position_content_dim,
+            position_content_coupling=position_content_coupling,
+            qk_norm_mode=qk_norm_mode,
         )
         self.ff = GeGLU(dim, hidden_dim=ff_hidden_dim)
         self.norm1 = torch.nn.LayerNorm(dim)
@@ -555,6 +808,10 @@ class Transformer(torch.nn.Module):
         ff_hidden_dim=None,
         residual_stream_config: dict | None = None,
         attention_write_config: dict | None = None,
+        post_position_qk_norm: bool = False,
+        position_content_dim: int = 64,
+        position_content_coupling: str = "separate",
+        qk_norm_mode: str = "legacy_layernorm",
     ):
         super().__init__()
 
@@ -610,6 +867,10 @@ class Transformer(torch.nn.Module):
                 logit_bias_config=logit_bias_config,
                 attention_write_config=attention_write_config,
                 attn_impl=attn_impl,
+                post_position_qk_norm=post_position_qk_norm,
+                position_content_dim=position_content_dim,
+                position_content_coupling=position_content_coupling,
+                qk_norm_mode=qk_norm_mode,
             )
             for _ in range(depth)
         ])
@@ -658,13 +919,38 @@ class Transformer(torch.nn.Module):
         self,
         *,
         sequence_length: int | None = None,
+        input_ids: torch.Tensor | None = None,
     ) -> tuple[dict[str, float], dict[str, torch.Tensor]]:
         """Return scalar position statistics and selected logit profiles."""
         metrics: dict[str, float] = {}
         profiles: dict[str, torch.Tensor] = {}
         selected_layers = {0, len(self.blocks) // 2, len(self.blocks) - 1}
         seq_len = sequence_length
+        diagnostic_x = None
+        if input_ids is not None:
+            diagnostic_x = self.in_proj(self.token_embedding(input_ids))
+            if self.residual_position_input is not None:
+                diagnostic_x = diagnostic_x + self.residual_position_input(
+                    diagnostic_x.shape[1],
+                    dtype=diagnostic_x.dtype,
+                )[None, :, :]
         for layer_idx, block in enumerate(self.blocks):
+            actual_qk_summary = None
+            if diagnostic_x is not None:
+                if self.residual_position_layers:
+                    position_idx = (
+                        0 if self.residual_position_layer_shared else layer_idx
+                    )
+                    diagnostic_x = (
+                        diagnostic_x
+                        + self.residual_position_layers[position_idx](
+                            diagnostic_x.shape[1],
+                            dtype=diagnostic_x.dtype,
+                        )[None, :, :]
+                    )
+                actual_qk_summary = block.attn.qk_position_summary_from_input(
+                    block.norm1(diagnostic_x)
+                )
             curves = block.attn.logit_bias_curves()
             if curves is not None:
                 curves_cpu = curves.cpu()
@@ -686,14 +972,37 @@ class Transformer(torch.nn.Module):
                     metrics[f"{prefix}/{key}"] = value
 
             if block.attn.position_write is not None:
-                gate = block.attn.position_write.gate.detach().float()
                 prefix = f"position/layer_{layer_idx:02d}/attention_write"
-                metrics[f"{prefix}/gate_mean"] = gate.mean().item()
-                metrics[f"{prefix}/gate_abs_max"] = gate.abs().max().item()
+                if block.attn.position_write.gate is not None:
+                    gate = block.attn.position_write.gate.detach().float()
+                    metrics[f"{prefix}/gate_mean"] = gate.mean().item()
+                    metrics[f"{prefix}/gate_abs_max"] = gate.abs().max().item()
+                else:
+                    projection_weight = (
+                        block.attn.position_write.query_projection.weight
+                    )
+                    projection = projection_weight.detach().float()
+                    metrics[f"{prefix}/projection_rms"] = (
+                        projection.square().mean().sqrt().item()
+                    )
+                    if seq_len is not None:
+                        write = block.attn.position_write.query_output(
+                            seq_len,
+                            dtype=projection_weight.dtype,
+                        ).detach().float()
+                        metrics[f"{prefix}/contribution_rms"] = (
+                            write.square().mean().sqrt().item()
+                        )
 
+            if diagnostic_x is not None:
+                diagnostic_x = block(diagnostic_x)
             if seq_len is None:
                 continue
-            qk_summary = block.attn.qk_position_summary(seq_len)
+            qk_summary = (
+                actual_qk_summary
+                if actual_qk_summary is not None
+                else block.attn.qk_position_summary(seq_len)
+            )
             if qk_summary is None:
                 continue
             prefix = f"position/layer_{layer_idx:02d}/qk"

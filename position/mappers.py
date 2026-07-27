@@ -133,6 +133,8 @@ class FeatureMapper(torch.nn.Module):
         elif self.kind == "linear":
             mapped = torch.einsum("grd,gde->gre", features, self.weight)
             mapped = mapped + self.bias[:, None, :]
+            if self.residual:
+                mapped = features + mapped
         else:
             hidden = torch.einsum("grd,gdk->grk", features, self.down)
             hidden = hidden + self.down_bias[:, None, :]

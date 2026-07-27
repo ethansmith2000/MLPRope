@@ -1344,3 +1344,245 @@ defaulting to training length, so positions beyond the training horizon produce
 genuinely out-of-range scalar values. RoPE and free-additive results are
 unaffected; only the canonical scalar finalist is rerun with normalization
 extent 1024 before closing this comparison.
+
+The corrected scalar-normalization run completed at `4.0444` / `4.0383` /
+`4.0871` for 1024 / 1536 / 2048. It is effectively unchanged in-distribution
+and remains best at all lengths; at 2048 it beats free additive by `0.0169` and
+RoPE by `0.0643`. Its 1024-to-2048 change is `+0.0427`. These corrected values,
+not the model-extent-normalized preliminary cell, close the frozen-finalist
+comparison.
+
+---
+
+## 2026-07-25 — Post-position Q/K normalization screen launched
+
+Added opt-in `post_position_qk_norm`, a parameter-free per-head RMS
+normalization applied after all additive and rotary Q/K position operations.
+The existing learned QK LayerNorm remains before position injection, giving the
+controlled sequence `project -> LayerNorm -> position operation -> RMSNorm`.
+RMSNorm was chosen for the second stage because it repairs magnitude without
+LayerNorm mean subtraction changing positional direction.
+
+Launched six seed-`123`, 5k-step runs:
+
+- canonical scalar AddRoPE plus post-normalization;
+- scalar free-additive control, with and without post-normalization;
+- bounded local-residual conditioning plus post-normalization;
+- bounded content-gate conditioning plus post-normalization;
+- scaled rotary plus post-normalization.
+
+Existing exact 5k cells are reused for the canonical, conditioning, and scaled
+rotary comparisons. The free-additive pair is run together because no exact
+scalar-augmented 5k control existed. All 60 position tests pass, all six configs
+pass GPU dry runs, and all six jobs acquired GPUs through the shared
+`gpu-claim` queue. WandB group is `phase4-post-qk-norm-5k`.
+
+The completed post-normalization results were `4.3869` for canonical AddRoPE,
+`4.4120 -> 4.4007` for the exact free-additive control pair, and `4.4732` for
+scaled rotary versus its prior `4.4617` anchor. Local-residual and content-gate
+conditioning remained collapsed at `5.9242` and `5.4448`. Post-normalization
+kept attention finite but exposed position branches with RMS values in the
+hundreds and maxima above 3,000: it fixed total Q/K magnitude without preserving
+the content/position mixture.
+
+Further review found that the bounded retries constrained only conditioner
+corrections, not the underlying amplitude base. Conditioned diagnostics also
+used zero content rather than a real validation example. These runs reject the
+old parameterizations, not content conditioning in general.
+
+---
+
+## 2026-07-25 — Safe contribution and residual-content redesign launched
+
+Added the following controls:
+
+- positive `bounded_sigmoid` pair amplitudes;
+- per-token/head RMS normalization of additive position branches followed by a
+  bounded learned contribution gain;
+- bounded-log rotary pair scales;
+- `scaled_sigmoid` content gates and selectable `tanh`/`GELU`/linear local
+  corrections;
+- conditioning sourced directly from the block-normalized residual stream,
+  with independent Q/K conditioner networks;
+- exact unit-pair rotary residuals formed by normalizing
+  `[cos(theta)+dx, sin(theta)+dy]`;
+- real-validation-content diagnostics for branch/QK RMS ratios, p95 ratios,
+  content-to-combined angles, and additive gains.
+
+Also fixed `mapper.kind=linear, residual=true`, whose residual flag was
+previously validated but not applied.
+
+Launched eight seed-`123`, 5k-step runs under
+`phase4-safe-conditioning-5k`: a safe unconditioned control; residual- and
+QK-sourced sigmoid gates; residual-sourced tanh gate; residual-sourced GELU and
+tanh local corrections; bounded scaled rotary; and unit-pair rotary. All 66
+position tests pass, every config passes GPU dry-run validation, and CUDA
+forward/backward smoke tests produced finite losses and real-content
+diagnostics. Seven jobs acquired the currently free GPUs through `gpu-claim`;
+the unit-pair rotary job is waiting behind the active external claim.
+
+### Safe-conditioning result
+
+All eight runs completed finitely:
+
+- safe unconditioned AddRoPE: `4.4052`;
+- Q/K-sourced sigmoid gate: `4.7263`;
+- residual-sourced sigmoid gate: `4.9580`;
+- residual-sourced GELU local correction: `4.9584`;
+- residual-sourced tanh local correction: `4.9841`;
+- residual-sourced tanh gate: `5.0100`;
+- bounded scaled rotary: `4.4781`;
+- unit-pair rotary: `4.4948`.
+
+The safety controls worked mechanically: additive branch RMS maxima remained
+`0.220–0.238`, p95 branch/content ratios remained below `0.259`, and the
+minimum content-to-combined cosine remained above `0.973`. Thus the old
+hundreds-RMS takeover is gone. Content conditioning nevertheless remains
+substantially worse than the safe control. Q/K content beats residual content
+by `0.2317` in the sigmoid-gate comparison; GELU beats tanh by `0.0257` for the
+residual local correction, and sigmoid beats tanh by `0.0520` for the residual
+gate. These activation effects are real within the screen but do not rescue
+the mechanism.
+
+The safe control is `0.0183` worse than the earlier unconstrained post-RMS
+canonical result (`4.3869`), suggesting the full branch normalization/bounded
+amplitude package also removes some useful freedom. Bounded scaled rotary and
+unit-pair rotary do not improve the rotary sector.
+
+Added `position_results.py` to make these comparisons repeatable. It selects
+runs by glob/regex, filters arbitrary step intervals, emits summary or history
+rows, provides core/QK-health/all post-processing presets, accepts extra metric
+globs, and renders table, Markdown, CSV, JSON, or JSONL. Three focused tests
+cover discovery, duplicate-step handling, interval filtering, health
+aggregation, and machine-readable output.
+
+---
+
+## 2026-07-25 — Additive geometry cleanup launched
+
+Implemented the final two additive geometry ideas:
+
+- **true free residual:** the corrected linear mapper now computes
+  `z(p) + Linear(z(p))`;
+- **pair normalized:** an arbitrary split-half Cartesian output is normalized
+  pairwise and multiplied by fixed radius `amplitude_init` before Q/K
+  injection.
+
+The screen contains three seed-`123`, 10k-step runs: free residual, pair
+normalized at radius `0.3`, and pair normalized at radius `1.0`. All retain the
+promotion screen's frozen Fourier basis, shared trunk with separate Q/K
+readouts, per-head-independent maps, and static linear relative-logit bias.
+Each has exactly `2,390,080` position parameters, matching the completed
+free-direct anchor (`4.0615`). The existing canonical AddRoPE anchors are
+`4.0525` at amplitude `0.3` and `4.0515` at amplitude `1.0`.
+
+All 68 position tests pass. Focused eager and compiled CUDA forward/backward
+smokes are finite for both new geometries. The three jobs acquired GPUs through
+the shared lifetime `gpu-claim` queue under WandB group
+`phase4-additive-geometry-10k`.
+
+### Additive geometry cleanup result
+
+At seed `123` and 10k steps:
+
+- pair-normalized radius `0.3`: `4.0524`;
+- pair-normalized radius `1.0`: `4.0618`;
+- free residual: `4.0747`.
+
+The radius-`0.3` model essentially ties canonical AddRoPE (`4.0525`) and beats
+the exact free-direct anchor (`4.0615`) by `0.0091`. Radius `1.0` is neutral,
+while the corrected residual skip regresses by `0.0132`. Real-content
+diagnostics align with the ordering: the p95 addend/content ratio is `0.263`
+at radius `0.3`, `0.924` at radius `1.0`, and `1.252` for free residual.
+
+---
+
+## 2026-07-26 — Geometry-preserving content phase screen launched
+
+Added `conditioning.kind=phase_rotation` for additive `pair_normalized`
+carriers. A local conditioner receives normalized Q/K or block-normalized
+residual content and predicts only a bounded angular correction:
+
+```text
+delta = phase_bound * tanh(C(content))
+e' = R(delta)e
+```
+
+It cannot alter pair radius or synthesize arbitrary Cartesian addends.
+`target` selects Q, K, or both. `coupling` selects one shared output head or a
+shared content trunk with separate zero-initialized Q/K phase readouts. The
+zero initialization is exactly the unconditioned carrier and has live output
+gradients.
+
+Launched four seed-`123`, 10k-step variants over the radius-`0.3`
+pair-normalized anchor: Q-only, K-only, both with a shared readout, and both
+with separate readouts. Every conditioner uses block-normalized residual
+content, no position input, hidden width `32`, and phase bound `0.25` radians.
+The completed unconditioned anchor is `4.0524`.
+
+All 71 position tests pass, all configs pass full-model dry runs, and eager
+plus compiled CUDA forward/backward smoke tests are finite. All jobs acquired
+GPUs through `gpu-claim`; WandB group is
+`phase4-phase-conditioning-10k`.
+
+---
+
+## 2026-07-27 — Null-initialized dedicated-content screen launched
+
+Refactored positional content conditioning around independent 64-dimensional
+projections of the block-normalized residual. New Q/K conditioning and
+content-aware relative logits no longer reuse projected attention Q/K. The
+content projection may be shared or separate across Q/K and is RMS-normalized
+before per-head actuator trunks.
+
+Added `qk_norm_mode=method_aware_rms`, which applies exactly one per-head
+RMSNorm:
+
+```text
+additive: project -> add carrier -> RMSNorm -> optional content gain
+rotary:   project -> RMSNorm -> R(theta + content_delta)
+```
+
+Three explicit anchor-relative content actuators now use live trunks with
+zero-initialized final projections and no second zero gate:
+
+- `adaptive_gain`: `gain=exp(raw)`, initially exactly one;
+- `additive_phase`: content rotates the established
+  `a*cis(theta)` additive carrier, initially with zero phase delta;
+- `rope_phase`: content modifies the actual RoPE rotation, initially standard
+  RoPE.
+
+Phase deltas are linear signed outputs rather than `tanh`-bounded values.
+Canonical additive Fourier/AddRoPE remains
+`q + a*cis(theta+delta)` and does not rotate Q itself.
+
+Added a separate `attention_write.mode=query_position`:
+
+```text
+out_i = O(attn_i) + W_zero(position_i)
+```
+
+This mode does not append positional values to V. Its final projection starts
+at zero and receives a live first-step gradient without a scalar gate.
+
+The one-seed 5k attribution screen contains:
+
+- method-aware RMS RoPE and fixed radius-`0.3` additive-Fourier anchors;
+- adaptive gain, additive-carrier phase, and RoPE phase with shared versus
+  separate Q/K readouts;
+- the prior query-absolute pairwise relative-logit candidate rerun with
+  dedicated content;
+- the query-local position output write.
+
+All ten configs passed full-model dry runs. The 51 position-playground tests
+and result-collector tests pass. Eager and compiled CUDA forward/backward
+smokes are finite for every new path. The first compiled dedicated-pairwise
+smoke exposed a zero-stride expanded-content backward failure; materializing
+the head-expanded low-rank content with `contiguous()` fixed it, and the
+focused compiled retry passed.
+
+The suite launched under supervisor and the shared lifetime `gpu-claim`
+protocol as `mlprope_phase5_null_conditioning`. WandB group is
+`phase5-null-conditioning-5k`; configs and outputs live under
+`sweep_configs/phase5_null_conditioning/` and
+`model-output/position_bias_phase5_null_conditioning/`.
