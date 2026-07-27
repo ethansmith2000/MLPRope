@@ -1,5 +1,6 @@
 """Composable positional encoding channels for MLPRope experiments."""
 
+from position.autograd import exp_with_identity_grad
 from position.basis import (
     FrozenFourierBasis,
     LearnedFrequencyFourierBasis,
@@ -77,6 +78,7 @@ __all__ = [
     "count_position_parameters",
     "deep_merge",
     "ensure_channel_v2",
+    "exp_with_identity_grad",
     "interleaved_fourier_basis",
     "legacy_position_run_tag",
     "load_position_compatible_state_dict",

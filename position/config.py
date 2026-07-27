@@ -100,6 +100,10 @@ V2_CONDITIONING_KEYS = {
     "source",
     "activation",
     "hidden_dim",
+    "input_mode",
+    "network",
+    "components",
+    "head_coupling",
     "gate_init",
     "target",
     "coupling",
@@ -229,6 +233,10 @@ V2_CHANNEL_DEFAULTS = {
             "source": "qk",
             "activation": "tanh",
             "hidden_dim": 64,
+            "input_mode": "content",
+            "network": "linear",
+            "components": "phase",
+            "head_coupling": "per_head_independent",
             "gate_init": 0.0,
             "target": "both",
             "coupling": "shared_trunk_separate_readouts",
@@ -280,6 +288,10 @@ V2_CHANNEL_DEFAULTS = {
             "source": "qk",
             "activation": "tanh",
             "hidden_dim": 64,
+            "input_mode": "content",
+            "network": "linear",
+            "components": "phase",
+            "head_coupling": "per_head_independent",
             "gate_init": 0.0,
             "target": "both",
             "coupling": "shared_trunk_separate_readouts",
@@ -740,14 +752,34 @@ def normalize_position_config_v2(
     # identity / residual mappers require matching input/output widths.
     mapper_output_dim = default_output_dim
     mapper_input_dim = basis_dim + len(scalars)
-    if mapper_kind in {"identity", "euclidean_affine"} and (
-        mapper_input_dim != mapper_output_dim
+    output_preview = normalized["output"]
+    fixed_position_pipeline = channel_name == "qk" and (
+        (
+            application == "additive"
+            and geometry == "amplitude_phase"
+            and not output_preview.get("learn_amplitude", True)
+            and not output_preview.get("learn_phase", True)
+        )
+        or (
+            application == "rotary"
+            and geometry == "phase"
+            and not output_preview.get("learn_phase", True)
+        )
+    )
+    if (
+        not fixed_position_pipeline
+        and mapper_kind in {"identity", "euclidean_affine"}
+        and mapper_input_dim != mapper_output_dim
     ):
         raise ValueError(
             f"{channel_name}: {mapper_kind} mapper requires matching input/output "
             f"dimensions ({mapper_input_dim} vs {mapper_output_dim})."
         )
-    if residual and mapper_input_dim != mapper_output_dim:
+    if (
+        not fixed_position_pipeline
+        and residual
+        and mapper_input_dim != mapper_output_dim
+    ):
         raise ValueError(
             f"{channel_name}: residual mapper requires matching input/output "
             f"dimensions ({mapper_input_dim} vs {mapper_output_dim})."
@@ -802,7 +834,7 @@ def normalize_position_config_v2(
                     application == "rotary"
                     and geometry == "phase"
                     and normalized["conditioning"].get("kind")
-                    in {"adaptive_gain", "rope_phase"}
+                    in {"adaptive_gain", "rope_phase", "carrier_hypernetwork"}
                     and learn_amplitude
                 )
             )
@@ -869,6 +901,7 @@ def normalize_position_config_v2(
             "adaptive_gain",
             "additive_phase",
             "rope_phase",
+            "carrier_hypernetwork",
         }
         else "qk"
     )
@@ -881,6 +914,7 @@ def normalize_position_config_v2(
             "adaptive_gain",
             "additive_phase",
             "rope_phase",
+            "carrier_hypernetwork",
         }
         if channel_name == "qk"
         else {"none", "inkling_table", "inkling_cosnet", "pairwise_low_rank"}
@@ -895,6 +929,12 @@ def normalize_position_config_v2(
         "source": raw_conditioning.get("source", default_content_source),
         "activation": conditioning_cfg.get("activation", "tanh"),
         "hidden_dim": int(conditioning_cfg.get("hidden_dim", 64)),
+        "input_mode": conditioning_cfg.get("input_mode", "content"),
+        "network": conditioning_cfg.get("network", "linear"),
+        "components": conditioning_cfg.get("components", "phase"),
+        "head_coupling": conditioning_cfg.get(
+            "head_coupling", "per_head_independent"
+        ),
         "gate_init": float(conditioning_cfg.get("gate_init", 0.0)),
         "target": conditioning_cfg.get("target", "both"),
         "coupling": conditioning_cfg.get(
@@ -931,10 +971,43 @@ def normalize_position_config_v2(
     if conditioning["coupling"] not in {
         "shared",
         "shared_trunk_separate_readouts",
+        *({"separate"} if conditioning_kind == "carrier_hypernetwork" else set()),
     }:
         raise ValueError(
             f"{channel_name}.conditioning.coupling must be 'shared' or "
             "'shared_trunk_separate_readouts'"
+            + (
+                ", or 'separate' for carrier_hypernetwork"
+                if conditioning_kind == "carrier_hypernetwork"
+                else ""
+            )
+        )
+    if conditioning["input_mode"] not in {
+        "content",
+        "position",
+        "content_position",
+    }:
+        raise ValueError(
+            f"{channel_name}.conditioning.input_mode must be 'content', "
+            "'position', or 'content_position'"
+        )
+    if conditioning["network"] not in {"linear", "silu_mlp", "swiglu_mlp"}:
+        raise ValueError(
+            f"{channel_name}.conditioning.network must be 'linear', "
+            "'silu_mlp', or 'swiglu_mlp'"
+        )
+    if conditioning["components"] not in {"phase", "log_gain_phase"}:
+        raise ValueError(
+            f"{channel_name}.conditioning.components must be 'phase' or "
+            "'log_gain_phase'"
+        )
+    if conditioning["head_coupling"] not in {
+        "shared_head",
+        "per_head_independent",
+    }:
+        raise ValueError(
+            f"{channel_name}.conditioning.head_coupling must be 'shared_head' "
+            "or 'per_head_independent'"
         )
     if conditioning["phase_bound"] <= 0:
         raise ValueError(
@@ -987,6 +1060,23 @@ def normalize_position_config_v2(
         channel_name == "qk" and application == "rotary"
     ):
         raise ValueError("rope_phase conditioning requires rotary Q/K")
+    if conditioning_kind == "carrier_hypernetwork":
+        valid_carrier = channel_name == "qk" and (
+            (application == "additive" and geometry == "amplitude_phase")
+            or (
+                application == "rotary"
+                and geometry in {"phase", "scaled_phase"}
+            )
+        )
+        if not valid_carrier:
+            raise ValueError(
+                "carrier_hypernetwork requires additive amplitude_phase or "
+                "rotary phase/scaled_phase Q/K"
+            )
+        if conditioning["source"] != "dedicated":
+            raise ValueError(
+                "carrier_hypernetwork uses the dedicated normalized content stream"
+            )
     if (
         conditioning_kind == "content_gate"
         and conditioning["activation"] == "scaled_sigmoid"
@@ -1020,7 +1110,7 @@ def normalize_position_config_v2(
     if (
         conditioning_kind != "none"
         and geometry == "amplitude_phase"
-        and conditioning_kind not in {"additive_phase"}
+        and conditioning_kind not in {"additive_phase", "carrier_hypernetwork"}
         and (not learn_amplitude or not learn_phase)
     ):
         raise ValueError(

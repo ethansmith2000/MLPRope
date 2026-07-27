@@ -21,7 +21,7 @@ LOG_DIR="${SCRIPT_DIR}/logs"
 CONFIG_DIR="${SCRIPT_DIR}/sweep_configs"
 WANDB_PROJECT="${WANDB_PROJECT:-mlprope-position-bias}"
 WANDB_ENTITY="${WANDB_ENTITY:-ethansmith2000}"
-EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | ... | phase4_phase_conditioning | phase5_null_conditioning | individual | all
+EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | ... | phase7_scale_50k | phase8_hyper_smoke | individual | all
 if [[ "${EXPERIMENT_FAMILY}" == "phase1b" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1b"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase1c" ]]; then
@@ -70,6 +70,20 @@ elif [[ "${EXPERIMENT_FAMILY}" == "phase4_phase_conditioning" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase4_phase_conditioning"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase5_null_conditioning" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase5_null_conditioning"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase6_geometry_norm" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase6_geometry_norm"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase6_content_transfer" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase6_content_transfer"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase6_efficiency" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase6_efficiency"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase6_scale" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase6_scale"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase7_scale_probe" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase7_scale_probe"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase7_scale_50k" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase7_scale_50k"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase8_hyper_smoke" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase8_hyper_smoke"
 else
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1"
 fi
@@ -106,7 +120,14 @@ if [[ -z "${GPU_SELECTOR:-}" ]]; then
     || "${EXPERIMENT_FAMILY}" == "phase4_safe_conditioning" \
     || "${EXPERIMENT_FAMILY}" == "phase4_additive_geometry" \
     || "${EXPERIMENT_FAMILY}" == "phase4_phase_conditioning" \
-    || "${EXPERIMENT_FAMILY}" == "phase5_null_conditioning" ]]; then
+    || "${EXPERIMENT_FAMILY}" == "phase5_null_conditioning" \
+    || "${EXPERIMENT_FAMILY}" == "phase6_geometry_norm" \
+    || "${EXPERIMENT_FAMILY}" == "phase6_content_transfer" \
+    || "${EXPERIMENT_FAMILY}" == "phase6_efficiency" \
+    || "${EXPERIMENT_FAMILY}" == "phase6_scale" \
+    || "${EXPERIMENT_FAMILY}" == "phase7_scale_probe" \
+    || "${EXPERIMENT_FAMILY}" == "phase7_scale_50k" \
+    || "${EXPERIMENT_FAMILY}" == "phase8_hyper_smoke" ]]; then
     GPU_SELECTOR="any"
   else
     GPU_SELECTOR="6,7"
@@ -157,6 +178,20 @@ elif [[ "${EXPERIMENT_FAMILY}" == "phase4_phase_conditioning" ]]; then
   CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase4_phase_conditioning"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase5_null_conditioning" ]]; then
   CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase5_null_conditioning"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase6_geometry_norm" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase6_geometry_norm"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase6_content_transfer" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase6_content_transfer"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase6_efficiency" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase6_efficiency"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase6_scale" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase6_scale"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase7_scale_probe" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase7_scale_probe"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase7_scale_50k" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase7_scale_50k"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase8_hyper_smoke" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase8_hyper_smoke"
 fi
 PIDS=()
 JOB_NAMES=()
@@ -462,6 +497,49 @@ v2_null_conditioned_qk_json() {
 JSON
 }
 
+v2_carrier_hyper_qk_json() {
+  local application="$1" # additive | rotary
+  local input_mode="$2" # content | position | content_position
+  local network="$3" # linear | silu_mlp | swiglu_mlp
+  local components="$4" # phase | log_gain_phase
+  local conditioner_coupling="${5:-shared_trunk_separate_readouts}"
+  local target="${6:-both}"
+  local geometry="phase"
+  local mapper_kind="identity"
+  local qk_coupling="shared"
+  local learn_phase=false
+  local amplitude_init=0.3
+  local basis_dim=16
+  local scalars_json='["normalized_position", "log_position"]'
+  if [[ "${application}" == "additive" ]]; then
+    geometry="amplitude_phase"
+    mapper_kind="linear"
+    qk_coupling="shared_trunk_separate_readouts"
+    learn_phase=true
+  fi
+  cat <<JSON
+{"enabled": true, "application": "${application}", "geometry": "${geometry}", "input": {"kind": "frozen_fourier", "basis_dim": ${basis_dim}, "theta": null, "scalars": ${scalars_json}}, "mapper": {"kind": "${mapper_kind}", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "output": {"amplitude_init": ${amplitude_init}, "amplitude_parameterization": "signed", "learn_amplitude": true, "learn_phase": ${learn_phase}, "phase_scale": 1.0, "additive_normalization": "none", "scale_init": 1.0, "scale_parameterization": "exp"}, "conditioning": {"kind": "carrier_hypernetwork", "source": "dedicated", "hidden_dim": 64, "input_mode": "${input_mode}", "network": "${network}", "components": "${components}", "target": "${target}", "coupling": "${conditioner_coupling}", "head_coupling": "per_head_independent"}, "qk_coupling": "${qk_coupling}", "head_coupling": "per_head_independent"}
+JSON
+}
+
+v2_promoted_qk_json() {
+  local geometry="$1" # amplitude_phase | pair_normalized
+  local basis_dim="${2:-null}"
+  local conditioning_kind="${3:-none}"
+  local conditioning_target="${4:-both}"
+  local conditioning_coupling="${5:-shared_trunk_separate_readouts}"
+  local additive_normalization="${6:-none}"
+  local conditioning_json
+  if [[ "${conditioning_kind}" == "none" ]]; then
+    conditioning_json='{"kind": "none", "hidden_dim": 32}'
+  else
+    conditioning_json="{\"kind\": \"${conditioning_kind}\", \"source\": \"dedicated\", \"activation\": \"linear\", \"hidden_dim\": 32, \"target\": \"${conditioning_target}\", \"coupling\": \"${conditioning_coupling}\", \"phase_bound\": 0.25}"
+  fi
+  cat <<JSON
+{"enabled": true, "application": "additive", "geometry": "${geometry}", "input": {"kind": "frozen_fourier", "basis_dim": ${basis_dim}, "theta": null, "scalars": ["normalized_position", "log_position"]}, "mapper": {"kind": "linear", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "output": {"amplitude_init": 0.3, "amplitude_parameterization": "signed", "learn_amplitude": true, "learn_phase": true, "phase_scale": 1.0, "additive_normalization": "${additive_normalization}", "additive_gain_init": 0.212132, "additive_gain_max": 1.0, "learn_additive_gain": true, "scale_init": 1.0, "scale_parameterization": "exp"}, "conditioning": ${conditioning_json}, "qk_coupling": "shared_trunk_separate_readouts", "head_coupling": "per_head_independent"}
+JSON
+}
+
 v2_inkling_json() {
   local kind="$1" # inkling_table | inkling_cosnet
   local profiles="${2:-8}"
@@ -634,6 +712,48 @@ want_phase4_phase_conditioning_family() {
 want_phase5_null_conditioning_family() {
   local family="$1"
   [[ "${EXPERIMENT_FAMILY}" == "phase5_null_conditioning" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase6_geometry_norm_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase6_geometry_norm" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase6_content_transfer_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase6_content_transfer" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase6_efficiency_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase6_efficiency" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase6_scale_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase6_scale" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase7_scale_probe_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase7_scale_probe" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase7_scale_50k_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase7_scale_50k" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase8_hyper_smoke_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase8_hyper_smoke" \
     || "${EXPERIMENT_FAMILY}" == "${family}" ]]
 }
 
@@ -1790,6 +1910,243 @@ if want_phase5_null_conditioning_family "null_conditioning_story"; then
     write_common_config "${cfg_file}" \
       "\"seed\": ${seed}, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"position_content_dim\": 64, \"position_content_coupling\": \"separate\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${logit_json}, \"residual_stream\": {\"enabled\": false}, \"attention_write\": ${write_json}, \"attn_impl\": \"flex\", \"run_name\": \"${job_name}\"" \
       5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Reconcile the promoted scalar+linear-logit stack across additive geometry and
+# Q/K normalization before any model/training-scale promotion.
+if want_phase6_geometry_norm_family "breadth_geometry_norm_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  linear_logit="$(v2_logit_json linear false)"
+  canonical_qk="$(v2_promoted_qk_json amplitude_phase)"
+  pair_qk="$(v2_promoted_qk_json pair_normalized)"
+  canonical_branch_rms_qk="$(
+    v2_promoted_qk_json amplitude_phase null none both \
+      shared_trunk_separate_readouts rms
+  )"
+
+  for spec in \
+    "canonical-legacy|legacy_layernorm|${canonical_qk}|null" \
+    "pairnorm-legacy|legacy_layernorm|${pair_qk}|null" \
+    "canonical-method-rms|method_aware_rms|${canonical_qk}|null" \
+    "pairnorm-method-rms|method_aware_rms|${pair_qk}|null" \
+    "canonical-method-rms-branch-rms|method_aware_rms|${canonical_branch_rms_qk}|null" \
+    "rope-linear-logit-ffn3168|legacy_layernorm|${disabled_channel}|3168"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    qk_norm_mode="${remainder%%|*}"
+    remainder="${remainder#*|}"
+    qk_json="${remainder%%|*}"
+    ff_hidden_dim="${remainder#*|}"
+    job_name="phase6-geometry-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"qk_norm_mode\": \"${qk_norm_mode}\", \"post_position_qk_norm\": false, \"scalar_normalization_extent\": 1024, \"ff_hidden_dim\": ${ff_hidden_dim}, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${linear_logit}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"flex\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Transfer dedicated-content phase actuation onto the reconciled winner:
+# canonical scalar AddRoPE + static linear logit + method-aware Q/K RMS.
+if want_phase6_content_transfer_family "breadth_content_transfer_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  linear_logit="$(v2_logit_json linear false)"
+  for spec in \
+    "both-shared|both|shared" \
+    "both-separate|both|shared_trunk_separate_readouts" \
+    "q-only|q|shared" \
+    "k-only|k|shared"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    target="${remainder%%|*}"
+    coupling="${remainder#*|}"
+    qk_json="$(
+      v2_promoted_qk_json amplitude_phase null additive_phase \
+        "${target}" "${coupling}"
+    )"
+    job_name="phase6-content-additive-phase-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"position_content_dim\": 64, \"position_content_coupling\": \"separate\", \"scalar_normalization_extent\": 1024, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${linear_logit}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"flex\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Compact-basis and factorized-logit checks on the reconciled canonical stack.
+if want_phase6_efficiency_family "breadth_efficiency_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  linear_logit="$(v2_logit_json linear false)"
+  low_rank_logit="$(v2_logit_json low_rank true)"
+  for spec in \
+    "basis16|$(v2_promoted_qk_json amplitude_phase 16)|${linear_logit}" \
+    "basis32|$(v2_promoted_qk_json amplitude_phase 32)|${linear_logit}" \
+    "logit-low-rank-r32|$(v2_promoted_qk_json amplitude_phase)|${low_rank_logit}"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    qk_json="${remainder%%|*}"
+    logit_json="${remainder#*|}"
+    job_name="phase6-efficiency-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"scalar_normalization_extent\": 1024, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${logit_json}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"flex\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Final promotion gate: two positional stacks plus standard-RoPE and
+# capacity-matched controls, all trained at the requested model dimensions.
+if want_phase6_scale_family "breadth_scale_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  full_qk="$(v2_promoted_qk_json amplitude_phase)"
+  linear_logit="$(v2_logit_json linear false)"
+  low_rank_logit="$(v2_logit_json low_rank true)"
+  matched_ff_hidden=null
+  if [[ "${HIDDEN_SIZE}" == "768" && "${DEPTH}" == "8" ]]; then
+    matched_ff_hidden=3168
+  elif [[ "${HIDDEN_SIZE}" == "1024" && "${DEPTH}" == "12" ]]; then
+    matched_ff_hidden=4160
+  fi
+
+  for spec in \
+    "standard-rope|legacy_layernorm|${disabled_channel}|${disabled_channel}|null" \
+    "rope-linear-logit-matched-ffn|method_aware_rms|${disabled_channel}|${linear_logit}|${matched_ff_hidden}" \
+    "canonical-full-linear|method_aware_rms|${full_qk}|${linear_logit}|null" \
+    "canonical-low-rank-logit|method_aware_rms|${full_qk}|${low_rank_logit}|null"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    qk_norm_mode="${remainder%%|*}"
+    remainder="${remainder#*|}"
+    qk_json="${remainder%%|*}"
+    remainder="${remainder#*|}"
+    logit_json="${remainder%%|*}"
+    ff_hidden_dim="${remainder#*|}"
+    job_name="phase6-scale-${label}-seed${seed}-s10000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"training_length\": 1024, \"model_position_extent\": 4096, \"evaluation_lengths\": [1024, 2048, 4096], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"${qk_norm_mode}\", \"post_position_qk_norm\": false, \"ff_hidden_dim\": ${ff_hidden_dim}, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${logit_json}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"flex\", \"run_name\": \"${job_name}\"" \
+      10000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Short throughput/memory probes for an effective batch of 32. Failed cells are
+# expected if a physical microbatch exceeds device memory.
+if want_phase7_scale_probe_family "scale_50k_probe_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  full_qk="$(v2_promoted_qk_json amplitude_phase)"
+  linear_logit="$(v2_logit_json linear false)"
+  for spec in \
+    "b32-a1-gc-default|32|1|true|default" \
+    "b32-a1-gc-maxauto|32|1|true|max-autotune-no-cudagraphs" \
+    "b16-a2-gc-default|16|2|true|default" \
+    "b8-a4-nogc-default|8|4|false|default" \
+    "b8-a4-nogc-maxauto|8|4|false|max-autotune-no-cudagraphs" \
+    "b8-a4-nogc-reduce-overhead|8|4|false|reduce-overhead"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    train_batch="${remainder%%|*}"
+    remainder="${remainder#*|}"
+    accumulation="${remainder%%|*}"
+    remainder="${remainder#*|}"
+    gradient_checkpointing="${remainder%%|*}"
+    compile_mode="${remainder#*|}"
+    job_name="phase7-probe-${label}-seed${seed}-s200-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_train_batch_size\": ${train_batch}, \"per_device_eval_batch_size\": 1, \"gradient_accumulation_steps\": ${accumulation}, \"gradient_checkpointing\": ${gradient_checkpointing}, \"compile_mode\": \"${compile_mode}\", \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"checkpointing_steps\": null, \"save_final_model\": false, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${full_qk}, \"logit_bias\": ${linear_logit}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"flex\", \"run_name\": \"${job_name}\"" \
+      200 100000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Resumable h1024/d12 promotion set. The probe-selected microbatch controls are
+# explicit environment knobs so every arm retains the same effective batch.
+if want_phase7_scale_50k_family "scale_50k_promotion_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  full_qk="$(v2_promoted_qk_json amplitude_phase)"
+  compact_qk="$(v2_promoted_qk_json amplitude_phase 16)"
+  linear_logit="$(v2_logit_json linear false)"
+  low_rank_logit="$(v2_logit_json low_rank true)"
+  physical_batch="${PHYSICAL_BATCH:-8}"
+  accumulation="${GRADIENT_ACCUMULATION_STEPS:-4}"
+  gradient_checkpointing="${GRADIENT_CHECKPOINTING:-false}"
+  compile_mode="${COMPILE_MODE:-default}"
+  if (( physical_batch * accumulation != 32 )); then
+    echo "phase7_scale_50k requires physical_batch * accumulation == 32" >&2
+    exit 2
+  fi
+
+  for spec in \
+    "canonical-full-linear|method_aware_rms|${full_qk}|${linear_logit}|null|flex" \
+    "canonical-low-rank-r32|method_aware_rms|${full_qk}|${low_rank_logit}|null|flex" \
+    "compact-basis16-full-linear|method_aware_rms|${compact_qk}|${linear_logit}|null|flex" \
+    "standard-rope|legacy_layernorm|${disabled_channel}|${disabled_channel}|null|sdpa" \
+    "rope-full-linear|method_aware_rms|${disabled_channel}|${linear_logit}|null|flex" \
+    "rope-full-linear-matched-ffn4160|method_aware_rms|${disabled_channel}|${linear_logit}|4160|flex"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    qk_norm_mode="${remainder%%|*}"
+    remainder="${remainder#*|}"
+    qk_json="${remainder%%|*}"
+    remainder="${remainder#*|}"
+    logit_json="${remainder%%|*}"
+    remainder="${remainder#*|}"
+    ff_hidden_dim="${remainder%%|*}"
+    attn_impl="${remainder#*|}"
+    job_name="phase7-scale50k-${label}-seed${seed}-s50000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_train_batch_size\": ${physical_batch}, \"per_device_eval_batch_size\": 1, \"gradient_accumulation_steps\": ${accumulation}, \"gradient_checkpointing\": ${gradient_checkpointing}, \"compile_mode\": \"${compile_mode}\", \"training_length\": 1024, \"model_position_extent\": 4096, \"evaluation_lengths\": [1024, 2048, 4096], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"${qk_norm_mode}\", \"post_position_qk_norm\": false, \"ff_hidden_dim\": ${ff_hidden_dim}, \"checkpointing_steps\": 5000, \"resume_from_checkpoint\": \"auto\", \"save_final_model\": true, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${logit_json}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"${attn_impl}\", \"run_name\": \"${job_name}\"" \
+      50000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Short SDPA-only integration checks. These establish runtime/diagnostic health;
+# 200 steps are not used to rank positional methods.
+if want_phase8_hyper_smoke_family "carrier_hyper_smoke_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  anchor_qk="$(v2_promoted_qk_json amplitude_phase 16)"
+  additive_hyper_qk="$(
+    v2_carrier_hyper_qk_json \
+      additive content_position silu_mlp log_gain_phase \
+      shared_trunk_separate_readouts both
+  )"
+  rotary_hyper_qk="$(
+    v2_carrier_hyper_qk_json \
+      rotary content linear log_gain_phase \
+      shared_trunk_separate_readouts both
+  )"
+
+  for spec in \
+    "compact-addrope-anchor|${anchor_qk}" \
+    "addrope-content-position-silu|${additive_hyper_qk}" \
+    "scaled-rope-content-linear|${rotary_hyper_qk}"
+  do
+    label="${spec%%|*}"
+    qk_json="${spec#*|}"
+    job_name="phase8-hyper-${label}-seed${seed}-s200-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"position_content_dim\": 64, \"position_content_coupling\": \"separate\", \"scalar_normalization_extent\": ${BLOCK_SIZE}, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      200 200
     run_job "${job_name}" "${cfg_file}"
   done
 fi

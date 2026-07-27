@@ -33,6 +33,11 @@ class PositionResultsTest(unittest.TestCase):
                 "position/layer_00/qk/addend_q_to_q_ratio_p95": 0.24,
                 "position/layer_00/qk/q_content_combined_cosine_mean": 0.98,
                 "position/layer_00/qk/additive_gain_q_mean": 0.21,
+                "position/layer_00/qk/hyper_phase_delta_q/rms": 0.04,
+                "position/layer_01/qk/hyper_phase_delta_k/p95_abs": 0.12,
+                "position/layer_00/qk/hyper_log_gain_delta_q/rms": 0.03,
+                "position/layer_01/qk/hyper_log_gain_delta_k/p95_abs": 0.09,
+                "position/layer_01/qk/hyper_effective_gain_k/max": 1.15,
             },
         ]
         self.metrics_path = self.run / "metrics.jsonl"
@@ -76,6 +81,27 @@ class PositionResultsTest(unittest.TestCase):
         self.assertEqual(row["qk_addend_rms_max"], 0.3)
         self.assertEqual(row["qk_to_content_p95_max"], 0.24)
         self.assertEqual(row["content_combined_cosine_min"], 0.98)
+
+    def test_hyper_health_postprocessing_is_compact(self):
+        rows = build_rows(
+            [self.metrics_path],
+            include_globs=[],
+            include_regex=None,
+            exclude_globs=[],
+            step_min=None,
+            step_max=None,
+            every=None,
+            history=False,
+            preset="hyper-health",
+            metric_patterns=[],
+        )
+        row = rows[0]
+        self.assertEqual(row["hyper_phase_delta_rms_max"], 0.04)
+        self.assertEqual(row["hyper_phase_delta_p95_max"], 0.12)
+        self.assertEqual(row["hyper_log_gain_delta_rms_max"], 0.03)
+        self.assertEqual(row["hyper_log_gain_delta_p95_max"], 0.09)
+        self.assertEqual(row["hyper_effective_gain_max"], 1.15)
+        self.assertEqual(row["qk_addend_rms_max"], 0.3)
 
     def test_history_and_machine_readable_rendering(self):
         rows = build_rows(

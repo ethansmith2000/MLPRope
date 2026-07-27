@@ -24,6 +24,13 @@ QK_HEALTH_COLUMNS = (
     "rotary_scale_abs_max",
     "additive_gain_mean",
 )
+HYPER_HEALTH_COLUMNS = (
+    "hyper_phase_delta_rms_max",
+    "hyper_phase_delta_p95_max",
+    "hyper_log_gain_delta_rms_max",
+    "hyper_log_gain_delta_p95_max",
+    "hyper_effective_gain_max",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,7 +74,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--preset",
-        choices=("core", "qk-health", "all"),
+        choices=("core", "qk-health", "hyper-health", "all"),
         default="core",
         help="Post-processing view for retained metric records.",
     )
@@ -211,6 +218,48 @@ def qk_health(record: dict[str, Any]) -> dict[str, float | None]:
     }
 
 
+def hyper_health(record: dict[str, Any]) -> dict[str, float | None]:
+    phase_rms = numeric_values(
+        record,
+        ("/hyper_phase_delta_q/rms", "/hyper_phase_delta_k/rms"),
+    )
+    phase_p95 = numeric_values(
+        record,
+        (
+            "/hyper_phase_delta_q/p95_abs",
+            "/hyper_phase_delta_k/p95_abs",
+        ),
+    )
+    log_gain_rms = numeric_values(
+        record,
+        (
+            "/hyper_log_gain_delta_q/rms",
+            "/hyper_log_gain_delta_k/rms",
+        ),
+    )
+    log_gain_p95 = numeric_values(
+        record,
+        (
+            "/hyper_log_gain_delta_q/p95_abs",
+            "/hyper_log_gain_delta_k/p95_abs",
+        ),
+    )
+    effective_gain = numeric_values(
+        record,
+        (
+            "/hyper_effective_gain_q/max",
+            "/hyper_effective_gain_k/max",
+        ),
+    )
+    return {
+        "hyper_phase_delta_rms_max": max(phase_rms, default=None),
+        "hyper_phase_delta_p95_max": max(phase_p95, default=None),
+        "hyper_log_gain_delta_rms_max": max(log_gain_rms, default=None),
+        "hyper_log_gain_delta_p95_max": max(log_gain_p95, default=None),
+        "hyper_effective_gain_max": max(effective_gain, default=None),
+    }
+
+
 def matching_metrics(
     record: dict[str, Any],
     patterns: Iterable[str],
@@ -275,13 +324,15 @@ def build_rows(
                 )
                 row["best_step"] = None if best_record is None else best_record["step"]
             patterns = list(metric_patterns)
-            if preset in {"core", "qk-health"}:
+            if preset in {"core", "qk-health", "hyper-health"}:
                 patterns.extend(CORE_METRICS)
             elif preset == "all":
                 patterns.append("*")
             row.update(matching_metrics(record, patterns))
-            if preset == "qk-health":
+            if preset in {"qk-health", "hyper-health"}:
                 row.update(qk_health(record))
+            if preset == "hyper-health":
+                row.update(hyper_health(record))
             rows.append(row)
     return rows
 
@@ -309,6 +360,7 @@ def columns_for_rows(rows: list[dict[str, Any]]) -> list[str]:
         "best_eval_loss",
         "best_step",
         *QK_HEALTH_COLUMNS,
+        *HYPER_HEALTH_COLUMNS,
         "eval_loss",
         "perplexity",
     ]

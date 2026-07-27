@@ -419,6 +419,82 @@ class PositionConfigTest(unittest.TestCase):
         self.assertEqual(config.qk["application"], "rotary")
         self.assertEqual(config.qk["head_coupling"], "shared_head")
 
+    def test_carrier_hypernetwork_schema_round_trip_and_rejections(self):
+        base = {
+            "enabled": True,
+            "application": "additive",
+            "geometry": "amplitude_phase",
+            "input": {
+                "kind": "frozen_fourier",
+                "basis_dim": 8,
+                "theta": None,
+                "scalars": [],
+            },
+            "mapper": {
+                "kind": "identity",
+                "residual": False,
+                "rank": 4,
+                "hidden_dim": 12,
+            },
+            "output": {
+                "learn_amplitude": False,
+                "learn_phase": False,
+            },
+            "conditioning": {
+                "kind": "carrier_hypernetwork",
+                "source": "dedicated",
+                "input_mode": "content_position",
+                "network": "swiglu_mlp",
+                "components": "log_gain_phase",
+                "target": "both",
+                "coupling": "separate",
+                "head_coupling": "shared_head",
+                "hidden_dim": 16,
+            },
+            "qk_coupling": "shared",
+            "head_coupling": "per_head_independent",
+        }
+        normalized = normalize_position_config_v2(
+            "qk",
+            base,
+            model_dim=32,
+            heads=4,
+            rope_theta=10_000.0,
+        )
+        self.assertEqual(
+            normalized["conditioning"]["input_mode"], "content_position"
+        )
+        self.assertEqual(normalized["conditioning"]["network"], "swiglu_mlp")
+        self.assertEqual(normalized["conditioning"]["coupling"], "separate")
+        self.assertEqual(
+            normalize_position_config_v2(
+                "qk",
+                json.loads(json.dumps(normalized)),
+                model_dim=32,
+                heads=4,
+                rope_theta=10_000.0,
+            ),
+            normalized,
+        )
+
+        invalid_values = {
+            "input_mode": "cross_token",
+            "network": "relu_mlp",
+            "components": "gain_only",
+            "head_coupling": "per_head_joint",
+        }
+        for key, value in invalid_values.items():
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                invalid = json.loads(json.dumps(base))
+                invalid["conditioning"][key] = value
+                normalize_position_config_v2(
+                    "qk",
+                    invalid,
+                    model_dim=32,
+                    heads=4,
+                    rope_theta=10_000.0,
+                )
+
     def test_explicit_channels_can_enable_both(self):
         config = self._load(
             {

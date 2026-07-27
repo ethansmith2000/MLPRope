@@ -126,6 +126,8 @@ DEFAULT_CONFIG = {
     "evaluation_lengths": None,
     "scalar_normalization_extent": None,
     "per_device_train_batch_size": 8,
+    # Defaults to the train microbatch; long-context evaluation can override.
+    "per_device_eval_batch_size": None,
     "gradient_accumulation_steps": 1,
     "num_train_epochs": 1,
     "max_train_steps": 10_000,
@@ -361,6 +363,40 @@ def load_config(cli_args):
         raise ValueError("training_length must be at least 2")
     cfg["training_length"] = training_length
     cfg["block_size"] = training_length
+    train_batch_size = int(cfg["per_device_train_batch_size"])
+    if train_batch_size <= 0:
+        raise ValueError("per_device_train_batch_size must be positive")
+    cfg["per_device_train_batch_size"] = train_batch_size
+    eval_batch_size = int(
+        train_batch_size
+        if cfg["per_device_eval_batch_size"] is None
+        else cfg["per_device_eval_batch_size"]
+    )
+    if eval_batch_size <= 0:
+        raise ValueError("per_device_eval_batch_size must be positive")
+    cfg["per_device_eval_batch_size"] = eval_batch_size
+    gradient_accumulation_steps = int(cfg["gradient_accumulation_steps"])
+    if gradient_accumulation_steps <= 0:
+        raise ValueError("gradient_accumulation_steps must be positive")
+    cfg["gradient_accumulation_steps"] = gradient_accumulation_steps
+    if not isinstance(cfg["gradient_checkpointing"], bool):
+        raise TypeError("gradient_checkpointing must be a boolean")
+    if not isinstance(cfg["compile"], bool):
+        raise TypeError("compile must be a boolean")
+    if cfg["compile_mode"] not in {
+        "default",
+        "reduce-overhead",
+        "max-autotune",
+        "max-autotune-no-cudagraphs",
+    }:
+        raise ValueError("unsupported compile_mode")
+    if cfg["checkpointing_steps"] is not None:
+        checkpointing_steps = int(cfg["checkpointing_steps"])
+        if checkpointing_steps <= 0:
+            raise ValueError("checkpointing_steps must be positive")
+        cfg["checkpointing_steps"] = checkpointing_steps
+    if not isinstance(cfg["save_final_model"], bool):
+        raise TypeError("save_final_model must be a boolean")
 
     raw_evaluation_lengths = cfg["evaluation_lengths"]
     if raw_evaluation_lengths is None:
@@ -959,6 +995,9 @@ def main():
             "training_length": args.training_length,
             "model_position_extent": args.model_position_extent,
             "evaluation_lengths": args.evaluation_lengths,
+            "per_device_train_batch_size": args.per_device_train_batch_size,
+            "per_device_eval_batch_size": args.per_device_eval_batch_size,
+            "gradient_accumulation_steps": args.gradient_accumulation_steps,
             "rel_extent": args.rel_extent or args.model_position_extent,
             "position_schema_version": args.position_schema_version,
             "position_source_schema": args.position_source_schema,
@@ -1045,7 +1084,7 @@ def main():
     eval_dataloaders = {
         length: DataLoader(
             evaluation_dataset,
-            batch_size=args.per_device_train_batch_size,
+            batch_size=args.per_device_eval_batch_size,
             **loader_kwargs,
         )
         for length, evaluation_dataset in evaluation_datasets.items()
@@ -1124,6 +1163,9 @@ def main():
     progress_bar = tqdm(range(max_train_steps), disable=not accelerator.is_local_main_process)
     progress_bar.update(min(completed_steps, max_train_steps))
     stage_timer = CudaStageTimer(enabled=bool(args.profile_every_n_steps))
+    throughput_warmup_steps = min(20, max_train_steps)
+    throughput_start_step = completed_steps
+    throughput_started_at = None
 
     for epoch in range(starting_epoch, num_train_epochs):
         if completed_steps >= max_train_steps:
@@ -1175,6 +1217,15 @@ def main():
 
             completed_steps += 1
             progress_bar.update(1)
+            if (
+                throughput_started_at is None
+                and completed_steps >= throughput_warmup_steps
+            ):
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize()
+                    torch.cuda.reset_peak_memory_stats()
+                throughput_start_step = completed_steps
+                throughput_started_at = time.perf_counter()
 
             timing_logs = stage_timer.finish_step() if profile_this_step else None
 
@@ -1210,6 +1261,30 @@ def main():
                 evaluate(args, model, eval_dataloaders, accelerator, completed_steps)
             if completed_steps >= max_train_steps:
                 break
+
+    if throughput_started_at is not None:
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        measured_steps = max(completed_steps - throughput_start_step, 0)
+        measured_seconds = max(time.perf_counter() - throughput_started_at, 1e-9)
+        measured_tokens = (
+            measured_steps
+            * args.per_device_train_batch_size
+            * args.gradient_accumulation_steps
+            * args.training_length
+        )
+        training_summary = {
+            "optimizer_steps": measured_steps,
+            "elapsed_seconds": measured_seconds,
+            "tokens_per_second": measured_tokens / measured_seconds,
+        }
+        if torch.cuda.is_available():
+            training_summary.update({
+                "peak_allocated_mib": torch.cuda.max_memory_allocated() / 2**20,
+                "peak_reserved_mib": torch.cuda.max_memory_reserved() / 2**20,
+            })
+        if accelerator.is_main_process:
+            print("training_summary:", json.dumps(training_summary))
 
     evaluate(
         args,

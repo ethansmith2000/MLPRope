@@ -177,6 +177,13 @@ radial scale. `scale_parameterization=exp` uses `scale_init*exp(raw)`;
 `scale_init*exp(tanh(raw)*log(scale_max))`, restricting pair scales to
 `[scale_init/scale_max, scale_init*scale_max]`.
 
+Learned exponential parameterizations use the exact exponential in the forward
+pass and a straight-through identity derivative in the backward pass. This
+applies to rotary scales, adaptive gains, learned Fourier temperatures and
+frequencies, and Inkling CosNet frequencies. It avoids multiplying gradients
+by the current exponential value; `bounded_log` still retains the derivative
+of its `tanh` bound.
+
 `unit_pair` constructs and normalizes
 `[cos(θ)+dx, sin(θ)+dy]`, then converts the valid unit pair back to a relative
 phase for the shared rotary kernel. Zero-initialized `[dx,dy]` is exact RoPE;
@@ -272,13 +279,17 @@ not derive conditioning content from attention Q/K. Legacy `source=qk` and
 
 ```yaml
 conditioning:
-  kind: none               # none | adaptive_gain | additive_phase | rope_phase
+  kind: none               # also carrier_hypernetwork and legacy conditioners
   source: dedicated
   activation: tanh         # tanh | gelu | linear | scaled_sigmoid
   hidden_dim: 64
+  input_mode: content      # content | position | content_position
+  network: linear          # linear | silu_mlp | swiglu_mlp
+  components: phase        # phase | log_gain_phase
+  head_coupling: per_head_independent # shared_head | per_head_independent
   gate_init: 0.0
   target: both             # q | k | both
-  coupling: shared_trunk_separate_readouts  # shared | shared_trunk_separate_readouts
+  coupling: shared_trunk_separate_readouts
   phase_bound: 0.25
 ```
 
@@ -306,6 +317,41 @@ projections initialize to zero and have no second zero gate.
 For canonical AddRoPE, conditioning acts on amplitude and phase latents before
 cosine/sine synthesis; it never perturbs pair coordinates independently.
 
+### Anchor-relative carrier hypernetwork
+
+`carrier_hypernetwork` modulates either additive `amplitude_phase` AddRoPE or
+rotary `phase`/`scaled_phase` while remaining on the Q/K path used by fused
+SDPA. It consumes normalized dedicated content, the raw configured
+Fourier/scalar position basis, or their concatenation. `linear`, `silu_mlp`,
+and `swiglu_mlp` networks are available.
+
+Every final projection weight and bias is zero-initialized. There is no output
+RMSNorm on the predicted deltas, because normalization would magnify a tiny
+departure and defeat the exact null. Additive channels retain method-aware
+RMSNorm after carrier addition; rotary channels retain Q/K RMSNorm before
+rotation.
+
+For an established additive anchor `(a, phi)`:
+
+```text
+a'   = a * exp_ste(delta_log_gain)
+phi' = phi + delta_phase
+```
+
+For rotary channels, `components=phase` predicts only `delta_phase`.
+`components=log_gain_phase` additionally applies pairwise radial scale
+`exp_ste(delta_log_gain)`, intentionally making the operation scaled rotary
+rather than strictly norm-preserving RoPE. `exp_ste` is exponential in the
+forward pass and has identity derivative in the backward pass.
+
+`target=q|k` leaves the other branch exactly on its static anchor.
+`coupling=shared` reuses one complete network and, for `target=both`, requires
+`position_content_coupling=shared`.
+`shared_trunk_separate_readouts` shares nonlinear features but has independent
+zero heads. `separate` builds independent Q/K networks. Hypernetwork head
+coupling is independent of the carrier mapper and may broadcast one output
+over heads or learn per-head outputs.
+
 Evaluation diagnostics use one real validation sequence for conditioned
 channels and report branch/QK RMS ratios, p95 ratios, content-to-combined
 cosines, and bounded additive gains. Static zero-content summaries remain
@@ -324,6 +370,8 @@ Post-processing presets are:
 - `core`: evaluation losses and perplexity;
 - `qk-health`: core metrics plus cross-layer branch maxima, contribution ratios,
   content/combined cosine, rotary scale, and additive gain summaries;
+- `hyper-health`: Q/K health plus cross-layer gain/phase delta RMS and p95
+  magnitudes and the maximum effective exponential gain;
 - `all`: every final numeric metric.
 
 Additional metric globs may be supplied with repeatable `--metric`. Output

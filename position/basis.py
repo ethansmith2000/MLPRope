@@ -6,6 +6,8 @@ from typing import Literal
 
 import torch
 
+from position.autograd import exp_with_identity_grad
+
 
 BasisKind = Literal[
     "frozen_fourier",
@@ -133,7 +135,9 @@ class LearnedTemperatureFourierBasis(torch.nn.Module):
             dtype=torch.float32,
         )
         base = 1.0 / (self.theta ** (index / half))
-        frequencies = base * self.log_temperature.float().exp()
+        frequencies = base * exp_with_identity_grad(
+            self.log_temperature.float()
+        )
         return frequencies if dtype is None else frequencies.to(dtype=dtype)
 
     def forward(
@@ -192,7 +196,9 @@ class LearnedFrequencyFourierBasis(torch.nn.Module):
             dtype=torch.float32,
         )
         base = 1.0 / (self.theta ** (index / half))
-        frequencies = base * self.log_frequency_residual.float().exp()
+        frequencies = base * exp_with_identity_grad(
+            self.log_frequency_residual.float()
+        )
         return frequencies if dtype is None else frequencies.to(dtype=dtype)
 
     def forward(

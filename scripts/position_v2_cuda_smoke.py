@@ -29,10 +29,16 @@ def _qk(
     conditioning_source: str = "qk",
     conditioning_target: str = "both",
     conditioning_coupling: str = "shared_trunk_separate_readouts",
+    conditioning_input_mode: str = "content",
+    conditioning_network: str = "linear",
+    conditioning_components: str = "phase",
+    conditioning_head_coupling: str = "per_head_independent",
     phase_bound: float = 0.25,
     scalars: list[str] | None = None,
     mapper_residual: bool | None = None,
     amplitude_init: float = 0.1,
+    learn_amplitude: bool = True,
+    learn_phase: bool = True,
 ) -> dict:
     residual = (
         mapper_kind in {"low_rank", "bottleneck_mlp", "mlp"}
@@ -65,11 +71,17 @@ def _qk(
                 "source": conditioning_source,
                 "target": conditioning_target,
                 "coupling": conditioning_coupling,
+                "input_mode": conditioning_input_mode,
+                "network": conditioning_network,
+                "components": conditioning_components,
+                "head_coupling": conditioning_head_coupling,
                 "phase_bound": phase_bound,
                 "hidden_dim": 12,
             },
             "output": {
                 "amplitude_init": amplitude_init,
+                "learn_amplitude": learn_amplitude,
+                "learn_phase": learn_phase,
             },
         },
         model_dim=64,
@@ -353,6 +365,46 @@ NEW_CASES = [
 ]
 
 NULL_CONDITIONING_CASES = [
+    (
+        "addrope_content_position_hyper",
+        _qk(
+            application="additive",
+            geometry="amplitude_phase",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_coupling="shared_trunk_separate_readouts",
+            conditioning_input_mode="content_position",
+            conditioning_network="silu_mlp",
+            conditioning_components="log_gain_phase",
+            amplitude_init=0.3,
+            learn_amplitude=False,
+            learn_phase=False,
+        ),
+        {"enabled": False},
+        "sdpa",
+        None,
+        None,
+    ),
+    (
+        "scaled_rope_content_hyper",
+        _qk(
+            application="rotary",
+            geometry="phase",
+            qk_coupling="shared",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_coupling="shared_trunk_separate_readouts",
+            conditioning_input_mode="content",
+            conditioning_network="linear",
+            conditioning_components="log_gain_phase",
+            learn_phase=False,
+        ),
+        {"enabled": False},
+        "sdpa",
+        None,
+        None,
+    ),
     (
         "adaptive_qk_gain",
         _qk(

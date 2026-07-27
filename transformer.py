@@ -180,6 +180,19 @@ class Attention(torch.nn.Module):
             heads=heads,
             rope_theta=rope_theta,
         )
+        qk_conditioning = self.qk_config["conditioning"]
+        if (
+            qk_conditioning["kind"] == "carrier_hypernetwork"
+            and qk_conditioning["input_mode"]
+            in {"content", "content_position"}
+            and qk_conditioning["coupling"] == "shared"
+            and qk_conditioning["target"] == "both"
+            and self.position_content_config["coupling"] != "shared"
+        ):
+            raise ValueError(
+                "A shared Q/K carrier hypernetwork requires "
+                "position_content_coupling='shared'"
+            )
         self._prepared_block_mask: BlockMask | None = None
         self._prepared_query_length: int | None = None
         # Stable score_mod closure target — updated each flex forward, not redefined.
@@ -206,8 +219,14 @@ class Attention(torch.nn.Module):
             self.qk_config["conditioning"],
             self.logit_bias_config["conditioning"],
         )
+        def uses_content(config: dict) -> bool:
+            return config["kind"] != "none" and not (
+                config["kind"] == "carrier_hypernetwork"
+                and config["input_mode"] == "position"
+            )
+
         uses_dedicated_content = any(
-            cfg["kind"] != "none" and cfg["source"] == "dedicated"
+            uses_content(cfg) and cfg["source"] == "dedicated"
             for cfg in conditioning_configs
         )
         self.position_content = (
@@ -478,7 +497,11 @@ class Attention(torch.nn.Module):
 
         position_q_content = position_k_content = None
         if self.qk_position is not None:
-            if self.qk_config["conditioning"]["kind"] != "none":
+            qk_conditioning = self.qk_config["conditioning"]
+            if qk_conditioning["kind"] != "none" and not (
+                qk_conditioning["kind"] == "carrier_hypernetwork"
+                and qk_conditioning["input_mode"] == "position"
+            ):
                 position_q_content, position_k_content = content_for(
                     self.qk_config
                 )
@@ -662,7 +685,11 @@ class Attention(torch.nn.Module):
         q = self.q_norm(q_projected)
         k = self.k_norm(k_projected)
         source = self.qk_position.conditioning_config["source"]
-        if self.qk_position.conditioning_config["kind"] == "none":
+        conditioning = self.qk_position.conditioning_config
+        if conditioning["kind"] == "none" or (
+            conditioning["kind"] == "carrier_hypernetwork"
+            and conditioning["input_mode"] == "position"
+        ):
             q_content = k_content = None
         elif source == "dedicated":
             if self.position_content is None:

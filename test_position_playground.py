@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from argparse import Namespace
@@ -15,6 +16,7 @@ from position import (
     FeatureMapper,
     build_position_basis,
     build_qk_position_channel,
+    exp_with_identity_grad,
     interleaved_fourier_basis,
     normalize_attention_write_config,
     normalize_position_config_v2,
@@ -42,6 +44,10 @@ def qk_config(
     conditioning_target: str = "both",
     conditioning_coupling: str = "shared_trunk_separate_readouts",
     phase_bound: float = 0.25,
+    conditioning_input_mode: str = "content",
+    conditioning_network: str = "linear",
+    conditioning_components: str = "phase",
+    conditioning_head_coupling: str = "per_head_independent",
     scalars: list[str] | None = None,
     amplitude_init: float = 0.1,
     scale_init: float = 1.0,
@@ -86,6 +92,10 @@ def qk_config(
                 "coupling": conditioning_coupling,
                 "phase_bound": phase_bound,
                 "hidden_dim": 12,
+                "input_mode": conditioning_input_mode,
+                "network": conditioning_network,
+                "components": conditioning_components,
+                "head_coupling": conditioning_head_coupling,
             },
             "qk_coupling": qk_coupling,
             "head_coupling": head_coupling,
@@ -139,6 +149,13 @@ def logit_config(
 
 
 class PositionBasisTest(unittest.TestCase):
+    def test_exp_parameterization_uses_exp_forward_identity_backward(self):
+        value = torch.tensor([-3.0, 0.0, 3.0], requires_grad=True)
+        output = exp_with_identity_grad(value)
+        torch.testing.assert_close(output, value.detach().exp())
+        output.sum().backward()
+        torch.testing.assert_close(value.grad, torch.ones_like(value))
+
     def test_learned_bases_match_frozen_at_initialization(self):
         expected = interleaved_fourier_basis(16, 8, 10_000.0)
         for kind in (
@@ -241,6 +258,199 @@ class GeometryAndContentTest(unittest.TestCase):
             extent=16,
             rope_theta=10_000.0,
         )
+
+    def test_carrier_hypernetwork_preserves_addrope_anchor_and_gets_gradient(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_coupling="shared_trunk_separate_readouts",
+            conditioning_input_mode="content_position",
+            conditioning_network="silu_mlp",
+            conditioning_components="log_gain_phase",
+            learn_amplitude=False,
+            learn_phase=False,
+            amplitude_init=0.2,
+        )
+        channel = self._channel(config)
+        self.assertIsNone(channel.pipeline)
+        content = torch.randn(2, 4, 9, 8)
+        output = channel(9, q_content=content, k_content=content)
+        expected = (
+            0.2
+            * torch.cat(
+                (channel.base_cos[:9], channel.base_sin[:9]),
+                dim=-1,
+            )[None]
+            .expand(4, -1, -1)
+        )
+        torch.testing.assert_close(output.q, expected[None].expand(2, -1, -1, -1))
+        torch.testing.assert_close(output.k, output.q)
+        self.assertEqual(torch.count_nonzero(output.q_log_gain_delta).item(), 0)
+        self.assertEqual(torch.count_nonzero(output.q_hyper_phase_delta).item(), 0)
+        summary = channel.summarize(
+            9,
+            q_content=content,
+            k_content=content,
+        )
+        self.assertEqual(summary["hyper_log_gain_delta_q/rms"], 0.0)
+        self.assertEqual(summary["hyper_phase_delta_k/p95_abs"], 0.0)
+        self.assertEqual(summary["hyper_effective_gain_q/max"], 1.0)
+
+        (output.q.sum() + output.k.sum()).backward()
+        q_readout = channel.carrier_hypernetwork.q_readout
+        k_readout = channel.carrier_hypernetwork.k_readout
+        self.assertGreater(q_readout.weight.grad.abs().sum().item(), 0)
+        self.assertGreater(k_readout.weight.grad.abs().sum().item(), 0)
+
+    def test_carrier_hypernetwork_rotary_phase_and_gain_are_exact_nulls(self):
+        config = qk_config(
+            "rotary",
+            "phase",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_coupling="shared",
+            conditioning_input_mode="content",
+            conditioning_network="linear",
+            conditioning_components="log_gain_phase",
+            conditioning_head_coupling="shared_head",
+            learn_phase=False,
+        )
+        channel = self._channel(config)
+        self.assertIsNone(channel.pipeline)
+        content = torch.randn(2, 4, 9, 8)
+        output = channel(9, q_content=content, k_content=content)
+        torch.testing.assert_close(output.q, torch.zeros_like(output.q))
+        torch.testing.assert_close(output.k, output.q)
+        torch.testing.assert_close(output.q_scale, torch.ones_like(output.q_scale))
+        torch.testing.assert_close(output.k_scale, output.q_scale)
+        self.assertEqual(output.q.shape, (2, 4, 9, 4))
+
+    def test_carrier_hypernetwork_axes_and_asymmetric_targets(self):
+        for input_mode in ("content", "position", "content_position"):
+            for network in ("linear", "silu_mlp", "swiglu_mlp"):
+                with self.subTest(input_mode=input_mode, network=network):
+                    config = qk_config(
+                        "additive",
+                        "amplitude_phase",
+                        conditioning="carrier_hypernetwork",
+                        conditioning_source="dedicated",
+                        conditioning_target="q",
+                        conditioning_coupling="separate",
+                        conditioning_input_mode=input_mode,
+                        conditioning_network=network,
+                        conditioning_components="phase",
+                        learn_amplitude=False,
+                        learn_phase=False,
+                    )
+                    channel = self._channel(config)
+                    content = (
+                        None
+                        if input_mode == "position"
+                        else torch.randn(2, 4, 7, 8)
+                    )
+                    output = channel(
+                        7,
+                        q_content=content,
+                        k_content=content,
+                    )
+                    self.assertEqual(output.q.shape[-3:], (4, 7, 8))
+                    self.assertEqual(output.k.shape[-3:], (4, 7, 8))
+                    self.assertEqual(
+                        torch.count_nonzero(output.k_hyper_phase_delta).item(),
+                        0,
+                    )
+
+    def test_shared_carrier_hypernetwork_requires_shared_content(self):
+        config = qk_config(
+            "rotary",
+            "phase",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_coupling="shared",
+            conditioning_input_mode="content",
+            learn_phase=False,
+        )
+        with self.assertRaisesRegex(ValueError, "shared Q/K"):
+            Attention(
+                32,
+                4,
+                qk_config=config,
+                position_content_coupling="separate",
+            )
+        attention = Attention(
+            32,
+            4,
+            qk_config=config,
+            position_content_coupling="shared",
+            qk_norm_mode="method_aware_rms",
+            attn_impl="sdpa",
+        )
+        output = attention(torch.randn(2, 7, 32))
+        self.assertEqual(output.shape, (2, 7, 32))
+
+    def test_position_only_carrier_hypernetwork_needs_no_content_projector(self):
+        config = qk_config(
+            "rotary",
+            "phase",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_coupling="shared_trunk_separate_readouts",
+            conditioning_input_mode="position",
+            conditioning_network="swiglu_mlp",
+            learn_phase=False,
+        )
+        attention = Attention(
+            32,
+            4,
+            qk_config=config,
+            qk_norm_mode="method_aware_rms",
+            attn_impl="sdpa",
+        )
+        self.assertIsNone(attention.position_content)
+        x = torch.randn(2, 7, 32)
+        self.assertEqual(attention(x).shape, x.shape)
+        summary = attention.qk_position_summary_from_input(x)
+        self.assertEqual(summary["hyper_phase_delta_q/rms"], 0.0)
+
+    def test_additive_carrier_hypernetwork_is_composed_before_qk_rms(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_coupling="shared",
+            conditioning_input_mode="content",
+            learn_amplitude=False,
+            learn_phase=False,
+        )
+        attention = Attention(
+            32,
+            4,
+            qk_config=config,
+            position_content_coupling="shared",
+            qk_norm_mode="method_aware_rms",
+            attn_impl="sdpa",
+        )
+        captured = {}
+
+        def capture_q_input(_module, args):
+            captured["q_input"] = args[0]
+
+        handle = attention.q_norm.register_forward_pre_hook(capture_q_input)
+        x = torch.randn(2, 7, 32)
+        attention(x)
+        handle.remove()
+        projected = attention._split_heads(attention.to_q(x))
+        content, _ = attention.position_content(x)
+        addend = attention.qk_position(
+            7,
+            dtype=projected.dtype,
+            q_content=content,
+            k_content=content,
+        ).q
+        torch.testing.assert_close(captured["q_input"], projected + addend)
 
     def test_canonical_amplitude_phase_addrope(self):
         config = qk_config(
@@ -1245,6 +1455,14 @@ class InklingAndConfigTest(unittest.TestCase):
                 "model_position_extent": 64,
                 "evaluation_lengths": [32, 64],
                 "scalar_normalization_extent": 16,
+                "per_device_train_batch_size": 8,
+                "per_device_eval_batch_size": 2,
+                "gradient_accumulation_steps": 4,
+                "gradient_checkpointing": True,
+                "checkpointing_steps": 5000,
+                "resume_from_checkpoint": "auto",
+                "save_final_model": True,
+                "compile_mode": "max-autotune-no-cudagraphs",
             }
         )
         self.assertEqual(config.block_size, 16)
@@ -1252,6 +1470,14 @@ class InklingAndConfigTest(unittest.TestCase):
         self.assertEqual(config.model_position_extent, 64)
         self.assertEqual(config.evaluation_lengths, [16, 32, 64])
         self.assertEqual(config.scalar_normalization_extent, 16)
+        self.assertEqual(config.per_device_train_batch_size, 8)
+        self.assertEqual(config.per_device_eval_batch_size, 2)
+        self.assertEqual(config.gradient_accumulation_steps, 4)
+        self.assertTrue(config.gradient_checkpointing)
+        self.assertEqual(config.checkpointing_steps, 5000)
+        self.assertEqual(config.resume_from_checkpoint, "auto")
+        self.assertTrue(config.save_final_model)
+        self.assertEqual(config.compile_mode, "max-autotune-no-cudagraphs")
 
         with self.assertRaisesRegex(ValueError, "must cover"):
             self._load_payload(
@@ -1261,6 +1487,72 @@ class InklingAndConfigTest(unittest.TestCase):
                     "evaluation_lengths": [64],
                 }
             )
+
+        for key in (
+            "per_device_train_batch_size",
+            "per_device_eval_batch_size",
+            "gradient_accumulation_steps",
+            "checkpointing_steps",
+        ):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(ValueError, "must be positive"):
+                    self._load_payload({key: 0})
+
+    def test_50k_scale_configuration_round_trips(self):
+        config = self._load_payload(
+            {
+                "hidden_size": 1024,
+                "depth": 12,
+                "n_head": 16,
+                "training_length": 1024,
+                "model_position_extent": 4096,
+                "evaluation_lengths": [1024, 2048, 4096],
+                "per_device_train_batch_size": 8,
+                "per_device_eval_batch_size": 1,
+                "gradient_accumulation_steps": 4,
+                "gradient_checkpointing": True,
+                "max_train_steps": 50000,
+                "num_warmup_steps": 1000,
+                "checkpointing_steps": 5000,
+                "resume_from_checkpoint": "auto",
+                "save_final_model": True,
+            }
+        )
+        self.assertEqual(config.hidden_size, 1024)
+        self.assertEqual(config.depth, 12)
+        self.assertEqual(config.per_device_train_batch_size, 8)
+        self.assertEqual(config.per_device_eval_batch_size, 1)
+        self.assertEqual(
+            config.per_device_train_batch_size
+            * config.gradient_accumulation_steps,
+            32,
+        )
+        self.assertEqual(config.evaluation_lengths, [1024, 2048, 4096])
+        self.assertEqual(config.checkpointing_steps, 5000)
+        self.assertEqual(config.resume_from_checkpoint, "auto")
+        self.assertTrue(config.save_final_model)
+
+    @unittest.skipUnless(
+        torch.cuda.is_available() and os.environ.get("RUN_CUDA_TESTS") == "1",
+        "requires an explicitly claimed CUDA device",
+    )
+    def test_gradient_checkpointed_compiled_forward_backward(self):
+        config = self._load_payload(
+            {
+                "hidden_size": 32,
+                "depth": 2,
+                "n_head": 4,
+                "training_length": 16,
+                "model_position_extent": 16,
+                "gradient_checkpointing": True,
+                "compile": True,
+            }
+        )
+        model = torch.compile(make_model(config, 64).cuda(), mode="default")
+        input_ids = torch.randint(0, 64, (2, 15), device="cuda")
+        loss = model(input_ids=input_ids, targets=input_ids)
+        loss.backward()
+        self.assertTrue(torch.isfinite(loss))
 
     def test_validation_tokens_can_be_rechunked_to_longer_contexts(self):
         source = [

@@ -1586,3 +1586,254 @@ protocol as `mlprope_phase5_null_conditioning`. WandB group is
 `phase5-null-conditioning-5k`; configs and outputs live under
 `sweep_configs/phase5_null_conditioning/` and
 `model-output/position_bias_phase5_null_conditioning/`.
+
+## 2026-07-27 — Phase-5 results and breadth-before-scale freeze
+
+All Phase-5 runs completed at 5k steps, seed 123. Two static anchors initially
+failed because channels with `conditioning.kind=none` inherited
+`source=dedicated` and requested a content projector they did not need. The
+attention guard was corrected, regression-tested, and both anchors completed
+on rerun.
+
+Final losses:
+
+| Variant | Eval loss |
+| --- | ---: |
+| additive phase, separate readouts | **4.3952** |
+| additive phase, shared readout | **4.3959** |
+| fixed radius-0.3 additive anchor + linear logit | 4.4098 |
+| RoPE + method-aware RMS + linear logit | 4.4497 |
+| adaptive gain, shared / separate | 4.4587 / 4.4590 |
+| dedicated pairwise query-absolute logit | 4.4689 |
+| true RoPE phase, separate / shared | 4.4792 / 4.4802 |
+| query-local position write | 4.4994 |
+| standard RoPE | 4.5165 |
+| RoPE + method-aware RMS, no logit | 4.5210 |
+
+Method-aware RMS alone was neutral (`4.5165 -> 4.5210`). The static linear
+logit remained strongly useful (`4.5210 -> 4.4497`), and the fixed additive
+carrier improved it again (`4.4497 -> 4.4098`). Dedicated-content additive
+phase was the only new actuator to improve its matched anchor
+(`4.4098 -> 4.3952`), while shared and separate readouts were effectively tied.
+Its pair radius remained fixed: addend RMS `0.212`, maximum magnitude `0.3`,
+and content-to-combined cosine about `0.973`. Phase RMS opened to roughly
+`0.12–0.36` radians by layer without destabilizing Q/K.
+
+The Phase-5 stack is not directly comparable to the promoted Phase-3 stack:
+it used method-aware RMS, no scalar inputs, and a fixed identity-mapped
+carrier. The next work therefore reconciles geometry and normalization on one
+full scalar+linear-logit stack before promoting content phase.
+
+The active portfolio is frozen as follows:
+
+- active: canonical AddRoPE, radius-0.3 pair normalization, static linear
+  logit, method-aware normalization, dedicated additive phase, and compact
+  efficiency controls;
+- controls only: RoPE, linear-logit-only, free additive, and wider FFNs;
+- retired from active search: residual-stream PE, all attention writes,
+  Inkling/pairwise content logits, direct Q/K residual/gate conditioning,
+  rotary phase/scale alternatives, learned Fourier frequencies/temperature,
+  and broad mapper/coupling sweeps.
+
+Retirement removes mechanisms from future sweeps but keeps their code and
+historical configs. Historical implementation failures remain explicitly
+separate from clean negative hypothesis tests.
+
+## 2026-07-27 — Phase-6 geometry and normalization reconciliation
+
+Six seed-123 5k runs placed canonical amplitude+phase and radius-0.3
+pair-normalized additive geometry on the same scalar-augmented, static
+linear-logit stack:
+
+| Variant | Eval loss |
+| --- | ---: |
+| canonical + method-aware RMS | **4.3851** |
+| pair-normalized + method-aware RMS | 4.3971 |
+| canonical + method-aware RMS + branch RMS | 4.3980 |
+| canonical + legacy LayerNorm | 4.3984 |
+| pair-normalized + legacy LayerNorm | 4.4046 |
+| RoPE + linear logit + parameter-matched FFN-3168 | 4.4867 |
+
+Canonical geometry with one method-aware RMS after the additive carrier is the
+reconciled winner. It improves the exact legacy stack by `0.0133` and the
+matched pair-normalized stack by `0.0120`. Separately normalizing the additive
+branch erases that gain, so branch RMS is retired. Pair normalization remains
+a sound geometry but is dominated on the full scalar stack. Generic FFN
+capacity does not explain the Q/K positional gain.
+
+## 2026-07-27 — Full-stack content-phase transfer stopped
+
+The dedicated-content additive-phase actuator was transferred to the
+reconciled canonical+scalar+linear-logit+method-aware-RMS stack with Q-only,
+K-only, shared-both, and separate-both targets. All four runs showed the same
+severe failure by step 3000 and were stopped:
+
+- eval loss remained `5.13–5.24` versus the `4.3851` anchor;
+- positional addend RMS reached `195–199`;
+- addend maxima reached roughly `2,500`;
+- p95 addend/content ratios exceeded `500`.
+
+The content-predicted angular deltas themselves remained modest (usually
+`0.01–0.08` radians RMS). The runaway quantity was the promoted carrier's
+unbounded learned amplitude. Method-aware Q/K RMS kept final Q/K magnitudes
+finite, but it could not prevent the enormous carrier from replacing their
+direction. The Phase-5 fixed-radius actuator therefore remains a valid stable
+test, while the union of dedicated phase conditioning with the unconstrained
+learned amplitude+phase carrier is classified as a broken parameterization.
+It is removed from promotion rather than rescued with another bounded-package
+sweep.
+
+## 2026-07-27 — Phase-6 compact efficiency screen
+
+Three seed-123 5k efficiency variants used the reconciled canonical,
+method-aware-RMS stack. The full-width/full-linear anchor is `4.3851` with
+`2,402,368` positional parameters.
+
+| Variant | Eval loss | Position parameters |
+| --- | ---: | ---: |
+| low-rank rank-32 linear logit | **4.3868** | 2,207,808 |
+| Q/K Fourier basis 16 | 4.3932 | 1,910,848 |
+| Q/K Fourier basis 32 | 4.3984 | 2,009,152 |
+
+The corrected rank-32 logit is tied with the full linear channel while saving
+`194,560` parameters and is promoted as the efficiency alternative. Basis 16
+is within the predeclared `0.01` tie band while saving `491,520` parameters, so
+it remains a compression option rather than a quality winner. Basis 32 is
+strictly dominated by basis 16 (more parameters and worse loss) and is pruned.
+
+## 2026-07-27 — h768/d8 10k promotion and extrapolation gate
+
+The two promoted stacks and two controls trained for 10k steps and were
+evaluated at 1024, 2048, and 4096 tokens:
+
+| Variant | 1024 | 2048 | 4096 |
+| --- | ---: | ---: | ---: |
+| canonical + full linear logit | **4.0345** | 4.0634 | 4.1516 |
+| canonical + rank-32 logit | 4.0462 | **4.0532** | **4.0556** |
+| RoPE + linear logit + matched FFN | 4.0855 | 4.0964 | 4.0894 |
+| standard RoPE | 4.1282 | 4.1515 | 4.2498 |
+
+The full linear logit is the in-distribution quality winner. The low-rank
+logit trails by `0.0117` at training length but generalizes much better:
+its 4096 loss is essentially flat and beats the full channel by `0.0960`.
+Both therefore pass the scale gate for different reasons. Standard RoPE and
+the matched-FFN model remain controls; neither explains the positional-stack
+gain.
+
+## 2026-07-27 — h1024/d12 larger-model scale gate
+
+The first h1024/d12 attempt used batch size 4 and was intentionally stopped
+after its early metrics because that halved tokens per optimizer step relative
+to h768/d8. Those stopped WandB attempts are invalid scale comparisons, not
+model crashes. Their local partial metrics were removed before relaunch.
+
+The corrected runs used batch size 8, 10k optimizer steps, and the same
+1024-token training sequences. All four completed without OOM, traceback, NaN,
+or queue failure:
+
+| Variant | 1024 | 2048 | 4096 |
+| --- | ---: | ---: | ---: |
+| canonical + full linear logit | **3.9523** | **3.9566** | 3.9693 |
+| canonical + rank-32 logit | 3.9545 | 3.9591 | **3.9601** |
+| RoPE + linear logit + matched FFN | 4.0094 | 4.0281 | 4.0303 |
+| standard RoPE | 4.0464 | 4.0836 | 4.2328 |
+
+The two promoted stacks are tied in-distribution at larger scale (`0.0022`
+apart). The rank-32 logit again has the better 4096 result, while the full
+linear channel is marginally best at 1024 and 2048. Both beat the
+parameter-matched FFN control by about `0.055–0.070`, confirming that the gain
+is positional structure rather than generic parameter capacity.
+
+The breadth-before-scale portfolio is therefore closed with two supported
+endpoints:
+
+- **quality default:** canonical scalar AddRoPE + method-aware RMS + full
+  linear relative logit;
+- **extrapolation/efficiency default:** the same Q/K stack with a corrected
+  rank-32 linear relative logit.
+
+## 2026-07-27 — 50k physical-batch and compile probe
+
+The h1024/d12 full-linear candidate was profiled for 200 optimizer steps at
+effective batch 32. Steady-state measurements exclude the first 20 compile and
+allocator warmup steps:
+
+| Physical batch / accumulation | Checkpointing | Compile mode | Tokens/s | Peak allocated | Peak reserved |
+| --- | --- | --- | ---: | ---: | ---: |
+| 32 / 1 | on | default | 31,210 | 23,710 MiB | 28,190 MiB |
+| 32 / 1 | on | max-autotune-no-cudagraphs | 30,844 | 23,710 MiB | 27,770 MiB |
+| 16 / 2 | on | default | 31,001 | 14,889 MiB | 17,180 MiB |
+| **8 / 4** | **off** | **default** | **46,836** | **15,497 MiB** | **16,476 MiB** |
+
+Physical batch 8 without activation checkpointing is about 50% faster than the
+checkpointed configurations while retaining roughly 16 GiB of reservation
+headroom. `reduce-overhead` was rejected because its CUDA-graph replay
+overwrote a live compiled output tensor. The production choice is therefore
+physical batch 8, accumulation 4, checkpointing off, and compile mode
+`default`. This keeps effective batch 32 and processes 1,638,400,000 nominal
+training tokens over 50,000 optimizer steps.
+
+## 2026-07-27 — h1024/d12 50k promotion result
+
+All six seed-123 runs completed 50,000 optimizer steps at sequence length 1024
+and effective batch 32: `1,638,400,000` nominal training tokens per run.
+Checkpoints were written every 5,000 steps, final weights were saved, every
+queue child exited with code 0, and there were no OOMs, NaNs, tracebacks, or
+checkpoint resumes.
+
+| Variant | 1024 | 2048 | 4096 | Tokens/s |
+| --- | ---: | ---: | ---: | ---: |
+| **compact basis-16 AddRoPE + full logit** | **2.9835** | **3.0456** | 3.1142 | 47,298 |
+| full-basis AddRoPE + full logit | 2.9839 | 3.0704 | 3.1855 | 47,463 |
+| full-basis AddRoPE + rank-32 logit | 2.9875 | 3.1588 | 3.3595 | 46,950 |
+| RoPE + full logit + matched FFN-4160 | 3.0048 | 3.0458 | **3.0578** | 47,214 |
+| RoPE + full logit | 3.0132 | 3.0551 | 3.0658 | 48,017 |
+| standard RoPE | 3.0337 | 3.0864 | 3.1489 | **90,299** |
+
+This reverses two provisional 10k decisions:
+
+- Basis 16 is no longer merely a compression option. It ties the full Q/K
+  basis at training length, beats it by `0.0247` at 2048 and `0.0713` at 4096,
+  uses about 590k fewer positional parameters, and has healthier Q/K
+  diagnostics (`2.12` maximum addend RMS versus `2.72`). It is the practical
+  additive quality/default endpoint.
+- The rank-32 logit's earlier extrapolation advantage does not survive 50k.
+  Its 4096 loss degrades to `3.3595`, worst in the pack, while no longer saving
+  parameters at h1024. It is pruned from promotion.
+
+RoPE + full relative logit is the strongest same-FFN extrapolation endpoint
+(`3.0658` at 4096). The FFN-4160 control improves this to `3.0578`, a small
+capacity effect, but remains a control rather than a distinct positional
+method. Standard RoPE remains the throughput endpoint: fused SDPA reaches
+about `1.88–1.92x` the throughput of all FlexAttention/logit-bias arms. The
+extra cost is overwhelmingly the FlexAttention relative-logit path rather
+than the additive Q/K carrier.
+
+The final portfolio is therefore:
+
+- **additive quality/default:** compact basis-16 canonical scalar AddRoPE +
+  method-aware RMS + full linear relative logit;
+- **extrapolation positional default:** RoPE + full linear relative logit;
+- **throughput/control default:** standard RoPE with fused SDPA;
+- **pruned:** rank-32 logit and full Q/K basis, both dominated at this horizon.
+
+## 2026-07-27 — SDPA carrier-hypernetwork integration smoke
+
+The anchor-relative carrier hypernetwork passed eager and compiled CUDA
+forward/backward tests for additive AddRoPE and scaled rotary, then completed
+three h768/d8 SDPA-only, seed-123 integration runs for 200 optimizer steps.
+Every queue child exited with code 0; there were no OOMs, NaNs, non-finite
+gradients, or tracebacks.
+
+| Variant | Eval loss | Tokens/s | Peak reserved | Gain max | Phase p95 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| compact basis-16 AddRoPE anchor | 6.4063 | 26,528 | 5,382 MiB | — | — |
+| AddRoPE content+position SiLU hypernetwork | 6.5258 | 41,294 | 6,162 MiB | 1.173 | 0.0343 |
+| scaled-RoPE content-linear hypernetwork | 6.2657 | 51,771 | 5,496 MiB | 2.431 | 0.1994 |
+
+These short warmup-dominated runs validate execution and metric plumbing only;
+they are not a ranking result. The additive hypernetwork remained tightly
+bounded at step 200 (`delta_log_gain` p95 `0.0347`, phase p95 `0.0343`).
+The rotary arm moved more aggressively (`delta_log_gain` p95 `0.447`,
+effective gain max `2.43`), but remained finite. Longer screens should monitor
+that radial scale before promotion.
