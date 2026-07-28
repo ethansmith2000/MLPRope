@@ -81,6 +81,7 @@ V2_INPUT_KEYS = {
 }
 V2_MAPPER_KEYS = {"kind", "residual", "rank", "hidden_dim"}
 V2_OUTPUT_KEYS = {
+    "parameter_source",
     "amplitude_init",
     "amplitude_max",
     "amplitude_parameterization",
@@ -107,6 +108,7 @@ V2_CONDITIONING_KEYS = {
     "gate_init",
     "target",
     "coupling",
+    "static_complement",
     "phase_bound",
     "pair_rank",
     "position_mode",
@@ -214,6 +216,7 @@ V2_CHANNEL_DEFAULTS = {
             "hidden_dim": 128,
         },
         "output": {
+            "parameter_source": "mapped",
             "amplitude_init": 0.1,
             "amplitude_max": 1.0,
             "amplitude_parameterization": "signed",
@@ -240,6 +243,7 @@ V2_CHANNEL_DEFAULTS = {
             "gate_init": 0.0,
             "target": "both",
             "coupling": "shared_trunk_separate_readouts",
+            "static_complement": False,
             "phase_bound": 0.25,
             "pair_rank": 16,
             "position_mode": "relative_only",
@@ -269,6 +273,7 @@ V2_CHANNEL_DEFAULTS = {
             "hidden_dim": 128,
         },
         "output": {
+            "parameter_source": "mapped",
             "amplitude_init": 0.1,
             "amplitude_max": 1.0,
             "amplitude_parameterization": "signed",
@@ -295,6 +300,7 @@ V2_CHANNEL_DEFAULTS = {
             "gate_init": 0.0,
             "target": "both",
             "coupling": "shared_trunk_separate_readouts",
+            "static_complement": False,
             "phase_bound": 0.25,
             "pair_rank": 16,
             "position_mode": "relative_only",
@@ -753,7 +759,10 @@ def normalize_position_config_v2(
     mapper_output_dim = default_output_dim
     mapper_input_dim = basis_dim + len(scalars)
     output_preview = normalized["output"]
+    parameter_source_preview = output_preview.get("parameter_source", "mapped")
     fixed_position_pipeline = channel_name == "qk" and (
+        parameter_source_preview == "direct"
+        or
         (
             application == "additive"
             and geometry == "amplitude_phase"
@@ -801,6 +810,20 @@ def normalize_position_config_v2(
     amplitude_parameterization = output_cfg.get(
         "amplitude_parameterization", "signed"
     )
+    parameter_source = output_cfg.get("parameter_source", "mapped")
+    if parameter_source not in {"mapped", "direct"}:
+        raise ValueError(
+            f"{channel_name}.output.parameter_source must be 'mapped' or 'direct'"
+        )
+    if parameter_source == "direct" and not (
+        channel_name == "qk"
+        and application == "additive"
+        and geometry == "amplitude_phase"
+    ):
+        raise ValueError(
+            f"{channel_name}.output.parameter_source='direct' requires "
+            "qk additive amplitude_phase"
+        )
     if amplitude_parameterization not in {
         "signed",
         "softplus",
@@ -940,6 +963,7 @@ def normalize_position_config_v2(
         "coupling": conditioning_cfg.get(
             "coupling", "shared_trunk_separate_readouts"
         ),
+        "static_complement": conditioning_cfg.get("static_complement", False),
         "phase_bound": float(conditioning_cfg.get("phase_bound", 0.25)),
         "pair_rank": int(conditioning_cfg.get("pair_rank", 16)),
         "position_mode": conditioning_cfg.get(
@@ -967,6 +991,10 @@ def normalize_position_config_v2(
     if conditioning["target"] not in {"q", "k", "both"}:
         raise ValueError(
             f"{channel_name}.conditioning.target must be 'q', 'k', or 'both'"
+        )
+    if not isinstance(conditioning["static_complement"], bool):
+        raise TypeError(
+            f"{channel_name}.conditioning.static_complement must be a boolean"
         )
     if conditioning["coupling"] not in {
         "shared",
@@ -996,10 +1024,14 @@ def normalize_position_config_v2(
             f"{channel_name}.conditioning.network must be 'linear', "
             "'silu_mlp', or 'swiglu_mlp'"
         )
-    if conditioning["components"] not in {"phase", "log_gain_phase"}:
+    if conditioning["components"] not in {
+        "phase",
+        "log_gain_phase",
+        "amplitude_phase",
+    }:
         raise ValueError(
-            f"{channel_name}.conditioning.components must be 'phase' or "
-            "'log_gain_phase'"
+            f"{channel_name}.conditioning.components must be 'phase', "
+            "'log_gain_phase', or 'amplitude_phase'"
         )
     if conditioning["head_coupling"] not in {
         "shared_head",
@@ -1077,6 +1109,45 @@ def normalize_position_config_v2(
             raise ValueError(
                 "carrier_hypernetwork uses the dedicated normalized content stream"
             )
+        if conditioning["components"] == "amplitude_phase":
+            if not (
+                application == "additive"
+                and geometry == "amplitude_phase"
+                and not learn_amplitude
+                and not learn_phase
+            ):
+                raise ValueError(
+                    "carrier_hypernetwork components='amplitude_phase' requires "
+                    "additive amplitude_phase with static amplitude/phase learning "
+                    "disabled"
+                )
+            if amplitude_parameterization not in {"signed", "softplus"}:
+                raise ValueError(
+                    "carrier_hypernetwork components='amplitude_phase' requires "
+                    "output.amplitude_parameterization='signed' or 'softplus'"
+                )
+            if conditioning["static_complement"] and not (
+                parameter_source == "direct"
+                and conditioning["target"] in {"q", "k"}
+                and qk_coupling != "shared"
+            ):
+                raise ValueError(
+                    "carrier_hypernetwork static_complement requires "
+                    "parameter_source='direct', target='q' or 'k', and "
+                    "non-shared Q/K coupling"
+                )
+        elif application == "rotary" and conditioning["components"] not in {
+            "phase",
+            "log_gain_phase",
+        }:
+            raise ValueError(
+                "rotary carrier_hypernetwork supports phase or log_gain_phase"
+            )
+        elif conditioning["static_complement"]:
+            raise ValueError(
+                "carrier_hypernetwork static_complement is only supported for "
+                "additive components='amplitude_phase'"
+            )
     if (
         conditioning_kind == "content_gate"
         and conditioning["activation"] == "scaled_sigmoid"
@@ -1130,6 +1201,7 @@ def normalize_position_config_v2(
             "hidden_dim": hidden_dim,
         },
         "output": {
+            "parameter_source": parameter_source,
             "amplitude_init": amplitude_init,
             "amplitude_max": amplitude_max,
             "amplitude_parameterization": amplitude_parameterization,

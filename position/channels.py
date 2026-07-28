@@ -39,6 +39,8 @@ class QKPositionOutput:
     k_gain: torch.Tensor | None = None
     q_log_gain_delta: torch.Tensor | None = None
     k_log_gain_delta: torch.Tensor | None = None
+    q_amplitude_delta: torch.Tensor | None = None
+    k_amplitude_delta: torch.Tensor | None = None
     q_hyper_phase_delta: torch.Tensor | None = None
     k_hyper_phase_delta: torch.Tensor | None = None
 
@@ -475,9 +477,7 @@ class CarrierHypernetwork(torch.nn.Module):
             input_dim += content_dim
         if self.input_mode in {"position", "content_position"}:
             input_dim += position_dim
-        output_dim = pair_dim * (
-            2 if self.components == "log_gain_phase" else 1
-        )
+        output_dim = pair_dim * (2 if self.components != "phase" else 1)
 
         def make_trunk() -> _GroupedHyperTrunk:
             return _GroupedHyperTrunk(
@@ -569,7 +569,7 @@ class CarrierHypernetwork(torch.nn.Module):
     ) -> torch.Tensor:
         if branch not in ({self.target} if self.target != "both" else {"q", "k"}):
             output_dim = self.pair_dim * (
-                2 if self.components == "log_gain_phase" else 1
+                2 if self.components != "phase" else 1
             )
             return values.new_zeros(*values.shape[:-1], output_dim)
         if self.coupling == "shared":
@@ -605,7 +605,7 @@ class CarrierHypernetwork(torch.nn.Module):
             k_raw = self._branch(k_values, "k")
         q_raw = self._expand_heads(q_raw)
         k_raw = self._expand_heads(k_raw)
-        if self.components == "log_gain_phase":
+        if self.components != "phase":
             q_log_gain, q_phase = q_raw.split(self.pair_dim, dim=-1)
             k_log_gain, k_phase = k_raw.split(self.pair_dim, dim=-1)
         else:
@@ -740,6 +740,7 @@ class QKPositionChannel(PositionChannel):
         self.qk_coupling = config["qk_coupling"]
         self.head_coupling = config["head_coupling"]
         self.output_config = config["output"]
+        self.parameter_source = self.output_config["parameter_source"]
         self.learn_amplitude = self.output_config["learn_amplitude"]
         self.learn_phase = self.output_config["learn_phase"]
         self.conditioning_config = config["conditioning"]
@@ -755,7 +756,9 @@ class QKPositionChannel(PositionChannel):
             and not self.learn_phase
         )
         self.fixed_position_pipeline = (
-            self.fixed_amplitude_phase or self.fixed_rotary_phase
+            self.fixed_amplitude_phase
+            or self.fixed_rotary_phase
+            or self.parameter_source == "direct"
         )
         mapper_cfg = config["mapper"]
         readout_groups = _readout_groups(self.head_coupling, heads)
@@ -793,6 +796,12 @@ class QKPositionChannel(PositionChannel):
         self.amplitude_head = None
         self.q_amplitude_head = None
         self.k_amplitude_head = None
+        self.direct_amplitude_raw = None
+        self.q_direct_amplitude_raw = None
+        self.k_direct_amplitude_raw = None
+        self.direct_phase = None
+        self.q_direct_phase = None
+        self.k_direct_phase = None
         self.projected_phase_head = None
         self.q_projected_phase_head = None
         self.k_projected_phase_head = None
@@ -865,7 +874,42 @@ class QKPositionChannel(PositionChannel):
                 # No extra readout: independent pipelines supply the addends.
                 pass
         elif self.application == "additive" and self.geometry == "amplitude_phase":
-            if self.qk_coupling == "shared":
+            if self.parameter_source == "direct":
+                direct_shape = (readout_groups, head_dim // 2)
+                static_complement = (
+                    self.conditioning_config["kind"] == "carrier_hypernetwork"
+                    and self.conditioning_config["components"]
+                    == "amplitude_phase"
+                    and self.conditioning_config["static_complement"]
+                )
+                dynamic_target = self.conditioning_config["target"]
+
+                def make_direct(enabled: bool) -> torch.nn.Parameter | None:
+                    return (
+                        torch.nn.Parameter(torch.zeros(direct_shape))
+                        if enabled
+                        else None
+                    )
+
+                if self.qk_coupling == "shared":
+                    self.direct_amplitude_raw = make_direct(self.learn_amplitude)
+                    self.direct_phase = make_direct(self.learn_phase)
+                else:
+                    q_static = static_complement and dynamic_target == "k"
+                    k_static = static_complement and dynamic_target == "q"
+                    self.q_direct_amplitude_raw = make_direct(
+                        self.learn_amplitude or q_static
+                    )
+                    self.k_direct_amplitude_raw = make_direct(
+                        self.learn_amplitude or k_static
+                    )
+                    self.q_direct_phase = make_direct(
+                        self.learn_phase or q_static
+                    )
+                    self.k_direct_phase = make_direct(
+                        self.learn_phase or k_static
+                    )
+            elif self.qk_coupling == "shared":
                 if self.learn_amplitude:
                     self.amplitude_head = GroupedLinearReadout(
                         readout_groups, head_dim, head_dim // 2, init="zeros"
@@ -1143,6 +1187,22 @@ class QKPositionChannel(PositionChannel):
             offset = raw.new_tensor(amplitude_init).expm1().log()
         return torch.nn.functional.softplus(raw + offset)
 
+    def _direct_carrier_value(
+        self,
+        value: torch.Tensor | None,
+        sequence_length: int,
+        *,
+        dtype: torch.dtype,
+    ) -> torch.Tensor | None:
+        if value is None:
+            return None
+        expanded = _expand_shared_readout(
+            value[:, None, :],
+            self.head_coupling,
+            self.heads,
+        )
+        return expanded.to(dtype=dtype).expand(-1, sequence_length, -1)
+
     def _scale(self, raw: torch.Tensor) -> torch.Tensor:
         scale_init = self.output_config["scale_init"]
         if self.output_config["scale_parameterization"] == "exp":
@@ -1228,7 +1288,10 @@ class QKPositionChannel(PositionChannel):
         amplitude_conditioner: GroupedContentConditioner | None = None,
         phase_conditioner: GroupedContentConditioner | None = None,
         log_gain_delta: torch.Tensor | None = None,
+        amplitude_delta: torch.Tensor | None = None,
         hyper_phase_delta: torch.Tensor | None = None,
+        amplitude_raw_override: torch.Tensor | None = None,
+        phase_override: torch.Tensor | None = None,
         branch: str = "q",
     ) -> torch.Tensor:
         target_dtype = (
@@ -1242,16 +1305,22 @@ class QKPositionChannel(PositionChannel):
             sequence_length,
             self.head_dim // 2,
         )
-        amplitude_raw = (
-            self._apply_phase_head(features, amplitude_head)
-            if amplitude_head is not None
-            else zero
-        )
-        phase = (
-            self._apply_phase_head(features, phase_head)
-            if phase_head is not None
-            else zero
-        )
+        amplitude_raw = amplitude_raw_override
+        if amplitude_raw is None:
+            amplitude_raw = (
+                self._apply_phase_head(features, amplitude_head)
+                if amplitude_head is not None
+                else zero
+            )
+        phase = phase_override
+        if phase is None:
+            phase = (
+                self._apply_phase_head(features, phase_head)
+                if phase_head is not None
+                else zero
+            )
+        if amplitude_delta is not None:
+            amplitude_raw = amplitude_delta
         amplitude = self._amplitude(amplitude_raw)
         if self.conditioning_config["kind"] in {
             "local_residual",
@@ -1341,6 +1410,8 @@ class QKPositionChannel(PositionChannel):
 
         q_log_gain_delta = None
         k_log_gain_delta = None
+        q_amplitude_delta = None
+        k_amplitude_delta = None
         q_hyper_phase_delta = None
         k_hyper_phase_delta = None
         if self.carrier_hypernetwork is not None:
@@ -1358,6 +1429,65 @@ class QKPositionChannel(PositionChannel):
                 k_content=k_content,
                 position=position_features,
             )
+            if self.conditioning_config["components"] == "amplitude_phase":
+                dynamic_target = self.conditioning_config["target"]
+                q_amplitude_delta = (
+                    q_log_gain_delta
+                    if dynamic_target in {"q", "both"}
+                    else None
+                )
+                k_amplitude_delta = (
+                    k_log_gain_delta
+                    if dynamic_target in {"k", "both"}
+                    else None
+                )
+                if dynamic_target not in {"q", "both"}:
+                    q_hyper_phase_delta = None
+                if dynamic_target not in {"k", "both"}:
+                    k_hyper_phase_delta = None
+                q_log_gain_delta = None
+                k_log_gain_delta = None
+
+        target_dtype = dtype or self.base_cos.dtype
+        q_direct_amplitude = None
+        k_direct_amplitude = None
+        q_direct_phase = None
+        k_direct_phase = None
+        if self.parameter_source == "direct":
+            if self.qk_coupling == "shared":
+                direct_amplitude = self._direct_carrier_value(
+                    self.direct_amplitude_raw,
+                    sequence_length,
+                    dtype=target_dtype,
+                )
+                direct_phase = self._direct_carrier_value(
+                    self.direct_phase,
+                    sequence_length,
+                    dtype=target_dtype,
+                )
+                q_direct_amplitude = k_direct_amplitude = direct_amplitude
+                q_direct_phase = k_direct_phase = direct_phase
+            else:
+                q_direct_amplitude = self._direct_carrier_value(
+                    self.q_direct_amplitude_raw,
+                    sequence_length,
+                    dtype=target_dtype,
+                )
+                k_direct_amplitude = self._direct_carrier_value(
+                    self.k_direct_amplitude_raw,
+                    sequence_length,
+                    dtype=target_dtype,
+                )
+                q_direct_phase = self._direct_carrier_value(
+                    self.q_direct_phase,
+                    sequence_length,
+                    dtype=target_dtype,
+                )
+                k_direct_phase = self._direct_carrier_value(
+                    self.k_direct_phase,
+                    sequence_length,
+                    dtype=target_dtype,
+                )
 
         q_scale = None
         k_scale = None
@@ -1388,7 +1518,10 @@ class QKPositionChannel(PositionChannel):
                     amplitude_conditioner=self.amplitude_conditioner,
                     phase_conditioner=self.conditioner,
                     log_gain_delta=q_log_gain_delta,
+                    amplitude_delta=q_amplitude_delta,
                     hyper_phase_delta=q_hyper_phase_delta,
+                    amplitude_raw_override=q_direct_amplitude,
+                    phase_override=q_direct_phase,
                     branch="q",
                 )
                 k_output = self._amplitude_phase_addend(
@@ -1401,7 +1534,10 @@ class QKPositionChannel(PositionChannel):
                     amplitude_conditioner=self.amplitude_conditioner,
                     phase_conditioner=self.conditioner,
                     log_gain_delta=k_log_gain_delta,
+                    amplitude_delta=k_amplitude_delta,
                     hyper_phase_delta=k_hyper_phase_delta,
+                    amplitude_raw_override=k_direct_amplitude,
+                    phase_override=k_direct_phase,
                     branch="k",
                 )
             else:
@@ -1415,7 +1551,10 @@ class QKPositionChannel(PositionChannel):
                     amplitude_conditioner=self.q_amplitude_conditioner,
                     phase_conditioner=self.q_conditioner,
                     log_gain_delta=q_log_gain_delta,
+                    amplitude_delta=q_amplitude_delta,
                     hyper_phase_delta=q_hyper_phase_delta,
+                    amplitude_raw_override=q_direct_amplitude,
+                    phase_override=q_direct_phase,
                     branch="q",
                 )
                 k_output = self._amplitude_phase_addend(
@@ -1428,7 +1567,10 @@ class QKPositionChannel(PositionChannel):
                     amplitude_conditioner=self.k_amplitude_conditioner,
                     phase_conditioner=self.k_conditioner,
                     log_gain_delta=k_log_gain_delta,
+                    amplitude_delta=k_amplitude_delta,
                     hyper_phase_delta=k_hyper_phase_delta,
+                    amplitude_raw_override=k_direct_amplitude,
+                    phase_override=k_direct_phase,
                     branch="k",
                 )
         elif self.geometry in {"projected_phase", "unit_pair"}:
@@ -1572,6 +1714,8 @@ class QKPositionChannel(PositionChannel):
             k_gain=k_gain,
             q_log_gain_delta=q_log_gain_delta,
             k_log_gain_delta=k_log_gain_delta,
+            q_amplitude_delta=q_amplitude_delta,
+            k_amplitude_delta=k_amplitude_delta,
             q_hyper_phase_delta=q_hyper_phase_delta,
             k_hyper_phase_delta=k_hyper_phase_delta,
         )
@@ -1601,6 +1745,16 @@ class QKPositionChannel(PositionChannel):
             self.content_actuator.reset_output_parameters()
         if self.carrier_hypernetwork is not None:
             self.carrier_hypernetwork.reset_output_parameters()
+        for parameter in (
+            self.direct_amplitude_raw,
+            self.q_direct_amplitude_raw,
+            self.k_direct_amplitude_raw,
+            self.direct_phase,
+            self.q_direct_phase,
+            self.k_direct_phase,
+        ):
+            if parameter is not None:
+                torch.nn.init.zeros_(parameter)
 
     def summarize(
         self,
@@ -1710,29 +1864,41 @@ class QKPositionChannel(PositionChannel):
         if output.q_gain is not None:
             _stats("content_gain_q", output.q_gain)
             _stats("content_gain_k", output.k_gain)
-        if output.q_hyper_phase_delta is not None:
-            _delta_stats(
-                "hyper_phase_delta_q", output.q_hyper_phase_delta
-            )
-            _delta_stats(
-                "hyper_phase_delta_k", output.k_hyper_phase_delta
-            )
-        if (
-            output.q_log_gain_delta is not None
-            and self.conditioning_config["components"] == "log_gain_phase"
+        for branch, phase_delta in (
+            ("q", output.q_hyper_phase_delta),
+            ("k", output.k_hyper_phase_delta),
         ):
-            _delta_stats(
-                "hyper_log_gain_delta_q", output.q_log_gain_delta
-            )
-            _delta_stats(
-                "hyper_log_gain_delta_k", output.k_log_gain_delta
-            )
-            metrics["hyper_effective_gain_q/max"] = (
-                output.q_log_gain_delta.detach().float().exp().max().item()
-            )
-            metrics["hyper_effective_gain_k/max"] = (
-                output.k_log_gain_delta.detach().float().exp().max().item()
-            )
+            if phase_delta is not None:
+                _delta_stats(f"hyper_phase_delta_{branch}", phase_delta)
+        for branch, amplitude_delta in (
+            ("q", output.q_amplitude_delta),
+            ("k", output.k_amplitude_delta),
+        ):
+            if amplitude_delta is not None:
+                _delta_stats(
+                    f"hyper_amplitude_delta_{branch}",
+                    amplitude_delta,
+                )
+                metrics[f"hyper_effective_amplitude_{branch}/max"] = (
+                    self._amplitude(amplitude_delta)
+                    .detach()
+                    .float()
+                    .max()
+                    .item()
+                )
+        if self.conditioning_config["components"] == "log_gain_phase":
+            for branch, log_gain_delta in (
+                ("q", output.q_log_gain_delta),
+                ("k", output.k_log_gain_delta),
+            ):
+                if log_gain_delta is not None:
+                    _delta_stats(
+                        f"hyper_log_gain_delta_{branch}",
+                        log_gain_delta,
+                    )
+                    metrics[f"hyper_effective_gain_{branch}/max"] = (
+                        log_gain_delta.detach().float().exp().max().item()
+                    )
         diff = (output.q - output.k).detach().float()
         metrics["qk_diff_rms"] = diff.pow(2).mean().sqrt().item()
         if output.application == "rotary":

@@ -78,6 +78,7 @@ qk:
     rank: 32
     hidden_dim: 128
   output:
+    parameter_source: mapped # mapped | direct
     amplitude_init: 0.1
     amplitude_max: 1.0
     amplitude_parameterization: signed
@@ -140,7 +141,10 @@ disabled. A rotary channel instead computes `q'=R(θ+δ)q`. Thus:
 K has its own amplitude/phase readouts when coupling permits. The default
 amplitude is `0.1`, deliberately below the poor fixed-unit Phase-1c control.
 
-For canonical amplitude+phase geometry, `learn_amplitude` and `learn_phase`
+For amplitude+phase geometry, `parameter_source=mapped` predicts amplitude and
+phase from the configured position features. `parameter_source=direct` instead
+uses only per-head/per-frequency parameters, matching canonical AddRoPE without
+a position-feature mapper. `learn_amplitude` and `learn_phase`
 independently control the two output heads:
 
 - both `false`: fixed Fourier carrier at `amplitude_init`;
@@ -285,11 +289,12 @@ conditioning:
   hidden_dim: 64
   input_mode: content      # content | position | content_position
   network: linear          # linear | silu_mlp | swiglu_mlp
-  components: phase        # phase | log_gain_phase
+  components: phase        # phase | log_gain_phase | amplitude_phase
   head_coupling: per_head_independent # shared_head | per_head_independent
   gate_init: 0.0
   target: both             # q | k | both
   coupling: shared_trunk_separate_readouts
+  static_complement: false # learned direct AddRoPE on inactive q/k branch
   phase_bound: 0.25
 ```
 
@@ -331,12 +336,59 @@ departure and defeat the exact null. Additive channels retain method-aware
 RMSNorm after carrier addition; rotary channels retain Q/K RMSNorm before
 rotation.
 
-For an established additive anchor `(a, phi)`:
+The legacy additive modulation mode uses `components=log_gain_phase` on an
+established additive anchor `(a, phi)`:
 
 ```text
 a'   = a * exp_ste(delta_log_gain)
 phi' = phi + delta_phase
 ```
+
+The gauge-free dynamic replacement uses `components=amplitude_phase`,
+`learn_amplitude=false`, and `learn_phase=false`. It supports two amplitude
+parameterizations. The positive softplus form is:
+
+```text
+a(x,p)   = softplus(inv_softplus(amplitude_init) + raw_amplitude(x,p))
+phi(x,p) = raw_phase(x,p)
+```
+
+The raw signed form is:
+
+```text
+a(x,p)   = amplitude_init + raw_scale(x,p)
+phi(x,p) = raw_phase(x,p)
+```
+
+The static mapper is absent. Zero-initialized final projections therefore
+recover exactly `amplitude_init * cis(omega*p)`, while the hypernetwork becomes
+the sole learned source of amplitude and phase. The unit-anchor configuration
+sets `amplitude_init=1`, `amplitude_parameterization=signed`, and composes
+
+```text
+addend(x,p) = (1 + predicted_scale(x,p))
+              * cis(omega*p + predicted_phase(x,p))
+```
+
+Both predicted terms start at exactly zero. This is a raw polar actuator around
+a unit AddRoPE carrier: it is not the mapped-0.3 model (whose position mapper
+learns amplitude and phase), and it is not the positive softplus replacement
+(whose amplitude cannot cross zero).
+
+The first matched unit-anchor screen keeps per-head outputs, a shared trunk with
+separate Q/K readouts, one shared normalized content projection, SDPA, and
+method-aware add-then-RMS normalization fixed. Its ten cells are:
+
+- standard RoPE, mapped-0.3 AddRoPE, and direct unit AddRoPE controls;
+- position, content, and content+position inputs with a linear hypernetwork;
+- the same three inputs with a SiLU MLP;
+- content+position with a SwiGLU MLP.
+
+For asymmetric additive experiments, `target=q|k` together with
+`static_complement=true` gives the inactive branch its own directly learned
+canonical AddRoPE amplitude and phase. The dynamic branch has no static
+amplitude/phase parameters, and the static branch has no hypernetwork readout,
+so each branch retains exactly one parameter source and no gauge is introduced.
 
 For rotary channels, `components=phase` predicts only `delta_phase`.
 `components=log_gain_phase` additionally applies pairwise radial scale

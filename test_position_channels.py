@@ -495,6 +495,109 @@ class PositionConfigTest(unittest.TestCase):
                     rope_theta=10_000.0,
                 )
 
+        dynamic = json.loads(json.dumps(base))
+        dynamic["output"]["amplitude_parameterization"] = "softplus"
+        dynamic["conditioning"]["components"] = "amplitude_phase"
+        normalized_dynamic = normalize_position_config_v2(
+            "qk",
+            dynamic,
+            model_dim=32,
+            heads=4,
+            rope_theta=10_000.0,
+        )
+        self.assertEqual(
+            normalized_dynamic["conditioning"]["components"],
+            "amplitude_phase",
+        )
+        signed_dynamic = json.loads(json.dumps(dynamic))
+        signed_dynamic["output"]["amplitude_init"] = 1.0
+        signed_dynamic["output"]["amplitude_parameterization"] = "signed"
+        normalized_signed = normalize_position_config_v2(
+            "qk",
+            signed_dynamic,
+            model_dim=32,
+            heads=4,
+            rope_theta=10_000.0,
+        )
+        self.assertEqual(
+            normalized_signed["output"]["amplitude_parameterization"],
+            "signed",
+        )
+        asymmetric = json.loads(json.dumps(signed_dynamic))
+        asymmetric["output"]["parameter_source"] = "direct"
+        asymmetric["conditioning"]["target"] = "q"
+        asymmetric["conditioning"]["static_complement"] = True
+        asymmetric["qk_coupling"] = "shared_trunk_separate_readouts"
+        normalized_asymmetric = normalize_position_config_v2(
+            "qk",
+            asymmetric,
+            model_dim=32,
+            heads=4,
+            rope_theta=10_000.0,
+        )
+        self.assertTrue(
+            normalized_asymmetric["conditioning"]["static_complement"]
+        )
+        for key, value in (
+            ("target", "both"),
+            ("parameter_source", "mapped"),
+            ("qk_coupling", "shared"),
+        ):
+            with self.subTest(asymmetric_key=key), self.assertRaises(ValueError):
+                invalid = json.loads(json.dumps(asymmetric))
+                if key == "target":
+                    invalid["conditioning"][key] = value
+                elif key == "parameter_source":
+                    invalid["output"][key] = value
+                else:
+                    invalid[key] = value
+                normalize_position_config_v2(
+                    "qk",
+                    invalid,
+                    model_dim=32,
+                    heads=4,
+                    rope_theta=10_000.0,
+                )
+        with self.assertRaises(ValueError):
+            invalid = json.loads(json.dumps(dynamic))
+            invalid["output"]["amplitude_parameterization"] = "bounded_sigmoid"
+            normalize_position_config_v2(
+                "qk",
+                invalid,
+                model_dim=32,
+                heads=4,
+                rope_theta=10_000.0,
+            )
+
+        for mutation in ("learn_amplitude", "learn_phase"):
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                invalid = json.loads(json.dumps(dynamic))
+                invalid["output"][mutation] = True
+                normalize_position_config_v2(
+                    "qk",
+                    invalid,
+                    model_dim=32,
+                    heads=4,
+                    rope_theta=10_000.0,
+                )
+
+        direct = json.loads(json.dumps(base))
+        direct["conditioning"] = {"kind": "none"}
+        direct["output"] = {
+            "parameter_source": "direct",
+            "amplitude_parameterization": "softplus",
+            "learn_amplitude": True,
+            "learn_phase": True,
+        }
+        normalized_direct = normalize_position_config_v2(
+            "qk",
+            direct,
+            model_dim=32,
+            heads=4,
+            rope_theta=10_000.0,
+        )
+        self.assertEqual(normalized_direct["output"]["parameter_source"], "direct")
+
     def test_explicit_channels_can_enable_both(self):
         config = self._load(
             {

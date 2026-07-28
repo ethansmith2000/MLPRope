@@ -1837,3 +1837,69 @@ bounded at step 200 (`delta_log_gain` p95 `0.0347`, phase p95 `0.0343`).
 The rotary arm moved more aggressively (`delta_log_gain` p95 `0.447`,
 effective gain max `2.43`), but remained finite. Longer screens should monitor
 that radial scale before promotion.
+
+## 2026-07-28 — AddRoPE gauge correction
+
+The 5k carrier-hypernetwork screen exposed a major additive confound. The
+generalized AddRoPE mapper learned position-dependent amplitude/phase while a
+second hypernetwork learned multiplicative log-gain and phase deltas. Those
+branches have an amplitude/phase gauge, amplified by post-addition Q/K RMS:
+effective gain maxima reached `122–132x` and one addend RMS reached `519`.
+
+The v2 channel now distinguishes:
+
+- `output.parameter_source=direct`: canonical per-head/per-frequency AddRoPE
+  parameters with no position mapper;
+- mapped amplitude/phase: the existing generalized position-functional model;
+- `conditioning.components=amplitude_phase`: a gauge-free dynamic replacement
+  requiring static amplitude/phase learning to be disabled and using direct
+  softplus amplitude around `amplitude_init`.
+
+Zero hypernetwork heads recover exactly
+`amplitude_init * cis(omega * position)`. Unit tests verify exact anchors,
+separate Q/K gradients, absence of the static mapper, and schema rejection of
+mixed static/dynamic controls. Eager and compiled CUDA forward/backward smokes
+passed for direct canonical and dynamic softplus AddRoPE.
+
+A six-arm seed-123, 5k SDPA screen is prepared under
+`phase8_addrope_clean`: standard RoPE, the generalized mapped anchor, direct
+canonical AddRoPE, fixed AddRoPE, content-only dynamic replacement, and
+content+position dynamic replacement.
+
+## 2026-07-28 — Unit-anchor HyperAddRoPE screen
+
+The gauge-free dynamic AddRoPE path now also accepts signed amplitude. With
+`amplitude_init=1`, disabled static amplitude/phase learning, and zeroed
+hypernetwork readouts, its exact initial carrier is:
+
+```text
+(1 + predicted_scale) * cis(omega*p + predicted_phase)
+```
+
+Both predictions begin at zero. This preserves the old mapped, softplus, and
+log-gain paths while providing a raw-polar unit anchor with no learned static
+amplitude/phase gauge.
+
+The `phase9_unit_hyper` family contains ten seed-123, 5k-step SDPA cells:
+standard RoPE; mapped-0.3 AddRoPE; direct unit AddRoPE; position, content, and
+content+position inputs crossed with linear and SiLU trunks; and one
+content+position SwiGLU arm. Hypernetwork cells fix per-head outputs, one shared
+normalized content projection, and shared-trunk/separate-QK readouts. Every
+configuration passed `train_gpt.py --dry_run`; direct unit and
+content+position-SiLU variants passed eager and compiled CUDA
+forward/backward smoke tests.
+
+The completed screen promoted the content+position SiLU unit hypernetwork
+(`4.2899`), with content+position linear and content-only SiLU within the
+predeclared `0.01` tie threshold. Six of seven hypernetwork cells beat the
+mapped-0.3 AddRoPE control (`4.3403`); direct unit AddRoPE was worst (`4.4419`),
+showing that dynamic conditioning rather than the unit carrier itself supplied
+the gain.
+
+A six-cell `phase9_carrier_followup` screen now isolates the next content-aware
+axes: shared versus separate Q/K content projections, dynamic-Q/static-K,
+static-Q/dynamic-K, and phase-only HyperRoPE with shared versus separate
+content projections. “Static” means directly learned canonical AddRoPE on the
+inactive branch, while the active branch has only the dynamic hypernetwork.
+The mixed branch implementation and phase-only rotary analogue passed eager
+and compiled CUDA forward/backward tests.

@@ -38,6 +38,9 @@ class PositionResultsTest(unittest.TestCase):
                 "position/layer_00/qk/hyper_log_gain_delta_q/rms": 0.03,
                 "position/layer_01/qk/hyper_log_gain_delta_k/p95_abs": 0.09,
                 "position/layer_01/qk/hyper_effective_gain_k/max": 1.15,
+                "position/layer_00/qk/hyper_amplitude_delta_q/rms": 0.05,
+                "position/layer_01/qk/hyper_amplitude_delta_k/p95_abs": 0.11,
+                "position/layer_01/qk/hyper_effective_amplitude_k/max": 0.62,
             },
         ]
         self.metrics_path = self.run / "metrics.jsonl"
@@ -101,6 +104,9 @@ class PositionResultsTest(unittest.TestCase):
         self.assertEqual(row["hyper_log_gain_delta_rms_max"], 0.03)
         self.assertEqual(row["hyper_log_gain_delta_p95_max"], 0.09)
         self.assertEqual(row["hyper_effective_gain_max"], 1.15)
+        self.assertEqual(row["hyper_amplitude_delta_rms_max"], 0.05)
+        self.assertEqual(row["hyper_amplitude_delta_p95_max"], 0.11)
+        self.assertEqual(row["hyper_effective_amplitude_max"], 0.62)
         self.assertEqual(row["qk_addend_rms_max"], 0.3)
 
     def test_history_and_machine_readable_rendering(self):

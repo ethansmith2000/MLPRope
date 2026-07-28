@@ -21,7 +21,7 @@ LOG_DIR="${SCRIPT_DIR}/logs"
 CONFIG_DIR="${SCRIPT_DIR}/sweep_configs"
 WANDB_PROJECT="${WANDB_PROJECT:-mlprope-position-bias}"
 WANDB_ENTITY="${WANDB_ENTITY:-ethansmith2000}"
-EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | ... | phase7_scale_50k | phase8_hyper_smoke | individual | all
+EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | ... | phase9_carrier_followup | phase9_hyper_30k | individual | all
 if [[ "${EXPERIMENT_FAMILY}" == "phase1b" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1b"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase1c" ]]; then
@@ -84,6 +84,16 @@ elif [[ "${EXPERIMENT_FAMILY}" == "phase7_scale_50k" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase7_scale_50k"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase8_hyper_smoke" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase8_hyper_smoke"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase8_hyper_5k" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase8_hyper_5k"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase8_addrope_clean" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase8_addrope_clean"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase9_unit_hyper" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase9_unit_hyper"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase9_carrier_followup" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase9_carrier_followup"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase9_hyper_30k" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase9_hyper_30k"
 else
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1"
 fi
@@ -127,7 +137,12 @@ if [[ -z "${GPU_SELECTOR:-}" ]]; then
     || "${EXPERIMENT_FAMILY}" == "phase6_scale" \
     || "${EXPERIMENT_FAMILY}" == "phase7_scale_probe" \
     || "${EXPERIMENT_FAMILY}" == "phase7_scale_50k" \
-    || "${EXPERIMENT_FAMILY}" == "phase8_hyper_smoke" ]]; then
+    || "${EXPERIMENT_FAMILY}" == "phase8_hyper_smoke" \
+    || "${EXPERIMENT_FAMILY}" == "phase8_hyper_5k" \
+    || "${EXPERIMENT_FAMILY}" == "phase8_addrope_clean" \
+    || "${EXPERIMENT_FAMILY}" == "phase9_unit_hyper" \
+    || "${EXPERIMENT_FAMILY}" == "phase9_carrier_followup" \
+    || "${EXPERIMENT_FAMILY}" == "phase9_hyper_30k" ]]; then
     GPU_SELECTOR="any"
   else
     GPU_SELECTOR="6,7"
@@ -192,6 +207,16 @@ elif [[ "${EXPERIMENT_FAMILY}" == "phase7_scale_50k" ]]; then
   CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase7_scale_50k"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase8_hyper_smoke" ]]; then
   CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase8_hyper_smoke"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase8_hyper_5k" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase8_hyper_5k"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase8_addrope_clean" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase8_addrope_clean"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase9_unit_hyper" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase9_unit_hyper"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase9_carrier_followup" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase9_carrier_followup"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase9_hyper_30k" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase9_hyper_30k"
 fi
 PIDS=()
 JOB_NAMES=()
@@ -522,6 +547,52 @@ v2_carrier_hyper_qk_json() {
 JSON
 }
 
+v2_clean_addrope_qk_json() {
+  local mode="$1" # direct | fixed | dynamic
+  local input_mode="${2:-content}"
+  local network="${3:-linear}"
+  local parameter_source="direct"
+  local learn_amplitude=true
+  local learn_phase=true
+  local conditioning='{"kind": "none"}'
+  if [[ "${mode}" == "fixed" ]]; then
+    learn_amplitude=false
+    learn_phase=false
+  elif [[ "${mode}" == "dynamic" ]]; then
+    learn_amplitude=false
+    learn_phase=false
+    conditioning="{\"kind\": \"carrier_hypernetwork\", \"source\": \"dedicated\", \"hidden_dim\": 64, \"input_mode\": \"${input_mode}\", \"network\": \"${network}\", \"components\": \"amplitude_phase\", \"target\": \"both\", \"coupling\": \"shared_trunk_separate_readouts\", \"head_coupling\": \"per_head_independent\"}"
+  fi
+  cat <<JSON
+{"enabled": true, "application": "additive", "geometry": "amplitude_phase", "input": {"kind": "frozen_fourier", "basis_dim": 16, "theta": null, "scalars": ["normalized_position", "log_position"]}, "mapper": {"kind": "linear", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "output": {"parameter_source": "${parameter_source}", "amplitude_init": 0.3, "amplitude_parameterization": "softplus", "learn_amplitude": ${learn_amplitude}, "learn_phase": ${learn_phase}, "phase_scale": 1.0, "additive_normalization": "none"}, "conditioning": ${conditioning}, "qk_coupling": "shared_trunk_separate_readouts", "head_coupling": "per_head_independent"}
+JSON
+}
+
+v2_unit_hyper_qk_json() {
+  local mode="$1" # direct | hyper
+  local input_mode="${2:-content}"
+  local network="${3:-linear}"
+  local target="${4:-both}"
+  local static_complement="${5:-false}"
+  local learn_amplitude=true
+  local learn_phase=true
+  local conditioning='{"kind": "none"}'
+  if [[ "${mode}" == "hyper" ]]; then
+    learn_amplitude=false
+    learn_phase=false
+    conditioning="{\"kind\": \"carrier_hypernetwork\", \"source\": \"dedicated\", \"hidden_dim\": 64, \"input_mode\": \"${input_mode}\", \"network\": \"${network}\", \"components\": \"amplitude_phase\", \"target\": \"${target}\", \"coupling\": \"shared_trunk_separate_readouts\", \"static_complement\": ${static_complement}, \"head_coupling\": \"per_head_independent\"}"
+  fi
+  cat <<JSON
+{"enabled": true, "application": "additive", "geometry": "amplitude_phase", "input": {"kind": "frozen_fourier", "basis_dim": 16, "theta": null, "scalars": ["normalized_position", "log_position"]}, "mapper": {"kind": "linear", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "output": {"parameter_source": "direct", "amplitude_init": 1.0, "amplitude_parameterization": "signed", "learn_amplitude": ${learn_amplitude}, "learn_phase": ${learn_phase}, "phase_scale": 1.0, "additive_normalization": "none"}, "conditioning": ${conditioning}, "qk_coupling": "shared_trunk_separate_readouts", "head_coupling": "per_head_independent"}
+JSON
+}
+
+v2_phase_hyperrope_qk_json() {
+  cat <<JSON
+{"enabled": true, "application": "rotary", "geometry": "phase", "input": {"kind": "frozen_fourier", "basis_dim": 16, "theta": null, "scalars": ["normalized_position", "log_position"]}, "mapper": {"kind": "linear", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "output": {"parameter_source": "mapped", "learn_amplitude": true, "learn_phase": false, "phase_scale": 1.0}, "conditioning": {"kind": "carrier_hypernetwork", "source": "dedicated", "hidden_dim": 64, "input_mode": "content_position", "network": "silu_mlp", "components": "phase", "target": "both", "coupling": "shared_trunk_separate_readouts", "head_coupling": "per_head_independent"}, "qk_coupling": "shared_trunk_separate_readouts", "head_coupling": "per_head_independent"}
+JSON
+}
+
 v2_promoted_qk_json() {
   local geometry="$1" # amplitude_phase | pair_normalized
   local basis_dim="${2:-null}"
@@ -754,6 +825,36 @@ want_phase7_scale_50k_family() {
 want_phase8_hyper_smoke_family() {
   local family="$1"
   [[ "${EXPERIMENT_FAMILY}" == "phase8_hyper_smoke" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase8_hyper_5k_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase8_hyper_5k" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase8_addrope_clean_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase8_addrope_clean" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase9_unit_hyper_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase9_unit_hyper" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase9_carrier_followup_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase9_carrier_followup" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase9_hyper_30k_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase9_hyper_30k" \
     || "${EXPERIMENT_FAMILY}" == "${family}" ]]
 }
 
@@ -2147,6 +2248,210 @@ if want_phase8_hyper_smoke_family "carrier_hyper_smoke_story"; then
     write_common_config "${cfg_file}" \
       "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"position_content_dim\": 64, \"position_content_coupling\": \"separate\", \"scalar_normalization_extent\": ${BLOCK_SIZE}, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
       200 200
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# One-seed, 5k SDPA attribution screen. This compares input interaction and
+# nonlinear trunks on AddRoPE, then isolates phase-only versus radial+phase RoPE.
+if want_phase8_hyper_5k_family "carrier_hyper_5k_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  anchor_qk="$(v2_promoted_qk_json amplitude_phase 16)"
+  add_content_linear="$(
+    v2_carrier_hyper_qk_json \
+      additive content linear log_gain_phase \
+      shared_trunk_separate_readouts both
+  )"
+  add_content_position_linear="$(
+    v2_carrier_hyper_qk_json \
+      additive content_position linear log_gain_phase \
+      shared_trunk_separate_readouts both
+  )"
+  add_content_position_silu="$(
+    v2_carrier_hyper_qk_json \
+      additive content_position silu_mlp log_gain_phase \
+      shared_trunk_separate_readouts both
+  )"
+  add_content_position_swiglu="$(
+    v2_carrier_hyper_qk_json \
+      additive content_position swiglu_mlp log_gain_phase \
+      shared_trunk_separate_readouts both
+  )"
+  rope_content_phase="$(
+    v2_carrier_hyper_qk_json \
+      rotary content linear phase \
+      shared_trunk_separate_readouts both
+  )"
+  rope_content_gain_phase="$(
+    v2_carrier_hyper_qk_json \
+      rotary content linear log_gain_phase \
+      shared_trunk_separate_readouts both
+  )"
+
+  for spec in \
+    "standard-rope|legacy_layernorm|${disabled_channel}" \
+    "rope-rms-anchor|method_aware_rms|${disabled_channel}" \
+    "compact-addrope-anchor|method_aware_rms|${anchor_qk}" \
+    "addrope-content-linear|method_aware_rms|${add_content_linear}" \
+    "addrope-content-position-linear|method_aware_rms|${add_content_position_linear}" \
+    "addrope-content-position-silu|method_aware_rms|${add_content_position_silu}" \
+    "addrope-content-position-swiglu|method_aware_rms|${add_content_position_swiglu}" \
+    "rope-content-phase-linear|method_aware_rms|${rope_content_phase}" \
+    "rope-content-gain-phase-linear|method_aware_rms|${rope_content_gain_phase}"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    qk_norm_mode="${remainder%%|*}"
+    qk_json="${remainder#*|}"
+    job_name="phase8-hyper5k-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"qk_norm_mode\": \"${qk_norm_mode}\", \"post_position_qk_norm\": false, \"position_content_dim\": 64, \"position_content_coupling\": \"separate\", \"scalar_normalization_extent\": ${BLOCK_SIZE}, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Cleanly separate canonical direct AddRoPE, the generalized mapped carrier,
+# and a gauge-free dynamic replacement whose hypernetwork is the sole learner.
+if want_phase8_addrope_clean_family "addrope_clean_5k_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  mapped_qk="$(v2_promoted_qk_json amplitude_phase 16)"
+  direct_qk="$(v2_clean_addrope_qk_json direct)"
+  fixed_qk="$(v2_clean_addrope_qk_json fixed)"
+  dynamic_content_qk="$(v2_clean_addrope_qk_json dynamic content linear)"
+  dynamic_content_position_qk="$(
+    v2_clean_addrope_qk_json dynamic content_position linear
+  )"
+
+  for spec in \
+    "standard-rope|legacy_layernorm|${disabled_channel}" \
+    "mapped-addrope-anchor|method_aware_rms|${mapped_qk}" \
+    "direct-addrope-softplus|method_aware_rms|${direct_qk}" \
+    "fixed-addrope-softplus|method_aware_rms|${fixed_qk}" \
+    "dynamic-addrope-content-linear|method_aware_rms|${dynamic_content_qk}" \
+    "dynamic-addrope-content-position-linear|method_aware_rms|${dynamic_content_position_qk}"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    qk_norm_mode="${remainder%%|*}"
+    qk_json="${remainder#*|}"
+    job_name="phase8-clean-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"qk_norm_mode\": \"${qk_norm_mode}\", \"post_position_qk_norm\": false, \"position_content_dim\": 64, \"position_content_coupling\": \"separate\", \"scalar_normalization_extent\": ${BLOCK_SIZE}, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Unit-anchor raw-polar screen. Input source and trunk nonlinearity vary while
+# head/QK/content coupling, SDPA, and add-then-RMS normalization stay fixed.
+if want_phase9_unit_hyper_family "unit_hyper_5k_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  mapped_qk="$(v2_promoted_qk_json amplitude_phase 16)"
+  direct_unit_qk="$(v2_unit_hyper_qk_json direct)"
+  position_linear_qk="$(v2_unit_hyper_qk_json hyper position linear)"
+  content_linear_qk="$(v2_unit_hyper_qk_json hyper content linear)"
+  both_linear_qk="$(v2_unit_hyper_qk_json hyper content_position linear)"
+  position_silu_qk="$(v2_unit_hyper_qk_json hyper position silu_mlp)"
+  content_silu_qk="$(v2_unit_hyper_qk_json hyper content silu_mlp)"
+  both_silu_qk="$(v2_unit_hyper_qk_json hyper content_position silu_mlp)"
+  both_swiglu_qk="$(v2_unit_hyper_qk_json hyper content_position swiglu_mlp)"
+
+  for spec in \
+    "standard-rope|legacy_layernorm|${disabled_channel}" \
+    "mapped-addrope-a03|method_aware_rms|${mapped_qk}" \
+    "direct-unit-addrope|method_aware_rms|${direct_unit_qk}" \
+    "unit-position-linear|method_aware_rms|${position_linear_qk}" \
+    "unit-content-linear|method_aware_rms|${content_linear_qk}" \
+    "unit-content-position-linear|method_aware_rms|${both_linear_qk}" \
+    "unit-position-silu|method_aware_rms|${position_silu_qk}" \
+    "unit-content-silu|method_aware_rms|${content_silu_qk}" \
+    "unit-content-position-silu|method_aware_rms|${both_silu_qk}" \
+    "unit-content-position-swiglu|method_aware_rms|${both_swiglu_qk}"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    qk_norm_mode="${remainder%%|*}"
+    qk_json="${remainder#*|}"
+    job_name="phase9-unit-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"qk_norm_mode\": \"${qk_norm_mode}\", \"post_position_qk_norm\": false, \"position_content_dim\": 64, \"position_content_coupling\": \"shared\", \"scalar_normalization_extent\": ${BLOCK_SIZE}, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Follow up the unit-HyperAddRoPE win with branch asymmetry, dedicated-content
+# coupling, and the norm-preserving phase-only rotary analogue.
+if want_phase9_carrier_followup_family "carrier_followup_5k_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  dynamic_both_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false
+  )"
+  dynamic_q_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp q true
+  )"
+  dynamic_k_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp k true
+  )"
+  phase_hyperrope_qk="$(v2_phase_hyperrope_qk_json)"
+
+  for spec in \
+    "addrope-dynamic-both-shared-content|shared|${dynamic_both_qk}" \
+    "addrope-dynamic-both-separate-content|separate|${dynamic_both_qk}" \
+    "addrope-dynamic-q-static-k|shared|${dynamic_q_qk}" \
+    "addrope-static-q-dynamic-k|shared|${dynamic_k_qk}" \
+    "hyperrope-phase-shared-content|shared|${phase_hyperrope_qk}" \
+    "hyperrope-phase-separate-content|separate|${phase_hyperrope_qk}"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    content_coupling="${remainder%%|*}"
+    qk_json="${remainder#*|}"
+    job_name="phase9-followup-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"position_content_dim\": 64, \"position_content_coupling\": \"${content_coupling}\", \"scalar_normalization_extent\": ${BLOCK_SIZE}, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Longer SDPA gate for the two tied HyperAddRoPE trunks and their established
+# RoPE/mapped-AddRoPE controls. Train at 1024 and evaluate extrapolation every 5k.
+if want_phase9_hyper_30k_family "hyper_30k_promotion_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  mapped_qk="$(v2_promoted_qk_json amplitude_phase 16)"
+  hyper_silu_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false
+  )"
+  hyper_linear_qk="$(
+    v2_unit_hyper_qk_json hyper content_position linear both false
+  )"
+
+  for spec in \
+    "standard-rope|legacy_layernorm|${disabled_channel}" \
+    "mapped-addrope-a03|method_aware_rms|${mapped_qk}" \
+    "hyperaddrope-content-position-silu|method_aware_rms|${hyper_silu_qk}" \
+    "hyperaddrope-content-position-linear|method_aware_rms|${hyper_linear_qk}"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    qk_norm_mode="${remainder%%|*}"
+    qk_json="${remainder#*|}"
+    job_name="phase9-30k-${label}-seed${seed}-s30000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 4096, \"evaluation_lengths\": [1024, 2048, 4096], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"${qk_norm_mode}\", \"post_position_qk_norm\": false, \"position_content_dim\": 64, \"position_content_coupling\": \"shared\", \"checkpointing_steps\": 5000, \"resume_from_checkpoint\": \"auto\", \"save_final_model\": true, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      30000 5000
     run_job "${job_name}" "${cfg_file}"
   done
 fi

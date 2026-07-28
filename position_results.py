@@ -30,6 +30,9 @@ HYPER_HEALTH_COLUMNS = (
     "hyper_log_gain_delta_rms_max",
     "hyper_log_gain_delta_p95_max",
     "hyper_effective_gain_max",
+    "hyper_amplitude_delta_rms_max",
+    "hyper_amplitude_delta_p95_max",
+    "hyper_effective_amplitude_max",
 )
 
 
@@ -251,12 +254,39 @@ def hyper_health(record: dict[str, Any]) -> dict[str, float | None]:
             "/hyper_effective_gain_k/max",
         ),
     )
+    amplitude_rms = numeric_values(
+        record,
+        (
+            "/hyper_amplitude_delta_q/rms",
+            "/hyper_amplitude_delta_k/rms",
+        ),
+    )
+    amplitude_p95 = numeric_values(
+        record,
+        (
+            "/hyper_amplitude_delta_q/p95_abs",
+            "/hyper_amplitude_delta_k/p95_abs",
+        ),
+    )
+    effective_amplitude = numeric_values(
+        record,
+        (
+            "/hyper_effective_amplitude_q/max",
+            "/hyper_effective_amplitude_k/max",
+        ),
+    )
     return {
         "hyper_phase_delta_rms_max": max(phase_rms, default=None),
         "hyper_phase_delta_p95_max": max(phase_p95, default=None),
         "hyper_log_gain_delta_rms_max": max(log_gain_rms, default=None),
         "hyper_log_gain_delta_p95_max": max(log_gain_p95, default=None),
         "hyper_effective_gain_max": max(effective_gain, default=None),
+        "hyper_amplitude_delta_rms_max": max(amplitude_rms, default=None),
+        "hyper_amplitude_delta_p95_max": max(amplitude_p95, default=None),
+        "hyper_effective_amplitude_max": max(
+            effective_amplitude,
+            default=None,
+        ),
     }
 
 

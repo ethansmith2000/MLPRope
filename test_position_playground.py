@@ -43,6 +43,7 @@ def qk_config(
     conditioning_source: str = "qk",
     conditioning_target: str = "both",
     conditioning_coupling: str = "shared_trunk_separate_readouts",
+    conditioning_static_complement: bool = False,
     phase_bound: float = 0.25,
     conditioning_input_mode: str = "content",
     conditioning_network: str = "linear",
@@ -50,6 +51,8 @@ def qk_config(
     conditioning_head_coupling: str = "per_head_independent",
     scalars: list[str] | None = None,
     amplitude_init: float = 0.1,
+    amplitude_parameterization: str = "signed",
+    parameter_source: str = "mapped",
     scale_init: float = 1.0,
     learn_amplitude: bool = True,
     learn_phase: bool = True,
@@ -80,7 +83,9 @@ def qk_config(
                 "hidden_dim": 12,
             },
             "output": {
+                "parameter_source": parameter_source,
                 "amplitude_init": amplitude_init,
+                "amplitude_parameterization": amplitude_parameterization,
                 "scale_init": scale_init,
                 "learn_amplitude": learn_amplitude,
                 "learn_phase": learn_phase,
@@ -90,6 +95,7 @@ def qk_config(
                 "source": conditioning_source,
                 "target": conditioning_target,
                 "coupling": conditioning_coupling,
+                "static_complement": conditioning_static_complement,
                 "phase_bound": phase_bound,
                 "hidden_dim": 12,
                 "input_mode": conditioning_input_mode,
@@ -470,6 +476,301 @@ class GeometryAndContentTest(unittest.TestCase):
         torch.testing.assert_close(
             amplitude,
             torch.full_like(amplitude, 0.125),
+        )
+
+    def test_direct_addrope_uses_only_per_frequency_parameters(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            qk_coupling="shared_trunk_separate_readouts",
+            parameter_source="direct",
+            amplitude_parameterization="softplus",
+            amplitude_init=0.3,
+        )
+        channel = self._channel(config)
+        self.assertIsNone(channel.pipeline)
+        self.assertIsNone(channel.q_amplitude_head)
+        self.assertEqual(channel.q_direct_amplitude_raw.shape, (4, 4))
+        self.assertEqual(channel.q_direct_phase.shape, (4, 4))
+
+        output = channel(9)
+        expected = 0.3 * torch.cat(
+            (channel.base_cos[:9], channel.base_sin[:9]),
+            dim=-1,
+        )[None].expand(4, -1, -1)
+        torch.testing.assert_close(output.q, expected)
+        torch.testing.assert_close(output.k, expected)
+
+        output.q.square().mean().backward()
+        self.assertGreater(
+            channel.q_direct_amplitude_raw.grad.abs().sum().item(),
+            0,
+        )
+        self.assertIsNone(channel.k_direct_amplitude_raw.grad)
+
+    def test_dynamic_addrope_replaces_static_mapper_at_exact_softplus_anchor(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_input_mode="content",
+            conditioning_components="amplitude_phase",
+            amplitude_parameterization="softplus",
+            amplitude_init=0.3,
+            learn_amplitude=False,
+            learn_phase=False,
+        )
+        channel = self._channel(config)
+        self.assertIsNone(channel.pipeline)
+        self.assertIsNone(channel.q_amplitude_head)
+        self.assertIsNone(channel.q_direct_amplitude_raw)
+        content = torch.randn(2, 4, 9, 8)
+        output = channel(
+            9,
+            q_content=content,
+            k_content=content,
+        )
+        expected = 0.3 * torch.cat(
+            (channel.base_cos[:9], channel.base_sin[:9]),
+            dim=-1,
+        )[None, None].expand(2, 4, -1, -1)
+        torch.testing.assert_close(output.q, expected)
+        torch.testing.assert_close(output.k, expected)
+        self.assertIsNone(output.q_log_gain_delta)
+        torch.testing.assert_close(
+            output.q_amplitude_delta,
+            torch.zeros_like(output.q_amplitude_delta),
+        )
+
+        output.q.square().mean().backward()
+        self.assertGreater(
+            channel.carrier_hypernetwork.q_readout.weight.grad.abs().sum().item(),
+            0,
+        )
+
+    def test_unit_anchor_hyperaddrope_has_raw_scale_and_phase_gradients(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_input_mode="content",
+            conditioning_components="amplitude_phase",
+            amplitude_parameterization="signed",
+            amplitude_init=1.0,
+            learn_amplitude=False,
+            learn_phase=False,
+        )
+        channel = self._channel(config)
+        content = torch.randn(2, 4, 9, 8)
+        output = channel(9, q_content=content, k_content=content)
+        expected = torch.cat(
+            (channel.base_cos[:9], channel.base_sin[:9]),
+            dim=-1,
+        )[None, None].expand(2, 4, -1, -1)
+        torch.testing.assert_close(output.q, expected)
+        torch.testing.assert_close(output.k, expected)
+
+        target = torch.randn_like(output.q)
+        (output.q * target).sum().backward()
+        gradient = channel.carrier_hypernetwork.q_readout.weight.grad
+        scale_gradient, phase_gradient = gradient.split(4, dim=-1)
+        self.assertGreater(scale_gradient.abs().sum().item(), 0)
+        self.assertGreater(phase_gradient.abs().sum().item(), 0)
+
+    def test_unit_anchor_shared_content_keeps_separate_qk_readouts(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_input_mode="content",
+            conditioning_components="amplitude_phase",
+            amplitude_parameterization="signed",
+            amplitude_init=1.0,
+            learn_amplitude=False,
+            learn_phase=False,
+        )
+        attention = Attention(
+            32,
+            4,
+            qk_config=config,
+            position_content_coupling="shared",
+            qk_norm_mode="method_aware_rms",
+            attn_impl="sdpa",
+        )
+        self.assertIs(
+            attention.position_content.q_projection,
+            attention.position_content.k_projection,
+        )
+        hyper = attention.qk_position.carrier_hypernetwork
+        self.assertIsNot(hyper.q_readout, hyper.k_readout)
+        output = attention(torch.randint(0, 1, (2, 7, 32)).float())
+        self.assertEqual(output.shape, (2, 7, 32))
+
+    def test_asymmetric_dynamic_addrope_uses_learned_static_complement(self):
+        content = torch.randn(2, 4, 9, 8)
+        for dynamic_target in ("q", "k"):
+            with self.subTest(dynamic_target=dynamic_target):
+                config = qk_config(
+                    "additive",
+                    "amplitude_phase",
+                    qk_coupling="shared_trunk_separate_readouts",
+                    conditioning="carrier_hypernetwork",
+                    conditioning_source="dedicated",
+                    conditioning_target=dynamic_target,
+                    conditioning_static_complement=True,
+                    conditioning_input_mode="content_position",
+                    conditioning_network="silu_mlp",
+                    conditioning_components="amplitude_phase",
+                    amplitude_parameterization="signed",
+                    amplitude_init=1.0,
+                    parameter_source="direct",
+                    learn_amplitude=False,
+                    learn_phase=False,
+                )
+                channel = self._channel(config)
+                static_target = "k" if dynamic_target == "q" else "q"
+                self.assertIsNone(
+                    getattr(channel, f"{dynamic_target}_direct_amplitude_raw")
+                )
+                self.assertIsNotNone(
+                    getattr(channel, f"{static_target}_direct_amplitude_raw")
+                )
+                self.assertIsNone(
+                    getattr(
+                        channel.carrier_hypernetwork,
+                        f"{static_target}_readout",
+                    )
+                )
+                dynamic_readout = getattr(
+                    channel.carrier_hypernetwork,
+                    f"{dynamic_target}_readout",
+                )
+
+                output = channel(9, q_content=content, k_content=content)
+                static_expected = torch.cat(
+                    (channel.base_cos[:9], channel.base_sin[:9]),
+                    dim=-1,
+                )[None].expand(4, -1, -1)
+                dynamic_expected = static_expected[None].expand(2, -1, -1, -1)
+                torch.testing.assert_close(
+                    getattr(output, dynamic_target),
+                    dynamic_expected,
+                )
+                torch.testing.assert_close(
+                    getattr(output, static_target),
+                    static_expected,
+                )
+                metrics = channel.summarize(
+                    9,
+                    q_content=content,
+                    k_content=content,
+                )
+                self.assertIn(
+                    f"hyper_amplitude_delta_{dynamic_target}/rms",
+                    metrics,
+                )
+                self.assertNotIn(
+                    f"hyper_amplitude_delta_{static_target}/rms",
+                    metrics,
+                )
+
+                loss = (
+                    output.q * torch.randn_like(output.q)
+                    + output.k * torch.randn_like(output.k)
+                ).sum()
+                loss.backward()
+                self.assertGreater(
+                    dynamic_readout.weight.grad.abs().sum().item(),
+                    0,
+                )
+                self.assertGreater(
+                    getattr(
+                        channel,
+                        f"{static_target}_direct_amplitude_raw",
+                    ).grad.abs().sum().item(),
+                    0,
+                )
+                self.assertGreater(
+                    getattr(
+                        channel,
+                        f"{static_target}_direct_phase",
+                    ).grad.abs().sum().item(),
+                    0,
+                )
+
+    def test_hyperaddrope_accepts_separate_normalized_content_projections(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_input_mode="content_position",
+            conditioning_network="silu_mlp",
+            conditioning_components="amplitude_phase",
+            amplitude_parameterization="signed",
+            amplitude_init=1.0,
+            parameter_source="direct",
+            learn_amplitude=False,
+            learn_phase=False,
+        )
+        attention = Attention(
+            32,
+            4,
+            qk_config=config,
+            position_content_coupling="separate",
+            qk_norm_mode="method_aware_rms",
+            attn_impl="sdpa",
+        )
+        self.assertIsNot(
+            attention.position_content.q_projection,
+            attention.position_content.k_projection,
+        )
+        q_content, k_content = attention.position_content(
+            torch.randn(2, 9, 32)
+        )
+        self.assertFalse(torch.equal(q_content, k_content))
+        torch.testing.assert_close(
+            q_content.square().mean(dim=-1),
+            torch.ones_like(q_content[..., 0]),
+            atol=2e-5,
+            rtol=2e-5,
+        )
+        torch.testing.assert_close(
+            k_content.square().mean(dim=-1),
+            torch.ones_like(k_content[..., 0]),
+            atol=2e-5,
+            rtol=2e-5,
+        )
+
+    def test_phase_only_hyperrope_starts_at_standard_rope_and_gets_gradient(self):
+        config = qk_config(
+            "rotary",
+            "phase",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_input_mode="content_position",
+            conditioning_network="silu_mlp",
+            conditioning_components="phase",
+            learn_phase=False,
+        )
+        channel = self._channel(config)
+        content = torch.randn(2, 4, 9, 8)
+        output = channel(9, q_content=content, k_content=content)
+        torch.testing.assert_close(output.q, torch.zeros_like(output.q))
+        torch.testing.assert_close(output.k, torch.zeros_like(output.k))
+        target = torch.randn_like(output.q)
+        (output.q * target).sum().backward()
+        self.assertGreater(
+            channel.carrier_hypernetwork.q_readout.weight.grad.abs().sum().item(),
+            0,
         )
 
     def test_free_residual_additive_mapper_preserves_basis_skip(self):
