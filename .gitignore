@@ -9,6 +9,7 @@ venv/
 .env
 
 # Training / experiment outputs
+data/
 model-output/
 logs/
 wandb/
@@ -30,6 +31,14 @@ checkpoints/
 *.pickle
 *.npy
 *.npz
+*.arrow
+
+# Generated media
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
 
 # Caches
 .cache/
