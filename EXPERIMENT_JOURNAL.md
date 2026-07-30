@@ -1903,3 +1903,49 @@ content projections. “Static” means directly learned canonical AddRoPE on th
 inactive branch, while the active branch has only the dynamic hypernetwork.
 The mixed branch implementation and phase-only rotary analogue passed eager
 and compiled CUDA forward/backward tests.
+
+The carrier follow-up retained symmetric HyperAddRoPE with shared content:
+
+- dynamic-both/shared-content: `4.2922`;
+- dynamic-both/separate-content: `4.3021`;
+- static-Q/dynamic-K: `4.3305`;
+- dynamic-Q/static-K: `4.3499`;
+- phase-only HyperRoPE: `4.4231–4.4345`.
+
+The h768/d8 30k gate confirmed the mechanism at training length. Content+
+position SiLU reached `3.5710`, content+position linear `3.5732`, mapped
+AddRoPE `3.5855`, and standard RoPE `3.6272`. Checkpoint saving is disabled by
+default for subsequent screens, and evaluation defaults to the 1024 training
+length unless extrapolation is explicitly requested.
+
+A matched 2x2 Q/K independence screen then separated content-projection sharing
+from hypernetwork-trunk sharing. Shared content plus a shared trunk led at
+`4.2878`; separate content/shared trunk reached `4.3002`, shared
+content/separate trunks `4.3040`, and fully separate conditioning `4.3062`.
+The learning curves showed no late convergence trend by step 5k. The active
+default is therefore one normalized content projection and one shared trunk,
+with distinct Q/K final readouts.
+
+The next `phase9_hyper_capacity` screen keeps that default as its control and
+tests: one shared Q/K readout, one conditioner shared across heads, content
+dimension 128, SiLU trunk widths 128 and 256, and content-128 combinations with
+both wider trunks. All cells remain 5k, SDPA, 1024-only, and checkpoint-free.
+
+The capacity screen completed under Supervisor after two terminal-managed
+launchers were externally terminated. Sharing the final Q/K readout (`4.3135`)
+or sharing one conditioner across heads (`4.3065`) was clearly worse than the
+separate-readout/per-head control (`4.2905`). Wider conditioner cells were all
+within the `0.01` tie threshold:
+
+- content-128/trunk-256: `4.2810`;
+- content-64/trunk-256: `4.2835`;
+- content-128/trunk-64: `4.2843`;
+- content-128/trunk-128: `4.2890`;
+- content-64/trunk-128: `4.2897`.
+
+The apparent capacity gain is not free. At h768/d8, content-128/trunk-256 uses
+`6.35M` positional parameters versus `1.53M` for content-64/trunk-64 and
+`1.31M` for mapped AddRoPE. Its sub-`0.01` advantage therefore requires a
+parameter-matched wider-FFN control before promotion. The structural default
+remains shared content and trunk with per-head conditioning and separate Q/K
+readouts.

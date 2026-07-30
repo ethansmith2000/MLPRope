@@ -21,7 +21,7 @@ LOG_DIR="${SCRIPT_DIR}/logs"
 CONFIG_DIR="${SCRIPT_DIR}/sweep_configs"
 WANDB_PROJECT="${WANDB_PROJECT:-mlprope-position-bias}"
 WANDB_ENTITY="${WANDB_ENTITY:-ethansmith2000}"
-EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | ... | phase9_carrier_followup | phase9_hyper_30k | individual | all
+EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | ... | phase9_qk_independence | phase9_hyper_capacity | individual | all
 if [[ "${EXPERIMENT_FAMILY}" == "phase1b" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1b"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase1c" ]]; then
@@ -94,6 +94,10 @@ elif [[ "${EXPERIMENT_FAMILY}" == "phase9_carrier_followup" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase9_carrier_followup"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase9_hyper_30k" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase9_hyper_30k"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase9_qk_independence" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase9_qk_independence"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase9_hyper_capacity" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase9_hyper_capacity"
 else
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1"
 fi
@@ -142,7 +146,9 @@ if [[ -z "${GPU_SELECTOR:-}" ]]; then
     || "${EXPERIMENT_FAMILY}" == "phase8_addrope_clean" \
     || "${EXPERIMENT_FAMILY}" == "phase9_unit_hyper" \
     || "${EXPERIMENT_FAMILY}" == "phase9_carrier_followup" \
-    || "${EXPERIMENT_FAMILY}" == "phase9_hyper_30k" ]]; then
+    || "${EXPERIMENT_FAMILY}" == "phase9_hyper_30k" \
+    || "${EXPERIMENT_FAMILY}" == "phase9_qk_independence" \
+    || "${EXPERIMENT_FAMILY}" == "phase9_hyper_capacity" ]]; then
     GPU_SELECTOR="any"
   else
     GPU_SELECTOR="6,7"
@@ -217,6 +223,10 @@ elif [[ "${EXPERIMENT_FAMILY}" == "phase9_carrier_followup" ]]; then
   CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase9_carrier_followup"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase9_hyper_30k" ]]; then
   CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase9_hyper_30k"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase9_qk_independence" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase9_qk_independence"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase9_hyper_capacity" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase9_hyper_capacity"
 fi
 PIDS=()
 JOB_NAMES=()
@@ -574,13 +584,16 @@ v2_unit_hyper_qk_json() {
   local network="${3:-linear}"
   local target="${4:-both}"
   local static_complement="${5:-false}"
+  local conditioning_coupling="${6:-shared_trunk_separate_readouts}"
+  local conditioning_head_coupling="${7:-per_head_independent}"
+  local conditioning_hidden_dim="${8:-64}"
   local learn_amplitude=true
   local learn_phase=true
   local conditioning='{"kind": "none"}'
   if [[ "${mode}" == "hyper" ]]; then
     learn_amplitude=false
     learn_phase=false
-    conditioning="{\"kind\": \"carrier_hypernetwork\", \"source\": \"dedicated\", \"hidden_dim\": 64, \"input_mode\": \"${input_mode}\", \"network\": \"${network}\", \"components\": \"amplitude_phase\", \"target\": \"${target}\", \"coupling\": \"shared_trunk_separate_readouts\", \"static_complement\": ${static_complement}, \"head_coupling\": \"per_head_independent\"}"
+    conditioning="{\"kind\": \"carrier_hypernetwork\", \"source\": \"dedicated\", \"hidden_dim\": ${conditioning_hidden_dim}, \"input_mode\": \"${input_mode}\", \"network\": \"${network}\", \"components\": \"amplitude_phase\", \"target\": \"${target}\", \"coupling\": \"${conditioning_coupling}\", \"static_complement\": ${static_complement}, \"head_coupling\": \"${conditioning_head_coupling}\"}"
   fi
   cat <<JSON
 {"enabled": true, "application": "additive", "geometry": "amplitude_phase", "input": {"kind": "frozen_fourier", "basis_dim": 16, "theta": null, "scalars": ["normalized_position", "log_position"]}, "mapper": {"kind": "linear", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "output": {"parameter_source": "direct", "amplitude_init": 1.0, "amplitude_parameterization": "signed", "learn_amplitude": ${learn_amplitude}, "learn_phase": ${learn_phase}, "phase_scale": 1.0, "additive_normalization": "none"}, "conditioning": ${conditioning}, "qk_coupling": "shared_trunk_separate_readouts", "head_coupling": "per_head_independent"}
@@ -855,6 +868,18 @@ want_phase9_carrier_followup_family() {
 want_phase9_hyper_30k_family() {
   local family="$1"
   [[ "${EXPERIMENT_FAMILY}" == "phase9_hyper_30k" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase9_qk_independence_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase9_qk_independence" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase9_hyper_capacity_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase9_hyper_capacity" \
     || "${EXPERIMENT_FAMILY}" == "${family}" ]]
 }
 
@@ -2425,7 +2450,7 @@ if want_phase9_carrier_followup_family "carrier_followup_5k_story"; then
 fi
 
 # Longer SDPA gate for the two tied HyperAddRoPE trunks and their established
-# RoPE/mapped-AddRoPE controls. Train at 1024 and evaluate extrapolation every 5k.
+# RoPE/mapped-AddRoPE controls. Train and evaluate at 1024 every 5k.
 if want_phase9_hyper_30k_family "hyper_30k_promotion_story"; then
   seed=123
   disabled_channel='{"enabled": false}'
@@ -2450,8 +2475,90 @@ if want_phase9_hyper_30k_family "hyper_30k_promotion_story"; then
     job_name="phase9-30k-${label}-seed${seed}-s30000-h${HIDDEN_SIZE}d${DEPTH}"
     cfg_file="${CONFIG_DIR}/${job_name}.json"
     write_common_config "${cfg_file}" \
-      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 4096, \"evaluation_lengths\": [1024, 2048, 4096], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"${qk_norm_mode}\", \"post_position_qk_norm\": false, \"position_content_dim\": 64, \"position_content_coupling\": \"shared\", \"checkpointing_steps\": 5000, \"resume_from_checkpoint\": \"auto\", \"save_final_model\": true, \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"${qk_norm_mode}\", \"post_position_qk_norm\": false, \"position_content_dim\": 64, \"position_content_coupling\": \"shared\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
       30000 5000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Factor the Q/K independence hypothesis into content-projection sharing and
+# hypernetwork-trunk sharing while retaining separate Q/K readouts throughout.
+if want_phase9_qk_independence_family "qk_independence_5k_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  shared_trunk_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+      shared_trunk_separate_readouts
+  )"
+  separate_trunks_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false separate
+  )"
+
+  for spec in \
+    "shared-content-shared-trunk|shared|${shared_trunk_qk}" \
+    "shared-content-separate-trunks|shared|${separate_trunks_qk}" \
+    "separate-content-shared-trunk|separate|${shared_trunk_qk}" \
+    "separate-content-separate-trunks|separate|${separate_trunks_qk}"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    content_coupling="${remainder%%|*}"
+    qk_json="${remainder#*|}"
+    job_name="phase9-qkgrid-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"position_content_dim\": 64, \"position_content_coupling\": \"${content_coupling}\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Structural/capacity screen around the shared-content HyperAddRoPE winner.
+# Each single-axis arm changes only Q/K readout sharing, head sharing, content
+# rank, or SiLU trunk width; two combined arms test the larger-rank interaction.
+if want_phase9_hyper_capacity_family "hyper_capacity_5k_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  control_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+      shared_trunk_separate_readouts per_head_independent 64
+  )"
+  shared_qk_readout="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+      shared per_head_independent 64
+  )"
+  shared_head_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+      shared_trunk_separate_readouts shared_head 64
+  )"
+  trunk128_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+      shared_trunk_separate_readouts per_head_independent 128
+  )"
+  trunk256_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+      shared_trunk_separate_readouts per_head_independent 256
+  )"
+
+  for spec in \
+    "control-c64-h64|64|${control_qk}" \
+    "shared-qk-readout-c64-h64|64|${shared_qk_readout}" \
+    "shared-head-c64-h64|64|${shared_head_qk}" \
+    "content128-h64|128|${control_qk}" \
+    "content64-h128|64|${trunk128_qk}" \
+    "content64-h256|64|${trunk256_qk}" \
+    "content128-h128|128|${trunk128_qk}" \
+    "content128-h256|128|${trunk256_qk}"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    content_dim="${remainder%%|*}"
+    qk_json="${remainder#*|}"
+    job_name="phase9-capacity-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"position_content_dim\": ${content_dim}, \"position_content_coupling\": \"shared\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      5000 1000
     run_job "${job_name}" "${cfg_file}"
   done
 fi

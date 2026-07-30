@@ -31,5 +31,5 @@
   "compile": true,
   "compile_mode": "default",
   "compile_fullgraph": false,
-  "seed": 123, "per_device_eval_batch_size": 1, "training_length": 1024, "model_position_extent": 4096, "evaluation_lengths": [1024, 2048, 4096], "scalar_normalization_extent": 1024, "qk_norm_mode": "legacy_layernorm", "post_position_qk_norm": false, "position_content_dim": 64, "position_content_coupling": "shared", "checkpointing_steps": 5000, "resume_from_checkpoint": "auto", "save_final_model": true, "pos_variant": null, "position_schema_version": 2, "qk": {"enabled": false}, "logit_bias": {"enabled": false}, "residual_stream": {"enabled": false}, "attention_write": {"enabled": false}, "attn_impl": "sdpa", "run_name": "phase9-30k-standard-rope-seed123-s30000-h768d8"
+  "seed": 123, "per_device_eval_batch_size": 1, "training_length": 1024, "model_position_extent": 1024, "evaluation_lengths": [1024], "scalar_normalization_extent": 1024, "qk_norm_mode": "legacy_layernorm", "post_position_qk_norm": false, "position_content_dim": 64, "position_content_coupling": "shared", "pos_variant": null, "position_schema_version": 2, "qk": {"enabled": false}, "logit_bias": {"enabled": false}, "residual_stream": {"enabled": false}, "attention_write": {"enabled": false}, "attn_impl": "sdpa", "run_name": "phase9-30k-standard-rope-seed123-s30000-h768d8"
 }
