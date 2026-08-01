@@ -43,6 +43,26 @@ class QKPositionOutput:
     k_amplitude_delta: torch.Tensor | None = None
     q_hyper_phase_delta: torch.Tensor | None = None
     k_hyper_phase_delta: torch.Tensor | None = None
+    q_frequency_delta: torch.Tensor | None = None
+    k_frequency_delta: torch.Tensor | None = None
+    q_cartesian_real_delta: torch.Tensor | None = None
+    k_cartesian_real_delta: torch.Tensor | None = None
+    q_cartesian_imag_delta: torch.Tensor | None = None
+    k_cartesian_imag_delta: torch.Tensor | None = None
+
+
+# softplus(_SOFTPLUS_UNIT_BIAS) == 1.0 exactly.
+_SOFTPLUS_UNIT_BIAS = math.log(math.e - 1.0)
+
+
+@dataclass
+class CarrierDeltas:
+    amplitude: torch.Tensor | None = None
+    phase: torch.Tensor | None = None
+    log_gain: torch.Tensor | None = None
+    frequency: torch.Tensor | None = None
+    cartesian_real: torch.Tensor | None = None
+    cartesian_imag: torch.Tensor | None = None
 
 
 class GroupedLinearReadout(torch.nn.Module):
@@ -446,6 +466,61 @@ class _GroupedHyperTrunk(torch.nn.Module):
         return torch.nn.functional.silu(gate) * value
 
 
+class _MixedReadout(torch.nn.Module):
+    """Block-diagonal readout plus a low-rank cross-head residual.
+
+    The grouped path is the existing per-head readout. The residual lets head
+    ``h`` read every head's post-nonlinearity features through a rank-``r``
+    bottleneck, at a fraction of a dense ``[groups*hidden, groups*out]`` map.
+
+    Init follows LoRA: the down matrix is random with a *rank-independent*
+    fan-in and the up matrix is zero, so the residual is exactly zero at step 0
+    and the carrier keeps its exact anchor. Output is scaled by ``alpha / rank``
+    so the effective update magnitude does not change with rank -- without it a
+    rank sweep measures learning rate rather than capacity.
+    """
+
+    def __init__(
+        self,
+        *,
+        groups: int,
+        hidden_dim: int,
+        output_dim: int,
+        rank: int,
+        alpha: float,
+    ):
+        super().__init__()
+        self.groups = groups
+        self.output_dim = output_dim
+        self.rank = rank
+        self.scale = alpha / rank
+        self.grouped = GroupedLinearReadout(
+            groups, hidden_dim, output_dim, init="zeros"
+        )
+        fan_in = groups * hidden_dim
+        self.down = torch.nn.Parameter(
+            torch.randn(fan_in, rank) * (2.0 / fan_in) ** 0.5
+        )
+        self.up = torch.nn.Parameter(torch.zeros(rank, groups * output_dim))
+
+    def reset_parameters(self) -> None:
+        """Return to the exact carrier anchor: grouped path and up matrix zero."""
+        self.grouped.reset_parameters()
+        torch.nn.init.zeros_(self.up)
+
+    def forward(self, hidden: torch.Tensor) -> torch.Tensor:
+        batch, groups, length, width = hidden.shape
+        grouped = torch.einsum("bgld,gdo->bglo", hidden, self.grouped.weight)
+        grouped = grouped + self.grouped.bias[None, :, None, :]
+        flat = hidden.permute(0, 2, 1, 3).reshape(batch, length, groups * width)
+        residual = (flat @ self.down @ self.up) * self.scale
+        residual = (
+            residual.view(batch, length, groups, self.output_dim)
+            .permute(0, 2, 1, 3)
+        )
+        return grouped + residual
+
+
 class CarrierHypernetwork(torch.nn.Module):
     """Anchor-relative token-local gain/phase deltas for additive or rotary Q/K."""
 
@@ -457,6 +532,7 @@ class CarrierHypernetwork(torch.nn.Module):
         content_dim: int,
         position_dim: int,
         config: dict,
+        inverse_frequency: torch.Tensor,
     ):
         super().__init__()
         self.heads = heads
@@ -464,6 +540,8 @@ class CarrierHypernetwork(torch.nn.Module):
         self.content_dim = content_dim
         self.position_dim = position_dim
         self.input_mode = config["input_mode"]
+        self.input_normalization = config["input_normalization"]
+        self.learnable_input_gains = config["learnable_input_gains"]
         self.network = config["network"]
         self.components = config["components"]
         self.target = config["target"]
@@ -472,12 +550,105 @@ class CarrierHypernetwork(torch.nn.Module):
         self.groups = (
             1 if self.head_coupling == "shared_head" else self.heads
         )
+        pairwise_components = {
+            "phase": ("phase",),
+            "log_gain_phase": ("log_gain", "phase"),
+            "amplitude": ("amplitude",),
+            "amplitude_phase": ("amplitude", "phase"),
+            "cartesian": ("cartesian_real", "cartesian_imag"),
+            "frequency_phase": ("frequency", "phase"),
+            "amplitude_phase_frequency": (
+                "amplitude",
+                "phase",
+                "frequency",
+            ),
+        }
+        # Spectral parameterizations predict one scalar per head per token and
+        # expand it over the frequency axis with a fixed profile. Both are
+        # translation-invariant: `slope` tilts the amplitude envelope across
+        # log-frequency (locality), and `offset` shifts effective position by
+        # phase proportional to omega, i.e. cis(omega*((p+m_q)-(p+m_k))).
+        spectral_components = {
+            "amplitude_slope": ("gain", "slope"),
+            "position_offset": ("offset",),
+            "slope_offset": ("gain", "slope", "offset"),
+        }
+        # Mixed modes narrow exactly one branch so the cost of compressing the
+        # amplitude readout can be separated from the cost of compressing the
+        # angular readout.
+        mixed_components = {
+            "amplitude_offset": ("amplitude", "offset"),
+            "slope_phase": ("gain", "slope", "phase"),
+            # Same as slope_phase, but the phase readout is factorized through
+            # `angular_rank` so the cost of angular width can be traced between
+            # rank 1 (a coherent position offset) and rank pair_dim (free).
+            "slope_phase_lowrank": ("gain", "slope", "phase"),
+        }
+        narrow_names = {"gain", "slope", "offset"}
+        if self.components in spectral_components:
+            names = spectral_components[self.components]
+        elif self.components in mixed_components:
+            names = mixed_components[self.components]
+        else:
+            names = pairwise_components[self.components]
+        self.component_names = names
+        self.angular_rank = int(config["angular_rank"])
+        self.low_rank_phase = self.components == "slope_phase_lowrank"
+        if self.low_rank_phase and not 0 < self.angular_rank < pair_dim:
+            raise ValueError(
+                "angular_rank must lie strictly between 0 and pair_dim "
+                f"({pair_dim}), got {self.angular_rank}"
+            )
+        phase_width = self.angular_rank if self.low_rank_phase else pair_dim
+        self.component_widths = tuple(
+            1
+            if name in narrow_names
+            else (phase_width if name == "phase" else pair_dim)
+            for name in names
+        )
+        self.spectral = any(name in narrow_names for name in names)
+        self.offset_bound = float(config["offset_bound"])
+        self.offset_parameterization = config["offset_parameterization"]
+        omega = inverse_frequency.detach().to(torch.float32).reshape(-1)
+        if omega.numel() != pair_dim:
+            raise ValueError(
+                "Carrier hypernetwork frequency vector must have pair_dim "
+                f"entries, got {omega.numel()} for pair_dim={pair_dim}"
+            )
+        log_omega = omega.clamp_min(1e-12).log()
+        centered = log_omega - log_omega.mean()
+        self.register_buffer(
+            "spectral_tilt",
+            centered / centered.std(unbiased=False).clamp_min(1e-6),
+            persistent=False,
+        )
+        self.register_buffer("spectral_omega", omega, persistent=False)
+        self.angular_basis = None
+        if self.low_rank_phase:
+            basis = torch.empty(self.groups, self.angular_rank, pair_dim)
+            for group in basis:
+                torch.nn.init.xavier_normal_(group)
+            self.angular_basis = torch.nn.Parameter(basis)
         input_dim = 0
         if self.input_mode in {"content", "content_position"}:
             input_dim += content_dim
         if self.input_mode in {"position", "content_position"}:
             input_dim += position_dim
-        output_dim = pair_dim * (2 if self.components != "phase" else 1)
+        output_dim = sum(self.component_widths)
+        learn_content_gain = (
+            self.learnable_input_gains
+            and self.input_mode in {"content", "content_position"}
+        )
+        learn_position_gain = (
+            self.learnable_input_gains
+            and self.input_mode in {"position", "content_position"}
+        )
+        self.content_input_gain = (
+            torch.nn.Parameter(torch.ones(())) if learn_content_gain else None
+        )
+        self.position_input_gain = (
+            torch.nn.Parameter(torch.ones(())) if learn_position_gain else None
+        )
 
         def make_trunk() -> _GroupedHyperTrunk:
             return _GroupedHyperTrunk(
@@ -487,7 +658,31 @@ class CarrierHypernetwork(torch.nn.Module):
                 network=self.network,
             )
 
-        def make_readout(trunk: _GroupedHyperTrunk) -> GroupedLinearReadout:
+        self.readout_head_mixing = config["readout_head_mixing"]
+        self.readout_mix_rank = int(config["readout_mix_rank"])
+        self.readout_output_dim = output_dim
+
+        def make_readout(trunk: _GroupedHyperTrunk):
+            if self.readout_head_mixing == "lowrank":
+                return _MixedReadout(
+                    groups=self.groups,
+                    hidden_dim=trunk.output_dim,
+                    output_dim=output_dim,
+                    rank=self.readout_mix_rank,
+                    alpha=float(config["readout_mix_alpha"]),
+                )
+            if self.readout_head_mixing == "dense":
+                # Every head reads every head's post-nonlinearity features,
+                # mirroring how one dense W_q projection feeds all heads.
+                # Grouping the trunk costs nothing (its input is identical
+                # across heads), but grouping the readout confines head h to
+                # its own 64 nonlinear features.
+                return GroupedLinearReadout(
+                    1,
+                    self.groups * trunk.output_dim,
+                    self.groups * output_dim,
+                    init="zeros",
+                )
             return GroupedLinearReadout(
                 self.groups,
                 trunk.output_dim,
@@ -514,6 +709,20 @@ class CarrierHypernetwork(torch.nn.Module):
                 self.k_trunk = make_trunk()
                 self.k_readout = make_readout(self.k_trunk)
 
+    def _prepare_modality(
+        self,
+        values: torch.Tensor,
+        gain: torch.Tensor | None,
+    ) -> torch.Tensor:
+        if self.input_normalization == "modality_rms":
+            inverse_rms = torch.rsqrt(
+                values.float().square().mean(dim=-1, keepdim=True) + 1e-6
+            ).to(dtype=values.dtype)
+            values = values * inverse_rms
+        if gain is not None:
+            values = values * gain.to(dtype=values.dtype)
+        return values
+
     def _inputs(
         self,
         content: torch.Tensor | None,
@@ -536,8 +745,9 @@ class CarrierHypernetwork(torch.nn.Module):
                 )
             if content.shape[2] != length:
                 raise ValueError("Hypernetwork content/position lengths differ")
+            content_values = content[:, :1] if self.groups == 1 else content
             pieces.append(
-                content[:, :1] if self.groups == 1 else content
+                self._prepare_modality(content_values, self.content_input_gain)
             )
         if self.input_mode in {"position", "content_position"}:
             position_values = position.to(
@@ -547,18 +757,33 @@ class CarrierHypernetwork(torch.nn.Module):
                     else position.dtype
                 )
             )
+            position_values = position_values[None, None].expand(
+                batch, self.groups, -1, -1
+            )
             pieces.append(
-                position_values[None, None].expand(
-                    batch, self.groups, -1, -1
+                self._prepare_modality(
+                    position_values,
+                    self.position_input_gain,
                 )
             )
         return pieces[0] if len(pieces) == 1 else torch.cat(pieces, dim=-1)
 
-    @staticmethod
     def _read(
+        self,
         hidden: torch.Tensor,
         readout: GroupedLinearReadout,
     ) -> torch.Tensor:
+        if self.readout_head_mixing == "lowrank":
+            return readout(hidden)
+        if self.readout_head_mixing == "dense":
+            batch, groups, length, width = hidden.shape
+            flat = hidden.permute(0, 2, 1, 3).reshape(batch, length, groups * width)
+            mixed = flat @ readout.weight[0] + readout.bias[0]
+            return (
+                mixed.view(batch, length, groups, self.readout_output_dim)
+                .permute(0, 2, 1, 3)
+                .contiguous()
+            )
         output = torch.einsum("bgld,gdo->bglo", hidden, readout.weight)
         return output + readout.bias[None, :, None, :]
 
@@ -567,11 +792,6 @@ class CarrierHypernetwork(torch.nn.Module):
         values: torch.Tensor,
         branch: str,
     ) -> torch.Tensor:
-        if branch not in ({self.target} if self.target != "both" else {"q", "k"}):
-            output_dim = self.pair_dim * (
-                2 if self.components != "phase" else 1
-            )
-            return values.new_zeros(*values.shape[:-1], output_dim)
         if self.coupling == "shared":
             hidden = self.trunk(values)
             return self._read(hidden, self.readout)
@@ -588,31 +808,86 @@ class CarrierHypernetwork(torch.nn.Module):
             return values.expand(-1, self.heads, -1, -1)
         return values
 
+    def _parse(self, raw: torch.Tensor | None) -> CarrierDeltas:
+        if raw is None:
+            return CarrierDeltas()
+        values = dict(
+            zip(
+                self.component_names,
+                raw.split(list(self.component_widths), dim=-1),
+                strict=True,
+            )
+        )
+        if not self.spectral:
+            return CarrierDeltas(**values)
+        # Pairwise components pass through untouched; narrow ones are expanded
+        # over the frequency axis below.
+        deltas: dict[str, torch.Tensor] = {
+            name: tensor
+            for name, tensor in values.items()
+            if name not in {"gain", "slope", "offset"}
+        }
+        if self.low_rank_phase and "phase" in deltas:
+            deltas["phase"] = torch.einsum(
+                "bglr,grd->bgld",
+                deltas["phase"],
+                self.angular_basis.to(dtype=raw.dtype),
+            )
+        if "slope" in values:
+            amplitude = values["slope"] * self.spectral_tilt.to(
+                dtype=raw.dtype
+            )
+            if "gain" in values:
+                amplitude = amplitude + values["gain"]
+            deltas["amplitude"] = amplitude
+        if "offset" in values:
+            # Phase proportional to omega is exactly a shift of effective
+            # position, so the logit still depends only on the difference of
+            # the two shifted positions.
+            offset = values["offset"]
+            if self.offset_parameterization == "raw":
+                # Unbounded and signed. Offsets live on integer token scales,
+                # which a bounded squashing function represents poorly.
+                shift = offset
+            elif self.offset_parameterization == "softplus":
+                # softplus(log(e-1)) == 1, so this is exactly zero at zero-init
+                # while staying positive-leaning and bounded below by -1.
+                shift = (
+                    torch.nn.functional.softplus(offset + _SOFTPLUS_UNIT_BIAS)
+                    - 1.0
+                )
+            else:
+                shift = self.offset_bound * torch.tanh(offset)
+            deltas["phase"] = shift * self.spectral_omega.to(dtype=raw.dtype)
+        return CarrierDeltas(**deltas)
+
     def forward(
         self,
         *,
         q_content: torch.Tensor | None,
         k_content: torch.Tensor | None,
         position: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> tuple[CarrierDeltas, CarrierDeltas]:
         q_values = self._inputs(q_content, position)
         k_values = self._inputs(k_content, position)
         if self.coupling == "shared" and self.target == "both":
             q_raw = self._branch(q_values, "q")
             k_raw = q_raw
         else:
-            q_raw = self._branch(q_values, "q")
-            k_raw = self._branch(k_values, "k")
+            output_dim = self.pair_dim * len(self.component_names)
+            q_raw = (
+                self._branch(q_values, "q")
+                if self.target in {"q", "both"}
+                else q_values.new_zeros(*q_values.shape[:-1], output_dim)
+            )
+            k_raw = (
+                self._branch(k_values, "k")
+                if self.target in {"k", "both"}
+                else k_values.new_zeros(*k_values.shape[:-1], output_dim)
+            )
         q_raw = self._expand_heads(q_raw)
         k_raw = self._expand_heads(k_raw)
-        if self.components != "phase":
-            q_log_gain, q_phase = q_raw.split(self.pair_dim, dim=-1)
-            k_log_gain, k_phase = k_raw.split(self.pair_dim, dim=-1)
-        else:
-            q_phase, k_phase = q_raw, k_raw
-            q_log_gain = torch.zeros_like(q_phase)
-            k_log_gain = torch.zeros_like(k_phase)
-        return q_log_gain, q_phase, k_log_gain, k_phase
+        return self._parse(q_raw), self._parse(k_raw)
 
     def reset_output_parameters(self) -> None:
         for readout in (
@@ -852,6 +1127,15 @@ class QKPositionChannel(PositionChannel):
         base_sin, base_cos = build_rope_cache(extent, head_dim, rope_theta)
         self.register_buffer("base_sin", base_sin, persistent=False)
         self.register_buffer("base_cos", base_cos, persistent=False)
+        frequencies = torch.arange(head_dim // 2, dtype=torch.float32)
+        inverse_frequency = 1.0 / (
+            rope_theta ** (frequencies / (head_dim // 2))
+        )
+        base_angle = torch.outer(
+            torch.arange(extent, dtype=torch.float32),
+            inverse_frequency,
+        )
+        self.register_buffer("base_angle", base_angle, persistent=False)
 
         if self.application == "additive" and self.geometry in {
             "free",
@@ -1056,6 +1340,7 @@ class QKPositionChannel(PositionChannel):
                 content_dim=content_dim,
                 position_dim=position_dim,
                 config=self.conditioning_config,
+                inverse_frequency=inverse_frequency,
             )
         elif conditioning_kind != "none":
             output_dim = (
@@ -1290,6 +1575,9 @@ class QKPositionChannel(PositionChannel):
         log_gain_delta: torch.Tensor | None = None,
         amplitude_delta: torch.Tensor | None = None,
         hyper_phase_delta: torch.Tensor | None = None,
+        frequency_delta: torch.Tensor | None = None,
+        cartesian_real_delta: torch.Tensor | None = None,
+        cartesian_imag_delta: torch.Tensor | None = None,
         amplitude_raw_override: torch.Tensor | None = None,
         phase_override: torch.Tensor | None = None,
         branch: str = "q",
@@ -1319,6 +1607,18 @@ class QKPositionChannel(PositionChannel):
                 if phase_head is not None
                 else zero
             )
+        if cartesian_real_delta is not None:
+            if cartesian_imag_delta is None:
+                raise ValueError("Cartesian carrier requires both residual components")
+            base_sin = self.base_sin[:sequence_length].to(target_dtype)[None]
+            base_cos = self.base_cos[:sequence_length].to(target_dtype)[None]
+            real = 1.0 + cartesian_real_delta
+            imag = cartesian_imag_delta
+            cos = base_cos * real - base_sin * imag
+            sin = base_sin * real + base_cos * imag
+            return torch.cat((cos, sin), dim=-1)
+        if cartesian_imag_delta is not None:
+            raise ValueError("Cartesian carrier requires both residual components")
         if amplitude_delta is not None:
             amplitude_raw = amplitude_delta
         amplitude = self._amplitude(amplitude_raw)
@@ -1343,11 +1643,19 @@ class QKPositionChannel(PositionChannel):
         if hyper_phase_delta is not None:
             phase = phase + hyper_phase_delta
         phase = phase * self.output_config["phase_scale"]
-        base_sin = self.base_sin[:sequence_length].to(phase.dtype)[None, :, :]
-        base_cos = self.base_cos[:sequence_length].to(phase.dtype)[None, :, :]
-        delta_sin, delta_cos = phase.sin(), phase.cos()
-        sin = base_sin * delta_cos + base_cos * delta_sin
-        cos = base_cos * delta_cos - base_sin * delta_sin
+        if frequency_delta is not None:
+            base_angle = self.base_angle[:sequence_length][None]
+            total_phase = (1.0 + frequency_delta.float()) * (
+                base_angle + phase.float()
+            )
+            sin = total_phase.sin().to(dtype=phase.dtype)
+            cos = total_phase.cos().to(dtype=phase.dtype)
+        else:
+            base_sin = self.base_sin[:sequence_length].to(phase.dtype)[None]
+            base_cos = self.base_cos[:sequence_length].to(phase.dtype)[None]
+            delta_sin, delta_cos = phase.sin(), phase.cos()
+            sin = base_sin * delta_cos + base_cos * delta_sin
+            cos = base_cos * delta_cos - base_sin * delta_sin
         return torch.cat((amplitude * cos, amplitude * sin), dim=-1)
 
     def _condition_outputs(
@@ -1414,39 +1722,42 @@ class QKPositionChannel(PositionChannel):
         k_amplitude_delta = None
         q_hyper_phase_delta = None
         k_hyper_phase_delta = None
+        q_frequency_delta = None
+        k_frequency_delta = None
+        q_cartesian_real_delta = None
+        k_cartesian_real_delta = None
+        q_cartesian_imag_delta = None
+        k_cartesian_imag_delta = None
         if self.carrier_hypernetwork is not None:
             position_features = self._hyper_position_features(
                 sequence_length,
                 dtype=dtype,
             )
-            (
-                q_log_gain_delta,
-                q_hyper_phase_delta,
-                k_log_gain_delta,
-                k_hyper_phase_delta,
-            ) = self.carrier_hypernetwork(
+            q_deltas, k_deltas = self.carrier_hypernetwork(
                 q_content=q_content,
                 k_content=k_content,
                 position=position_features,
             )
+            q_log_gain_delta = q_deltas.log_gain
+            k_log_gain_delta = k_deltas.log_gain
+            q_amplitude_delta = q_deltas.amplitude
+            k_amplitude_delta = k_deltas.amplitude
+            q_hyper_phase_delta = q_deltas.phase
+            k_hyper_phase_delta = k_deltas.phase
+            q_frequency_delta = q_deltas.frequency
+            k_frequency_delta = k_deltas.frequency
+            q_cartesian_real_delta = q_deltas.cartesian_real
+            k_cartesian_real_delta = k_deltas.cartesian_real
+            q_cartesian_imag_delta = q_deltas.cartesian_imag
+            k_cartesian_imag_delta = k_deltas.cartesian_imag
             if self.conditioning_config["components"] == "amplitude_phase":
                 dynamic_target = self.conditioning_config["target"]
-                q_amplitude_delta = (
-                    q_log_gain_delta
-                    if dynamic_target in {"q", "both"}
-                    else None
-                )
-                k_amplitude_delta = (
-                    k_log_gain_delta
-                    if dynamic_target in {"k", "both"}
-                    else None
-                )
                 if dynamic_target not in {"q", "both"}:
+                    q_amplitude_delta = None
                     q_hyper_phase_delta = None
                 if dynamic_target not in {"k", "both"}:
+                    k_amplitude_delta = None
                     k_hyper_phase_delta = None
-                q_log_gain_delta = None
-                k_log_gain_delta = None
 
         target_dtype = dtype or self.base_cos.dtype
         q_direct_amplitude = None
@@ -1520,6 +1831,9 @@ class QKPositionChannel(PositionChannel):
                     log_gain_delta=q_log_gain_delta,
                     amplitude_delta=q_amplitude_delta,
                     hyper_phase_delta=q_hyper_phase_delta,
+                    frequency_delta=q_frequency_delta,
+                    cartesian_real_delta=q_cartesian_real_delta,
+                    cartesian_imag_delta=q_cartesian_imag_delta,
                     amplitude_raw_override=q_direct_amplitude,
                     phase_override=q_direct_phase,
                     branch="q",
@@ -1536,6 +1850,9 @@ class QKPositionChannel(PositionChannel):
                     log_gain_delta=k_log_gain_delta,
                     amplitude_delta=k_amplitude_delta,
                     hyper_phase_delta=k_hyper_phase_delta,
+                    frequency_delta=k_frequency_delta,
+                    cartesian_real_delta=k_cartesian_real_delta,
+                    cartesian_imag_delta=k_cartesian_imag_delta,
                     amplitude_raw_override=k_direct_amplitude,
                     phase_override=k_direct_phase,
                     branch="k",
@@ -1553,6 +1870,9 @@ class QKPositionChannel(PositionChannel):
                     log_gain_delta=q_log_gain_delta,
                     amplitude_delta=q_amplitude_delta,
                     hyper_phase_delta=q_hyper_phase_delta,
+                    frequency_delta=q_frequency_delta,
+                    cartesian_real_delta=q_cartesian_real_delta,
+                    cartesian_imag_delta=q_cartesian_imag_delta,
                     amplitude_raw_override=q_direct_amplitude,
                     phase_override=q_direct_phase,
                     branch="q",
@@ -1569,6 +1889,9 @@ class QKPositionChannel(PositionChannel):
                     log_gain_delta=k_log_gain_delta,
                     amplitude_delta=k_amplitude_delta,
                     hyper_phase_delta=k_hyper_phase_delta,
+                    frequency_delta=k_frequency_delta,
+                    cartesian_real_delta=k_cartesian_real_delta,
+                    cartesian_imag_delta=k_cartesian_imag_delta,
                     amplitude_raw_override=k_direct_amplitude,
                     phase_override=k_direct_phase,
                     branch="k",
@@ -1718,6 +2041,12 @@ class QKPositionChannel(PositionChannel):
             k_amplitude_delta=k_amplitude_delta,
             q_hyper_phase_delta=q_hyper_phase_delta,
             k_hyper_phase_delta=k_hyper_phase_delta,
+            q_frequency_delta=q_frequency_delta,
+            k_frequency_delta=k_frequency_delta,
+            q_cartesian_real_delta=q_cartesian_real_delta,
+            k_cartesian_real_delta=k_cartesian_real_delta,
+            q_cartesian_imag_delta=q_cartesian_imag_delta,
+            k_cartesian_imag_delta=k_cartesian_imag_delta,
         )
 
     def reset_output_parameters(self) -> None:
@@ -1886,6 +2215,46 @@ class QKPositionChannel(PositionChannel):
                     .max()
                     .item()
                 )
+        for branch, frequency_delta in (
+            ("q", output.q_frequency_delta),
+            ("k", output.k_frequency_delta),
+        ):
+            if frequency_delta is not None:
+                _delta_stats(
+                    f"hyper_frequency_delta_{branch}",
+                    frequency_delta,
+                )
+                multiplier = 1.0 + frequency_delta.detach().float()
+                metrics[f"hyper_frequency_multiplier_{branch}/min"] = (
+                    multiplier.min().item()
+                )
+                metrics[f"hyper_frequency_multiplier_{branch}/max"] = (
+                    multiplier.max().item()
+                )
+        for name, q_delta, k_delta in (
+            (
+                "cartesian_real",
+                output.q_cartesian_real_delta,
+                output.k_cartesian_real_delta,
+            ),
+            (
+                "cartesian_imag",
+                output.q_cartesian_imag_delta,
+                output.k_cartesian_imag_delta,
+            ),
+        ):
+            if q_delta is not None:
+                _delta_stats(f"hyper_{name}_delta_q", q_delta)
+            if k_delta is not None:
+                _delta_stats(f"hyper_{name}_delta_k", k_delta)
+        if self.carrier_hypernetwork is not None:
+            for name in ("content", "position"):
+                gain = getattr(
+                    self.carrier_hypernetwork,
+                    f"{name}_input_gain",
+                )
+                if gain is not None:
+                    metrics[f"hyper_{name}_input_gain"] = gain.detach().item()
         if self.conditioning_config["components"] == "log_gain_phase":
             for branch, log_gain_delta in (
                 ("q", output.q_log_gain_delta),

@@ -1949,3 +1949,569 @@ The apparent capacity gain is not free. At h768/d8, content-128/trunk-256 uses
 parameter-matched wider-FFN control before promotion. The structural default
 remains shared content and trunk with per-head conditioning and separate Q/K
 readouts.
+
+## 2026-07-30 — Phase-10 HyperAddRoPE normalization/output-geometry screen launched
+
+The `phase10_hyper_geometry` family tests normalization and carrier geometry
+around the shared-content/shared-trunk, per-head, separate-Q/K-readout
+HyperAddRoPE default. All HyperAddRoPE cells use `content_dim=128`, trunk width
+64, SDPA, method-aware add-then-RMS Q/K normalization, seed 123, 5,000 steps,
+and 1024-only evaluation. Checkpoint and final-model saving remain disabled.
+
+The 11 cells are standard RoPE, mapped-0.3 AddRoPE, the signed-polar
+HyperAddRoPE control, modality-wise input RMS with and without learned
+content/position scalar gains, exact-one softplus amplitude, Cartesian complex
+residual `(1+u)+iv`, dynamic amplitude+phase+frequency, static learned amplitude
+with dynamic frequency+phase, amplitude-only, and phase-only. The frequency
+arms use the unwrapped float32 composition
+`cis((1+delta_frequency)*(omega*p+delta_phase))`. New dynamic output heads are
+zero-initialized and recover exactly `cis(omega*p)`; schema validation prevents
+a dynamic amplitude or phase from overlapping a learned static parameter for
+the same component.
+
+Validation before launch:
+
+- all 98 CPU position tests passed (one expected claimed-CUDA-only skip);
+- all 11 h768/d8 configs passed `train_gpt.py --dry_run` through `gpu-claim`;
+- modality-RMS/gain, Cartesian, and frequency cases passed eager and compiled
+  CUDA forward/backward smoke tests;
+- positional parameter counts are 2.187M for matched two-component hypernetwork
+  cells, 2.587M for amplitude+phase+frequency, 1.788M for one-component
+  isolation cells, 2.193M for static-amplitude+frequency+phase, and 1.309M for
+  mapped AddRoPE.
+
+The sweep launched at 2026-07-30 23:13 UTC under Supervisor program
+`mlprope-phase10-hyper-geometry`, with output root
+`model-output/position_bias_phase10_hyper_geometry/`. Eight cells acquired
+lifetime GPU claims immediately and three entered the cooperative queue. W&B
+upload was not enabled for this launch; local output metrics are authoritative.
+
+## 2026-07-30 — Phase-10 normalization/output-geometry result
+
+All 11 seed-123 cells completed 5,000 steps without OOM, NaN, non-finite
+gradients, traceback, or queue failure. Final 1024-token evaluation losses:
+
+| Variant | Eval loss | Position params |
+| --- | ---: | ---: |
+| modality RMS + learned modality gains | **4.2816** | 2.187M |
+| modality RMS | 4.2831 | 2.187M |
+| signed-polar control | 4.2840 | 2.187M |
+| Cartesian complex residual | 4.2852 | 2.187M |
+| exact-one softplus polar | 4.2872 | 2.187M |
+| amplitude-only polar | 4.3024 | 1.788M |
+| mapped-0.3 AddRoPE | 4.3396 | 1.309M |
+| standard RoPE | 4.4118 | 0 |
+| phase-only polar | 4.4348 | 1.788M |
+| amplitude+phase+frequency polar | 4.5369 | 2.587M |
+| static amplitude + dynamic frequency/phase | 4.7788 | 2.193M |
+
+The five matched two-component geometries are inside a `0.0057` band, well
+within the established `0.01` tie threshold. Modality RMS with gains is only
+`0.0024` ahead of the signed control at one seed. Its learned content gains
+ended in `1.060–1.145` and position gains in `1.042–1.184` across layers, so
+the normalization path was healthy rather than inert or runaway. It was also
+slower in this screen (about 135k tokens/s versus 149k for signed polar;
+RMS without gains was about 143k). This does not justify changing the default.
+The project therefore retains raw signed `1+s` polar HyperAddRoPE; modality RMS
+remains an optional tied variant, not a promoted mechanism. Softplus and
+Cartesian geometry add no quality evidence and are not promoted.
+
+The isolation result is informative: amplitude-only remains strong and beats
+mapped AddRoPE by `0.0372`, but trails full amplitude+phase conditioning by
+`0.0185`. Phase-only is worse than mapped AddRoPE and standard RoPE. Dynamic
+phase is therefore complementary to dynamic amplitude in the joint actuator,
+not independently useful in this parameterization.
+
+Both raw frequency-multiplier arms are clean negative results. The fully
+dynamic arm trails the signed control by `0.2529`; static amplitude with dynamic
+frequency+phase trails by `0.4948`. They remained finite, but learned frequency
+multipliers crossed through zero and spread widely (`-0.81–3.37` for the full
+arm and `-1.64–3.55` for the static-amplitude arm), allowing local frequency
+reversal. The unbounded `1+predicted_frequency` parameterization is pruned.
+No bounded-frequency rescue is scheduled without new evidence.
+
+## 2026-07-31 — Zero-GPU probes: logit-curve structure and closed-form fits
+
+Two read-only analyses over saved `position_profiles/step_*.pt` (`[heads, extent]`
+relative-bias curves for layers 0 / mid / last). Full derivations and the
+retraction below are recorded in `CONCAT_QK_POSITION.md`.
+
+**Concatenated Q/K reformulation.** A relative bias that factors as an inner
+product of a query-side and a key-side vector can be folded into the attention
+dot product as extra Q/K dimensions, requiring no `score_mod` and running on
+fused SDPA. An `R`-frequency cosine series is exactly `2R` extra dims; a free
+rank-`r` non-Toeplitz bias is `r` extra dims. The existing `[heads, extent]`
+curve is low-parameter but **full-rank**, so the two constraints
+(translation-invariance and low rank) are orthogonal rather than nested.
+
+A first probe SVD'd the causal Toeplitz matrix with hard zeros above the
+diagonal and reported rank 64–250 for 99% energy. **That bound is invalid** and
+is retracted: attention applies the causal mask itself, so entries above the
+diagonal are free, and forcing them to zero measures the triangular cutoff
+rather than the curve. The valid measurement is DCT truncation error on
+`d >= 0`: `R=16` leaves 18–26% of curve range, `R=64` still leaves 9–12%. The
+Fourier form is therefore lossy at affordable `R`, not the exact drop-in first
+claimed. Materializing an `[H, L, L]` bias for SDPA `attn_mask` was also
+rejected: it scales as `H*L^2` (137 GB at h=64, L=32k).
+
+**The learned curves are log-shaped per-head decay profiles.** Sampled values
+decay by a roughly constant amount per octave. Pair-frequency-weighted least
+squares (weight `L-d`, since distance `d` occurs `L-d` times per sequence):
+
+| Model | Layer | linear (ALiBi) | log | log+tau (3p) | log+linear (3p) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| h768/d8 | 0 | 0.742 | 0.895 | **0.915** | 0.910 |
+| h768/d8 | 4 | 0.651 | 0.793 | 0.872 | **0.889** |
+| h768/d8 | 7 | 0.749 | 0.874 | **0.933** | 0.918 |
+| h1024/d12 | 0 | 0.184 | 0.529 | 0.528 | **0.688** |
+| h1024/d12 | 6 | 0.208 | 0.550 | 0.553 | **0.679** |
+| h1024/d12 | 11 | 0.124 | 0.418 | 0.416 | **0.584** |
+
+Linear-in-`d` is the wrong functional family. `tau` grows with depth
+(`7.2 -> 12.7 -> 37.9` at h768), so locality relaxes monotonically with depth.
+The fit degrades at h1024/d12 (`tau` pins at the search floor), meaning the
+larger model uses more of the curve's freedom, not less. Log shapes also
+explain the slow DCT convergence: strong curvature at the origin spreads
+spectral energy.
+
+Both probes measure *distillation* of a freely learned curve, not what a
+rank- or parameter-limited channel could reach when trained from scratch. They
+set `R`, they do not veto the arm.
+
+**Reconciliation with `phase10`.** The relative logit bias is a learned per-head
+attention decay profile, and `phase10` showed the Q/K carrier gain lives almost
+entirely in the amplitude branch. Both of the project's strongest directions
+reduce to **per-head control of how fast attention decays with distance**.
+
+## 2026-07-31 — Phase-11 narrow spectral carrier readouts
+
+`phase10` established an ordering by how badly a modulation breaks translation
+invariance: amplitude (preserved) `4.3024`, phase (bounded violation) `4.4348`
+— worse than standard RoPE `4.4118` — and frequency (violation growing with
+absolute position) `4.5369`. Content-dependent `omega` makes the logit depend on
+absolute position with drift `m*p`, so the axis is dead for content
+conditioning at any parameterization: an `epsilon`-bounded multiplier needs
+`epsilon < 1e-4` to keep drift under 0.1 rad at L=1024.
+
+Dividing the multiplier by `p` removes exactly the growing factor and yields a
+**new relativity-preserving axis**. With `omega_i = omega*(1 + m_i/i)`,
+
+```text
+omega_i*i - omega_j*j = omega*((i + m_i) - (j + m_j))
+```
+
+so the mechanism is a content-dependent shift of *effective position*. This is
+not the failed phase-only arm: free per-frequency phase decoheres the spectrum,
+whereas an offset ties phase to `omega_r` and stays coherent across it.
+
+Two narrow readouts were added to `CarrierHypernetwork`, both anchored at exact
+`cis(omega*p)` with zeroed readouts:
+
+- `amplitude_slope` (2 scalars/head): `amplitude = 1 + gain + slope*tilt_r`,
+  where `tilt_r` is z-scored `log(omega_r)`. A locality / decay-rate control.
+- `position_offset` (1 scalar/head): `phase_r = omega_r * bound * tanh(m)`,
+  with `offset_bound` defaulting to 8 tokens.
+- `slope_offset` (3 scalars/head) composes both.
+
+Schema additions: `conditioning.components` accepts the three new modes,
+`conditioning.offset_bound` is a new positive key, and the new modes are
+registered in the additive amplitude/phase overlap checks so dynamic components
+still cannot coexist with learned static ones.
+
+Six CPU tests cover readout width, the exact zero-readout anchor and its
+content-independence, the identity `phase = omega*m` equals evaluating the
+carrier at `p + m`, tilt normalization and monotonicity, distinct Q/K gradients,
+and four schema rejections. All 104 CPU tests pass. Eager and compiled CUDA
+forward/backward smokes pass for all three modes.
+
+The `phase11_spectral` family is six seed-123, 5k-step, SDPA, 1024-only cells at
+`content_dim=128` / trunk 64 with `method_aware_rms`, matching `phase10`
+conditions so deltas are measured under identical settings. Free per-frequency
+controls are re-run in-family rather than borrowed across families. Positional
+parameter counts:
+
+| Cell | Position parameters |
+| --- | ---: |
+| free amplitude+phase (control) | 2,187,264 |
+| free amplitude-only | 1,787,904 |
+| slope+offset | 1,413,504 |
+| amplitude-slope | 1,405,184 |
+| position-offset | 1,396,864 |
+| standard RoPE | 0 |
+
+The narrow arms remove about `780k` positional parameters, matching the readout
+arithmetic (`8*64*96*2*8` collapsing to a few thousand). Single seed by
+intent: this screen looks for a large enough delta to be worth pursuing, not a
+tiebreak inside the noise band.
+
+### Phase-11 spectral readout result
+
+All six seed-123 cells completed 5,000 steps with `rc=0`; no OOMs, NaNs, or
+tracebacks. The three re-run controls replicate `phase10` to within `0.0008`
+(control `4.28477` vs `4.28397`; amplitude-only `4.30306` vs `4.30243`; standard
+RoPE `4.41137` vs `4.41176`), confirming that same-seed runs are effectively
+deterministic and that cross-family comparison is sound.
+
+| Cell | Eval loss | Position parameters | vs RoPE | vs free control | Tokens/s |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| free amplitude+phase (control) | **4.28477** | 2,187,264 | -0.1266 | — | 139,060 |
+| **slope+offset (3 scalars/head)** | **4.29601** | **1,413,504** | -0.1154 | +0.0112 | 124,116 |
+| free amplitude-only (48/head) | 4.30306 | 1,787,904 | -0.1083 | +0.0183 | 141,543 |
+| amplitude-slope (2 scalars/head) | 4.32392 | 1,405,184 | -0.0875 | +0.0392 | 125,205 |
+| standard RoPE | 4.41137 | 0 | — | +0.1266 | 178,581 |
+| position-offset (1 scalar/head) | 4.45335 | 1,396,864 | **+0.0420** | +0.1686 | 112,752 |
+
+**Three scalars per head beat forty-eight free amplitudes.** `slope+offset`
+reaches `4.29601` against free amplitude-only's `4.30306` while using `374,400`
+fewer positional parameters, so it **strictly dominates** that arm on both axes.
+It trails the full free amplitude+phase readout by only `0.0112` while removing
+`773,760` positional parameters (35%). This is an efficiency result, not a
+quality win: the full free readout remains the best loss.
+
+**The amplitude tilt alone is insufficient.** `amplitude-slope` (`4.32392`) is
+`0.0209` worse than free per-frequency amplitude, so a single log-frequency
+slope captures most but not all of what the free amplitude envelope does. It
+still recovers 69% of the total gain over RoPE using two outputs per head.
+
+**Position offset alone fails, and this refutes a prediction.** The
+relativity-preserving argument predicted it should help; instead it is `0.0420`
+*worse than standard RoPE*, the second-worst cell in the screen. Translation
+invariance is therefore **necessary but not sufficient** — the monotone
+"how badly is relativity broken" ordering from `phase10` does not by itself
+predict a gain.
+
+**But offset is strongly complementary to amplitude.** Adding it on top of the
+slope improves `4.32392 -> 4.29601`, a gain of `0.0279`. This exactly replicates
+the `phase10` non-additivity: free phase alone hurt (`4.4348` vs RoPE `4.4118`)
+yet added `0.0184` on top of free amplitude. Across two independent screens the
+pattern is the same — **amplitude conditioning is load-bearing, and angular
+conditioning (phase or position offset) is only useful in its presence.** A
+plausible reading is that an angular perturbation distorts the decay profile and
+the model needs amplitude freedom to compensate; without it the perturbation is
+pure noise on the most valuable short-range signal. `offset_bound=8` tokens was
+not tuned and may be too permissive for the isolated arm.
+
+**Narrow readouts buy parameters, not compute.** Throughput is unchanged or
+slightly worse (`112–125k` tokens/s versus `139–142k` for the free readouts),
+because the trunk and the carrier synthesis are unchanged while the broadcast
+plus `tanh` add elementwise work. These are single uninstrumented measurements
+that include warmup and should not be over-read. The durable throughput fact is
+that the carrier hypernetwork costs roughly 22–30% against standard RoPE
+(`178,581` tokens/s), which is the figure any iso-wallclock comparison needs.
+
+## 2026-07-31 — Phase-12 offset parameterization, decomposition, per-head Q/K norm
+
+Seven seed-123, 5k, SDPA, 1024-only cells at `content_dim=128` / trunk 64,
+matching `phase11`. All completed `rc=0`. `conditioning.offset_parameterization`
+was added (`raw` default, `softplus`, `tanh`) along with a `qk_norm_per_head`
+model flag backed by a new `PerHeadRMSNorm` (`[heads, head_dim]` gains, ones
+init). All 104 CPU tests pass.
+
+| Cell | Eval loss | phase11 reference | Delta |
+| --- | ---: | ---: | ---: |
+| per-head QK norm + free carrier | 4.28728 | free control `4.28477` | +0.0025 |
+| slope+offset, raw | 4.29998 | slope+offset tanh `4.29601` | +0.0040 |
+| slope+offset, softplus | 4.30248 | slope+offset tanh `4.29601` | +0.0065 |
+| per-head QK norm + standard RoPE | 4.41878 | standard RoPE `4.41137` | +0.0074 |
+| offset only, raw | 4.45747 | offset only tanh `4.45335` | +0.0041 |
+| offset only, softplus | 4.45789 | offset only tanh `4.45335` | +0.0045 |
+| position-only warp (offset) | 4.46848 | standard RoPE `4.41137` | +0.0571 |
+
+**Every arm is a negative.** Nothing in this batch improved on `phase11`.
+
+**Offset parameterization does not help, and bounded tanh was mildly best.**
+Both `raw` (unbounded signed) and `softplus` are worse than the original
+`8 * tanh(z)` in both the isolated and combined arms, by `0.0040-0.0065`. That
+is above the `0.0006` same-seed determinism floor but small. The theoretical
+objections to tanh — saturation, poor gradients at integer token scales, a
+handcrafted bound — are sound but do not show up empirically at this horizon;
+if anything the bound is doing useful work. The axis is closed as a null.
+
+**A deterministic position warp does not work.** Conditioning the offset on
+position only (`p -> p + m(p)`, a rank-1 constraint on the phase table shared
+across frequencies) reaches `4.46848`, worse than standard RoPE by `0.0571`,
+using only `86,144` positional parameters. Combined with the isolated-offset
+failure, angular reparameterization of the position axis is unproductive in
+every form tested so far.
+
+**Per-head Q/K norm hurts in both settings, with one caveat.** On the free
+carrier, where both sides use RMSNorm, the comparison is clean and per-head
+gains cost `0.0025`. On standard RoPE the `+0.0074` is **confounded**:
+`PerHeadRMSNorm` is always RMS, while the shared-gain baseline for that cell
+used `legacy_layernorm`, so the comparison mixes per-head gains with a
+LayerNorm-to-RMSNorm change. A clean shared-RMSNorm control is needed before
+that number is quoted. The direction is consistent across both cells, so the
+provisional read is that extra per-head normalization capacity is not useful
+here — which also argues the carrier's amplitude branch is *not* merely
+compensating for an over-constrained shared Q/K gain.
+
+**The phase11 complementarity result survives.** `slope+offset` at `4.29998`
+remains far better than offset alone (`4.45747`) and better than
+`amplitude_slope` alone (`4.32392`), independent of parameterization. Amplitude
+conditioning is load-bearing; angular conditioning only helps in its presence.
+
+Not run: the compression decomposition (free amplitude + offset, and slope +
+free phase). Those need mixed-width component modes — one branch pairwise, the
+other spectral — which the current `component_width` is a single scalar for.
+
+## 2026-07-31 — Phase-13 de-confounded per-head Q/K norm and compression decomposition
+
+Four seed-123, 5k, SDPA, 1024-only cells, all with `qk_norm_mode
+=method_aware_rms` so no cell uses LayerNorm. Two mixed-width carrier component
+modes were added (`amplitude_offset`, `slope_phase`), each narrowing exactly one
+branch; `CarrierHypernetwork` now carries per-component widths instead of one
+shared width. All 104 CPU tests pass, eager CUDA smoke passes.
+
+### Per-head Q/K norm, de-confounded
+
+| Cell | Eval loss |
+| --- | ---: |
+| standard RoPE, shared RMSNorm gain | **4.41610** |
+| standard RoPE, per-head RMSNorm gains | 4.41934 |
+
+The clean gap is `+0.0032`, not the `+0.0074` reported in `phase12`; the
+LayerNorm-to-RMSNorm change accounted for most of that. It matches the clean
+free-carrier comparison (`+0.0025`), so **per-head Q/K gains are a small,
+replicated negative** and the axis is closed. This also argues the carrier's
+amplitude branch is not merely compensating for an over-constrained shared Q/K
+gain, since adding that capacity directly does not help.
+
+Side observation: `legacy_layernorm` standard RoPE reached `4.41137` in
+`phase10`/`phase11`/`phase12` versus `4.41610` for shared RMSNorm here, so
+LayerNorm is `0.0047` *better* than RMSNorm for plain RoPE at this horizon.
+Single seed and small, but it runs against the usual preference for RMSNorm on
+Q/K and is worth remembering when choosing a control.
+
+### Compression decomposition
+
+| Arm | Amplitude readout | Angular readout | Eval loss | Position parameters |
+| --- | --- | --- | ---: | ---: |
+| free control | 48 | 48 | **4.28477** | 2,187,264 |
+| slope + free phase | **2** | 48 | 4.28827 | 1,804,544 |
+| slope + offset | **2** | **1** | 4.29601 | 1,413,504 |
+| free amplitude only | 48 | — | 4.30306 | 1,787,904 |
+| free amplitude + offset | 48 | **1** | 4.30665 | 1,796,224 |
+
+**Compressing amplitude is nearly free; compressing the angular branch is not.**
+Narrowing amplitude from 48 free values to 2 scalars costs `0.0035`; narrowing
+the angular branch from 48 to 1 costs `0.0219`, six times more. This inverts the
+naive reading: the amplitude branch carries the mechanism (phase10/phase11) yet
+is the one that compresses almost losslessly, while the angular branch is
+useless alone yet needs its full width.
+
+`slope + free phase` is the best compressed variant found: `0.0035` behind the
+full control while removing `382,720` positional parameters, and it strictly
+dominates both `free amplitude only` and `free amplitude + offset` on loss and
+parameters simultaneously.
+
+One non-monotonicity worth noting: with a narrow angular branch, *adding*
+amplitude capacity hurts (`slope + offset` `4.29601` beats `free amplitude +
+offset` `4.30665` by `0.0107`, well above the `0.0006` determinism floor). The
+slope tilt and the coherent position offset appear to be a matched pair, whereas
+free per-frequency amplitude can partly mimic locality itself and then conflicts
+with a single coherent offset.
+
+Nothing in phases 11-13 beats the free control on quality. The result is an
+efficiency frontier and a mechanism decomposition, not a better model.
+
+## 2026-07-31 — Phase-14 angular rank sweep and trained-readout spectra
+
+Six seed-123, 5k cells. A `slope_phase_lowrank` component mode factorizes the
+phase readout through `angular_rank` (readout emits `r` values, expanded to
+`pair_dim` by a learned `[groups, r, pair_dim]` basis). The rank-8 and
+free-phase cells saved final weights.
+
+| Cell | Eval loss | Position parameters |
+| --- | ---: | ---: |
+| free phase (rank 48) | **4.28957** | 1,804,544 |
+| rank 32 | 4.29471 | 1,769,728 |
+| rank 16 | 4.30735 | 1,587,456 |
+| rank 2 | 4.31816 | 1,427,968 |
+| rank 8 | 4.32556 | 1,496,320 |
+| rank 4 | 4.33308 | 1,450,752 |
+
+**The sweep is non-monotone and partly confounded.** Rank 2 beats rank 8 and
+rank 4 by `0.007-0.015`. The factorization is not a clean capacity ladder: the
+expansion basis is randomly initialized (the readout keeps the zero anchor, so
+the basis cannot also be zero), its Xavier scale depends on rank
+(`std = sqrt(2/(r + pair_dim))`), and a two-matrix path has different gradient
+dynamics from the single zero-init matrix used by the free readout. Differences
+among the low ranks reflect those artifacts more than capacity.
+
+**Revised replication floor.** `phase13`'s `slope + free phase` (`4.28827`) and
+`phase14`'s free-phase cell (`4.28957`) normalize to identical configs yet
+differ by `0.0013`. Earlier replications were `0.0004-0.0008`. The honest
+run-to-run floor is therefore about `0.0015`, not `0.0006`, and gaps below that
+should not be ranked.
+
+### Why: the trained phase readout is genuinely mid-rank
+
+Singular spectra of the trained free-phase readout (`[heads, 64, 48]` per
+branch, so full rank is 48):
+
+| Layer / branch | rank @90% energy | rank @99% | top singular energy |
+| --- | ---: | ---: | ---: |
+| L0 q / k | 17.6 / 18.0 | 35.4 / 35.6 | 0.32 / 0.28 |
+| L4 q / k | 9.4 / 11.6 | 28.2 / 30.2 | 0.46 / 0.40 |
+| L7 q / k | 8.8 / 11.9 | 27.9 / 30.5 | 0.51 / 0.38 |
+
+This makes the loss table coherent. The angular branch really does use
+**roughly rank 30**, so rank 32 landing within `0.005` of free is expected,
+while every cell at rank `<= 16` is far under-ranked and their ordering is
+noise. **There is no cheap compression available in the angular branch** — its
+`+0.0219` cost at rank 1 is a genuine capacity limit, not a parameterization
+accident.
+
+**Effective rank falls with depth** (`~18` at layer 0 to `~9-12` at layer 7).
+That mirrors the independent finding from the relative-logit curves, where the
+fitted `tau` grew with depth (`7.2 -> 12.7 -> 37.9`): deeper layers are flatter,
+longer-range, and need less fine angular structure. Two unrelated analyses
+agreeing on a depth trend is the strongest structural signal so far.
+
+Per-output-unit, the narrow components carry *more* weight than the free ones
+(`gain/slope` `0.565/sqrt(2) = 0.40` versus phase `1.996/sqrt(48) = 0.29` at
+layer 0), consistent with the slope being an efficient summary of the amplitude
+envelope while the phase readout spreads its work across many directions.
+
+**Standing frontier after phases 11-14** (5k, h768/d8, seed 123):
+
+| Variant | Loss | Position parameters |
+| --- | ---: | ---: |
+| free amplitude + free phase | **4.28477** | 2,187,264 |
+| slope + free phase | 4.28827 | 1,804,544 |
+| slope + offset | 4.29601 | 1,413,504 |
+| standard RoPE | 4.41137 | 0 |
+
+Nothing beats the free control on quality; the result remains an efficiency
+frontier plus a mechanism decomposition (amplitude is 2-dimensional and
+compresses freely, angular is ~rank-30 and does not).
+
+## 2026-07-31 — Phase-15 weight decay on anchored parameters, and cross-head readout mixing
+
+Six seed-123, 5k cells. Two changes shipped: `exclude_position_from_decay`
+(explicit exemption list for `qk_position` / `logit_bias_position` /
+`position_content` / `carrier_hypernetwork`, since the existing `no_decay` rule
+matched only `bias`/`norm`), and `conditioning.readout_head_mixing`, a dense
+`[heads*hidden -> heads*out]` carrier readout replacing the block-diagonal one.
+106 CPU tests pass; eager and compiled CUDA smokes pass.
+
+| Cell | Eval loss | Position parameters | Reference | Delta |
+| --- | ---: | ---: | ---: | ---: |
+| **head-mixed readout, no decay** | **4.26708** | 7,692,288 | free control `4.28477` | **-0.0177** |
+| **head-mixed readout** | **4.26859** | 7,692,288 | free control `4.28477` | **-0.0162** |
+| wide trunk 256 control | 4.28106 | 6,352,896 | phase9 `4.2810` | +0.0000 |
+| free control, no decay | 4.28454 | 2,187,264 | decayed `4.28477` | -0.0002 |
+| slope+offset, no decay | 4.29533 | 1,413,504 | decayed `4.29601` | -0.0007 |
+| mapped AddRoPE, no decay | 4.34031 | 1,308,672 | decayed `4.33964` | +0.0007 |
+
+### Weight decay on zero-anchored parameters: no measurable effect
+
+The concern was structurally real -- the carrier readouts are zero-initialized
+so the channel starts at exactly `cis(omega*p)`, so decaying them toward zero is
+a prior against using the mechanism rather than a shrinkage prior on large
+weights -- but it does not matter empirically. All three exempted cells land
+within `0.0007` of their decayed counterparts, inside the `~0.0015` replication
+floor. The earlier worry that this might have biased phases 9-14 toward
+"conditioning does not help" is **not supported**; those results stand. The flag
+is kept because the exemption is still the correct default for anchored
+parameters, but it changes nothing at this horizon.
+
+### Cross-head readout mixing: the first arm to beat the free control
+
+`readout_head_mixing` improves the free control from `4.28477` to `4.26859`, a
+gain of `0.0162` -- more than ten times the replication floor, and the first
+result in phases 11-15 that is a **quality** win rather than an efficiency one.
+
+The trunk's grouping is free: its input (broadcast content plus shared position
+features) is identical across heads, so a grouped `[heads, in, hidden]` map is
+exactly equivalent to a dense `[in, heads*hidden]` map that is then split. The
+readout is where grouping bites, because after the nonlinearity each head holds
+a *different* nonlinear feature set computed from the same input, and a
+block-diagonal readout forbids head `h` from using any of them. Effectively each
+head had a hidden width of 64 rather than 512.
+
+**It is not merely capacity.** The wide-trunk-256 control uses `6.35M`
+positional parameters against head-mixing's `7.69M` (21% fewer) and reaches only
+`4.28106`; head-mixing beats it by `0.0125`. For scale, widening the per-head
+trunk from 64 to 256 -- a 4x parameter increase -- bought only `0.0037`. Sharing
+features across heads is doing something that adding per-head width does not.
+The wide-trunk control also replicates `phase9_hyper_capacity`'s content-128 /
+trunk-256 cell (`4.2810`) to four decimals, confirming the comparison.
+
+This reframes the `phase9_hyper_capacity` null. That screen concluded capacity
+was not binding, and it was right -- but it only ever varied *per-head* width
+and sharing of whole modules (shared readout, shared head, both worse). It never
+tested partial sharing, where heads keep independent readouts but may read each
+other's features.
+
+Cost: `3.5x` the free control's positional parameters. Open questions are
+whether a cheaper form retains the gain (low-rank cross-head mixing, mixing at a
+subset of layers, or a shared bottleneck) and whether it survives to 30k.
+
+### Standing frontier after phases 11-15 (5k, h768/d8, seed 123)
+
+| Variant | Loss | Position parameters |
+| --- | ---: | ---: |
+| **head-mixed readout** | **4.26859** | 7,692,288 |
+| wide trunk 256 | 4.28106 | 6,352,896 |
+| free amplitude + free phase | 4.28477 | 2,187,264 |
+| slope + free phase | 4.28827 | 1,804,544 |
+| slope + offset | 4.29601 | 1,413,504 |
+| standard RoPE | 4.41137 | 0 |
+
+## 2026-07-31 — Phase-16 cheap forms of cross-head readout mixing
+
+Six seed-123, 5k cells. `readout_head_mixing` became an enum
+(`none`/`dense`/`lowrank`, with the legacy boolean normalized to
+`none`/`dense`), plus `readout_mix_rank` and `readout_mix_alpha`. The `lowrank`
+mode keeps the per-head readout and adds a rank-`r` cross-head residual,
+initialized LoRA-style: down random with a **rank-independent** fan-in, up zero,
+output scaled by `alpha/rank`. That scaling is the fix for the confound that made
+phase14's angular sweep unreadable -- ranks now differ in capacity rather than in
+effective learning rate. 108 CPU tests pass; eager and compiled CUDA smokes pass.
+
+| Cell | Eval loss | Position parameters | vs free control |
+| --- | ---: | ---: | ---: |
+| dense mixing | **4.26756** | 7,692,288 | **-0.0170** |
+| low-rank r16 | 4.27945 | 2,514,944 | -0.0051 |
+| low-rank r64 | 4.27971 | 3,497,984 | -0.0048 |
+| low-rank r8 | 4.28024 | 2,351,104 | -0.0043 |
+| low-rank r32 | 4.28089 | 2,842,624 | -0.0036 |
+| free control | 4.28451 | 2,187,264 | — |
+
+Dense mixing replicates phase15 (`4.26756` vs `4.26859`, inside the `~0.0015`
+floor), and the free control replicates twice over (`4.28451` / `4.28454` /
+`4.28477`).
+
+**The cheap forms do not work.** Low-rank cross-head residuals recover only
+about a quarter of the dense gain (`~0.005` of `0.0170`), and the result is
+**flat in rank**: `r8` through `r64` span `0.0014`, inside the replication
+floor. Since the rank sweep is now properly scaled, that flatness is a real
+finding rather than an artifact -- adding cross-head rank does not buy anything,
+so whatever dense mixing provides is not a low-rank correction to the
+block-diagonal readout.
+
+This narrows the mechanism. The dense `[groups*hidden -> groups*out]` map is not
+usefully approximated by `block-diagonal + low-rank`, which means its advantage
+is either genuinely high-rank in the cross-head direction, or is an optimization
+property of one large matrix rather than an expressivity property at all --
+mirroring the shared-versus-per-head Q/K gain result from phase13, where merging
+parameters that see more gradient beat splitting them.
+
+Dense cross-head mixing therefore stands as a real but **expensive** win: the
+best 5k loss in the project's SDPA line at `3.5x` the control's positional
+parameters, with no cheaper form found. Untested alternatives that are sparsity
+rather than low rank: mixing within head groups (block size 2 or 4) instead of
+all 8, and dense mixing at only a subset of layers.
+
+### Standing frontier after phases 11-16 (5k, h768/d8, seed 123)
+
+| Variant | Loss | Position parameters |
+| --- | ---: | ---: |
+| **dense cross-head readout mixing** | **4.26756** | 7,692,288 |
+| low-rank cross-head mixing (r16) | 4.27945 | 2,514,944 |
+| wide trunk 256 | 4.28106 | 6,352,896 |
+| free amplitude + free phase | 4.28451 | 2,187,264 |
+| slope + free phase | 4.28827 | 1,804,544 |
+| slope + offset | 4.29601 | 1,413,504 |
+| standard RoPE | 4.41137 | 0 |

@@ -288,8 +288,10 @@ conditioning:
   activation: tanh         # tanh | gelu | linear | scaled_sigmoid
   hidden_dim: 64
   input_mode: content      # content | position | content_position
+  input_normalization: none # none | modality_rms
+  learnable_input_gains: false
   network: linear          # linear | silu_mlp | swiglu_mlp
-  components: phase        # phase | log_gain_phase | amplitude_phase
+  components: phase        # see carrier component modes below
   head_coupling: per_head_independent # shared_head | per_head_independent
   gate_init: 0.0
   target: both             # q | k | both
@@ -328,7 +330,11 @@ cosine/sine synthesis; it never perturbs pair coordinates independently.
 rotary `phase`/`scaled_phase` while remaining on the Q/K path used by fused
 SDPA. It consumes normalized dedicated content, the raw configured
 Fourier/scalar position basis, or their concatenation. `linear`, `silu_mlp`,
-and `swiglu_mlp` networks are available.
+and `swiglu_mlp` networks are available. With
+`input_normalization=modality_rms`, content and position are independently
+scaled to unit RMS over their feature dimensions before concatenation.
+`learnable_input_gains=true` then applies one learned scalar per present
+modality, initialized to one; it is valid only with modality-wise RMS.
 
 Every final projection weight and bias is zero-initialized. There is no output
 RMSNorm on the predicted deltas, because normalization would magnify a tiny
@@ -373,7 +379,25 @@ addend(x,p) = (1 + predicted_scale(x,p))
 Both predicted terms start at exactly zero. This is a raw polar actuator around
 a unit AddRoPE carrier: it is not the mapped-0.3 model (whose position mapper
 learns amplitude and phase), and it is not the positive softplus replacement
-(whose amplitude cannot cross zero).
+(whose amplitude cannot cross zero). Setting `amplitude_init=1` with softplus
+also preserves the exact unit anchor, but changes the local amplitude derivative
+and enforces positivity.
+
+Additional additive component modes retain zero-initialized exact anchors:
+
+- `amplitude` and `phase` isolate one dynamic polar component while the other
+  remains fixed;
+- `cartesian` predicts a complex residual `(1+u)+iv` and multiplies it by the
+  base carrier, so `u=v=0` is exactly `cis(omega*p)`;
+- `frequency_phase` composes
+  `cis((1+delta_frequency)*(omega*p+delta_phase))`; it may pair those dynamic
+  angular components with a directly learned static amplitude vector;
+- `amplitude_phase_frequency` makes all three polar components dynamic using
+  the same frequency-multiplier formula.
+
+Dynamic amplitude or phase cannot overlap a learned static parameter for the
+same component. This preserves the gauge correction while allowing a static
+amplitude vector to be compared with dynamic frequency and phase.
 
 The first matched unit-anchor screen keeps per-head outputs, a shared trunk with
 separate Q/K readouts, one shared normalized content projection, SDPA, and

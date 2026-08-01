@@ -69,6 +69,33 @@ def causal_mask(batch_idx, head_idx, query_idx, key_value_idx):
     return query_idx >= key_value_idx
 
 
+class PerHeadRMSNorm(torch.nn.Module):
+    """RMSNorm over head_dim with an independent learned gain per head.
+
+    Standard Q/K norm shares one ``[head_dim]`` gain across every head. This
+    gives each head its own ``[heads, head_dim]`` gain, initialized to ones so
+    it starts exactly equal to the shared-gain module.
+    """
+
+    def __init__(self, heads: int, head_dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.heads = heads
+        self.head_dim = head_dim
+        self.eps = eps
+        self.weight = torch.nn.Parameter(torch.ones(heads, head_dim))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.shape[-1] != self.head_dim or x.shape[-3] != self.heads:
+            raise ValueError(
+                "PerHeadRMSNorm expects [..., heads, sequence, head_dim], got "
+                f"{tuple(x.shape)}"
+            )
+        scale = torch.rsqrt(
+            x.float().square().mean(dim=-1, keepdim=True) + self.eps
+        ).to(dtype=x.dtype)
+        return x * scale * self.weight[:, None, :].to(dtype=x.dtype)
+
+
 class PositionContentProjection(torch.nn.Module):
     """Dedicated normalized low-rank content for positional mechanisms."""
 
@@ -121,6 +148,7 @@ class Attention(torch.nn.Module):
         attn_impl: AttentionImpl = "sdpa",
         attention_write_config: dict | None = None,
         post_position_qk_norm: bool = False,
+        qk_norm_per_head: bool = False,
         position_content_dim: int = 64,
         position_content_coupling: str = "separate",
         qk_norm_mode: str = "legacy_layernorm",
@@ -136,6 +164,7 @@ class Attention(torch.nn.Module):
         self.rel_extent = rel_extent or max_seq_len
         self.attn_impl = attn_impl
         self.post_position_qk_norm = bool(post_position_qk_norm)
+        self.qk_norm_per_head = bool(qk_norm_per_head)
         if qk_norm_mode not in {"legacy_layernorm", "method_aware_rms"}:
             raise ValueError(
                 "qk_norm_mode must be 'legacy_layernorm' or 'method_aware_rms'"
@@ -290,7 +319,10 @@ class Attention(torch.nn.Module):
             rope_theta=rope_theta,
         )
 
-        if qk_norm:
+        if qk_norm and self.qk_norm_per_head:
+            self.q_norm = PerHeadRMSNorm(heads, self.head_dim, eps=1e-6)
+            self.k_norm = PerHeadRMSNorm(heads, self.head_dim, eps=1e-6)
+        elif qk_norm:
             norm_type = (
                 torch.nn.RMSNorm
                 if qk_norm_mode == "method_aware_rms"
@@ -782,6 +814,7 @@ class TransformerBlock(torch.nn.Module):
         attn_impl: AttentionImpl = "sdpa",
         attention_write_config: dict | None = None,
         post_position_qk_norm: bool = False,
+        qk_norm_per_head: bool = False,
         position_content_dim: int = 64,
         position_content_coupling: str = "separate",
         qk_norm_mode: str = "legacy_layernorm",
@@ -801,6 +834,7 @@ class TransformerBlock(torch.nn.Module):
             attention_write_config=attention_write_config,
             attn_impl=attn_impl,
             post_position_qk_norm=post_position_qk_norm,
+            qk_norm_per_head=qk_norm_per_head,
             position_content_dim=position_content_dim,
             position_content_coupling=position_content_coupling,
             qk_norm_mode=qk_norm_mode,
@@ -836,6 +870,7 @@ class Transformer(torch.nn.Module):
         residual_stream_config: dict | None = None,
         attention_write_config: dict | None = None,
         post_position_qk_norm: bool = False,
+        qk_norm_per_head: bool = False,
         position_content_dim: int = 64,
         position_content_coupling: str = "separate",
         qk_norm_mode: str = "legacy_layernorm",
@@ -895,6 +930,7 @@ class Transformer(torch.nn.Module):
                 attention_write_config=attention_write_config,
                 attn_impl=attn_impl,
                 post_position_qk_norm=post_position_qk_norm,
+                qk_norm_per_head=qk_norm_per_head,
                 position_content_dim=position_content_dim,
                 position_content_coupling=position_content_coupling,
                 qk_norm_mode=qk_norm_mode,

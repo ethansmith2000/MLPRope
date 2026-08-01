@@ -479,6 +479,7 @@ class PositionConfigTest(unittest.TestCase):
 
         invalid_values = {
             "input_mode": "cross_token",
+            "input_normalization": "layer_norm",
             "network": "relu_mlp",
             "components": "gain_only",
             "head_coupling": "per_head_joint",
@@ -494,6 +495,40 @@ class PositionConfigTest(unittest.TestCase):
                     heads=4,
                     rope_theta=10_000.0,
                 )
+
+        normalized_inputs = json.loads(json.dumps(base))
+        normalized_inputs["conditioning"]["input_normalization"] = "modality_rms"
+        normalized_inputs["conditioning"]["learnable_input_gains"] = True
+        normalized_with_gains = normalize_position_config_v2(
+            "qk",
+            normalized_inputs,
+            model_dim=32,
+            heads=4,
+            rope_theta=10_000.0,
+        )
+        self.assertTrue(
+            normalized_with_gains["conditioning"]["learnable_input_gains"]
+        )
+        invalid_gains = json.loads(json.dumps(base))
+        invalid_gains["conditioning"]["learnable_input_gains"] = True
+        with self.assertRaises(ValueError):
+            normalize_position_config_v2(
+                "qk",
+                invalid_gains,
+                model_dim=32,
+                heads=4,
+                rope_theta=10_000.0,
+            )
+        invalid_nonhyper = json.loads(json.dumps(normalized_inputs))
+        invalid_nonhyper["conditioning"]["kind"] = "none"
+        with self.assertRaises(ValueError):
+            normalize_position_config_v2(
+                "qk",
+                invalid_nonhyper,
+                model_dim=32,
+                heads=4,
+                rope_theta=10_000.0,
+            )
 
         dynamic = json.loads(json.dumps(base))
         dynamic["output"]["amplitude_parameterization"] = "softplus"
@@ -852,6 +887,375 @@ class CompatibilityTest(unittest.TestCase):
         self.assertIn("position/layer_00/qk/q/rms", metrics)
         self.assertIn("position/layer_00/qk/qk_diff_rms", metrics)
         self.assertEqual(metrics["position/layer_00/qk/qk_diff_rms"], 0.0)
+
+
+class SpectralCarrierComponentsTest(unittest.TestCase):
+    """Narrow relativity-preserving carrier readouts (slope / position offset)."""
+
+    HEADS = 4
+    HEAD_DIM = 8
+    PAIR_DIM = HEAD_DIM // 2
+
+    def _cfg(self, components, *, amplitude_init=1.0, offset_parameterization="raw", angular_rank=2):
+        return {
+            "enabled": True,
+            "application": "additive",
+            "geometry": "amplitude_phase",
+            "input": {
+                "kind": "frozen_fourier",
+                "basis_dim": 8,
+                "theta": None,
+                "scalars": [],
+            },
+            "output": {
+                "parameter_source": "direct",
+                "learn_amplitude": False,
+                "learn_phase": False,
+                "amplitude_init": amplitude_init,
+                "amplitude_parameterization": "signed",
+            },
+            "conditioning": {
+                "kind": "carrier_hypernetwork",
+                "source": "dedicated",
+                "input_mode": "content_position",
+                "network": "silu_mlp",
+                "components": components,
+                "target": "both",
+                "coupling": "shared_trunk_separate_readouts",
+                "head_coupling": "per_head_independent",
+                "hidden_dim": 16,
+                "offset_parameterization": offset_parameterization,
+                "angular_rank": angular_rank,
+            },
+            "qk_coupling": "shared_trunk_separate_readouts",
+            "head_coupling": "per_head_independent",
+        }
+
+    def _channel(self, components, **kwargs):  # noqa: D401
+        normalized = normalize_position_config_v2(
+            "qk",
+            self._cfg(components, **kwargs),
+            model_dim=self.HEADS * self.HEAD_DIM,
+            heads=self.HEADS,
+            rope_theta=10_000.0,
+        )
+        return _build_qk(
+            normalized,
+            heads=self.HEADS,
+            head_dim=self.HEAD_DIM,
+        )
+
+    def _content(self, length, *, seed=0):
+        generator = torch.Generator().manual_seed(seed)
+        content = torch.randn(
+            2,
+            self.HEADS,
+            length,
+            self.HEAD_DIM,
+            generator=generator,
+        )
+        inverse_rms = torch.rsqrt(content.square().mean(-1, keepdim=True) + 1e-6)
+        return content * inverse_rms
+
+    def test_readout_width_is_one_scalar_per_component(self):
+        PAIR = self.PAIR_DIM
+        expected = {
+            "amplitude_slope": (2, (1, 1)),
+            "position_offset": (1, (1,)),
+            "slope_offset": (3, (1, 1, 1)),
+            # Mixed modes narrow exactly one branch.
+            "amplitude_offset": (PAIR + 1, (PAIR, 1)),
+            "slope_phase": (2 + PAIR, (1, 1, PAIR)),
+            # Factorized angular readout: emits `angular_rank` values, expanded
+            # to pair_dim by a learned basis.
+            "slope_phase_lowrank": (2 + 2, (1, 1, 2)),
+        }
+        for components, (width, widths) in expected.items():
+            with self.subTest(components=components):
+                channel = self._channel(components)
+                hyper = channel.carrier_hypernetwork
+                self.assertTrue(hyper.spectral)
+                self.assertEqual(hyper.component_widths, widths)
+                self.assertEqual(hyper.q_readout.weight.shape[-1], width)
+                # Strictly narrower than the free per-frequency readout.
+                self.assertLess(width, self.PAIR_DIM * 2)
+
+    def test_zero_readout_recovers_exact_rope_anchor(self):
+        length = 6
+        content = self._content(length)
+        other = self._content(length, seed=7)
+        for components in (
+            "amplitude_slope",
+            "position_offset",
+            "slope_offset",
+            "amplitude_offset",
+            "slope_phase",
+            "slope_phase_lowrank",
+        ):
+            with self.subTest(components=components):
+                channel = self._channel(components)
+                # amplitude_init=1 with zeroed readouts must be exactly
+                # 1 * cis(omega * p), independent of the content fed in.
+                expected = torch.cat(
+                    (
+                        channel.base_cos[:length],
+                        channel.base_sin[:length],
+                    ),
+                    dim=-1,
+                )
+                dynamic = channel(
+                    length,
+                    q_content=content,
+                    k_content=content,
+                )
+                torch.testing.assert_close(
+                    dynamic.q,
+                    expected.expand_as(dynamic.q),
+                )
+                torch.testing.assert_close(
+                    dynamic.k,
+                    expected.expand_as(dynamic.k),
+                )
+                shifted = channel(length, q_content=other, k_content=other)
+                torch.testing.assert_close(shifted.q, dynamic.q)
+
+    def test_position_offset_is_a_pure_position_shift(self):
+        """phase = omega * m must equal evaluating the carrier at p + m."""
+        shift = 3.0
+        for parameterization, raw_value in (
+            ("raw", shift),
+            ("softplus", math.log(math.expm1(1.0 + shift)) - math.log(math.e - 1.0)),
+            ("tanh", math.atanh(shift / 8.0)),
+        ):
+            with self.subTest(parameterization=parameterization):
+                self._check_shift(parameterization, raw_value, shift)
+
+    def _check_shift(self, parameterization, raw_value, shift):
+        channel = self._channel(
+            "position_offset",
+            offset_parameterization=parameterization,
+        )
+        hyper = channel.carrier_hypernetwork
+        omega = hyper.spectral_omega
+        raw = torch.full((1, self.HEADS, 5, 1), raw_value)
+        phase = hyper._parse(raw).phase
+        expected = shift * omega
+        torch.testing.assert_close(
+            phase,
+            expected.expand_as(phase),
+            atol=1e-5,
+            rtol=1e-4,
+        )
+        # A shift of m advances the carrier angle by exactly omega*m, i.e. it is
+        # the carrier evaluated at position p+m -- so the logit still depends
+        # only on the difference of shifted positions.
+        positions = torch.arange(5, dtype=torch.float32)[:, None]
+        base = positions * omega[None, :]
+        torch.testing.assert_close(
+            base + phase[0, 0],
+            (positions + shift) * omega[None, :],
+            atol=1e-5,
+            rtol=1e-4,
+        )
+
+    def test_amplitude_slope_tilts_across_log_frequency(self):
+        channel = self._channel("amplitude_slope")
+        hyper = channel.carrier_hypernetwork
+        tilt = hyper.spectral_tilt
+        # Zero mean, unit scale, and monotone decreasing in frequency index
+        # (omega decreases with index for the standard RoPE schedule).
+        self.assertAlmostEqual(float(tilt.mean()), 0.0, places=5)
+        self.assertAlmostEqual(float(tilt.std(unbiased=False)), 1.0, places=5)
+        self.assertTrue(bool((tilt[1:] < tilt[:-1]).all()))
+        raw = torch.zeros(1, self.HEADS, 3, 2)
+        raw[..., 1] = 0.5  # slope only
+        amplitude = hyper._parse(raw).amplitude
+        torch.testing.assert_close(
+            amplitude,
+            (0.5 * tilt).expand_as(amplitude),
+            atol=1e-5,
+            rtol=1e-4,
+        )
+        raw2 = torch.zeros(1, self.HEADS, 3, 2)
+        raw2[..., 0] = 0.25  # gain only -> flat across frequency
+        flat = hyper._parse(raw2).amplitude
+        self.assertTrue(
+            bool((flat - flat[..., :1]).abs().max() < 1e-6)
+        )
+
+    def test_gradients_reach_narrow_readouts_and_differ_across_qk(self):
+        length = 6
+        content = self._content(length, seed=1)
+        channel = self._channel("slope_offset")
+        with torch.no_grad():
+            for readout in (
+                channel.carrier_hypernetwork.q_readout,
+                channel.carrier_hypernetwork.k_readout,
+            ):
+                readout.weight.normal_(std=0.02)
+        output = channel(length, q_content=content, k_content=content)
+        (output.q.pow(2).sum() - output.k.pow(2).sum()).backward()
+        q_grad = channel.carrier_hypernetwork.q_readout.weight.grad
+        k_grad = channel.carrier_hypernetwork.k_readout.weight.grad
+        self.assertIsNotNone(q_grad)
+        self.assertIsNotNone(k_grad)
+        self.assertFalse(torch.allclose(q_grad, k_grad))
+
+    def test_low_rank_angular_expands_to_pair_dim(self):
+        channel = self._channel("slope_phase_lowrank", angular_rank=2)
+        hyper = channel.carrier_hypernetwork
+        self.assertEqual(hyper.angular_basis.shape, (self.HEADS, 2, self.PAIR_DIM))
+        raw = torch.zeros(1, self.HEADS, 4, 2 + 2)
+        raw[..., 2:] = 0.5
+        phase = hyper._parse(raw).phase
+        self.assertEqual(phase.shape[-1], self.PAIR_DIM)
+        # Rank-2 output cannot be an arbitrary pair_dim vector: it must lie in
+        # the row space of the learned basis.
+        expected = torch.einsum(
+            "bglr,grd->bgld", raw[..., 2:], hyper.angular_basis
+        )
+        torch.testing.assert_close(phase, expected)
+
+    def test_readout_head_mixing_keeps_anchor_and_mixes_heads(self):
+        length = 6
+        content = self._content(length, seed=3)
+        cfg = self._cfg("amplitude_phase")
+        cfg["conditioning"]["readout_head_mixing"] = True
+        normalized = normalize_position_config_v2(
+            "qk",
+            cfg,
+            model_dim=self.HEADS * self.HEAD_DIM,
+            heads=self.HEADS,
+            rope_theta=10_000.0,
+        )
+        channel = _build_qk(normalized, heads=self.HEADS, head_dim=self.HEAD_DIM)
+        hyper = channel.carrier_hypernetwork
+        self.assertTrue(hyper.readout_head_mixing)
+        # One dense [groups*hidden, groups*out] map rather than a batch of
+        # per-head matrices.
+        self.assertEqual(hyper.q_readout.weight.shape[0], 1)
+        self.assertEqual(
+            hyper.q_readout.weight.shape[-1],
+            self.HEADS * hyper.readout_output_dim,
+        )
+        # Still starts at the exact carrier.
+        expected = torch.cat(
+            (channel.base_cos[:length], channel.base_sin[:length]), dim=-1
+        )
+        out = channel(length, q_content=content, k_content=content)
+        torch.testing.assert_close(out.q, expected.expand_as(out.q))
+
+        # With mixing on, perturbing one head's trunk features must be able to
+        # change another head's output.
+        with torch.no_grad():
+            hyper.q_readout.weight.normal_(std=0.05)
+        mixed = channel(length, q_content=content, k_content=content)
+        self.assertFalse(torch.allclose(mixed.q, expected.expand_as(mixed.q)))
+
+    def test_lowrank_head_mixing_anchor_and_rank_independent_scale(self):
+        length = 6
+        content = self._content(length, seed=5)
+        for rank in (2, 4):
+            with self.subTest(rank=rank):
+                cfg = self._cfg("amplitude_phase")
+                cfg["conditioning"]["readout_head_mixing"] = "lowrank"
+                cfg["conditioning"]["readout_mix_rank"] = rank
+                cfg["conditioning"]["readout_mix_alpha"] = 4.0
+                normalized = normalize_position_config_v2(
+                    "qk", cfg,
+                    model_dim=self.HEADS * self.HEAD_DIM,
+                    heads=self.HEADS, rope_theta=10_000.0,
+                )
+                channel = _build_qk(
+                    normalized, heads=self.HEADS, head_dim=self.HEAD_DIM
+                )
+                readout = channel.carrier_hypernetwork.q_readout
+                # LoRA convention: up is zero, down is random with a fan-in
+                # that does not depend on rank.
+                self.assertEqual(readout.rank, rank)
+                self.assertTrue(bool((readout.up == 0).all()))
+                self.assertFalse(bool((readout.down == 0).all()))
+                self.assertAlmostEqual(readout.scale, 4.0 / rank, places=6)
+                # Down-matrix scale must be rank-independent.
+                self.assertAlmostEqual(
+                    float(readout.down.std()),
+                    (2.0 / (self.HEADS * 16)) ** 0.5,
+                    delta=0.05,
+                )
+                # Exact carrier anchor despite the extra path.
+                expected = torch.cat(
+                    (channel.base_cos[:length], channel.base_sin[:length]),
+                    dim=-1,
+                )
+                out = channel(length, q_content=content, k_content=content)
+                torch.testing.assert_close(out.q, expected.expand_as(out.q))
+                # reset_output_parameters must restore the anchor too.
+                with torch.no_grad():
+                    readout.up.normal_(std=0.1)
+                channel.carrier_hypernetwork.reset_output_parameters()
+                reset = channel(length, q_content=content, k_content=content)
+                torch.testing.assert_close(reset.q, expected.expand_as(reset.q))
+
+    def test_lowrank_mixing_is_cheaper_than_dense(self):
+        def count(mode):
+            cfg = self._cfg("amplitude_phase")
+            cfg["conditioning"]["readout_head_mixing"] = mode
+            cfg["conditioning"]["readout_mix_rank"] = 4
+            normalized = normalize_position_config_v2(
+                "qk", cfg,
+                model_dim=self.HEADS * self.HEAD_DIM,
+                heads=self.HEADS, rope_theta=10_000.0,
+            )
+            channel = _build_qk(
+                normalized, heads=self.HEADS, head_dim=self.HEAD_DIM
+            )
+            return sum(p.numel() for p in channel.parameters())
+
+        self.assertLess(count("none"), count("lowrank"))
+        self.assertLess(count("lowrank"), count("dense"))
+
+    def test_schema_rejections(self):
+        with self.assertRaises(ValueError):
+            bad = self._cfg("amplitude_slope")
+            bad["output"]["learn_amplitude"] = True
+            normalize_position_config_v2(
+                "qk",
+                bad,
+                model_dim=self.HEADS * self.HEAD_DIM,
+                heads=self.HEADS,
+                rope_theta=10_000.0,
+            )
+        with self.assertRaises(ValueError):
+            bad = self._cfg("position_offset")
+            bad["output"]["learn_phase"] = True
+            normalize_position_config_v2(
+                "qk",
+                bad,
+                model_dim=self.HEADS * self.HEAD_DIM,
+                heads=self.HEADS,
+                rope_theta=10_000.0,
+            )
+        with self.assertRaises(ValueError):
+            bad = self._cfg("slope_offset")
+            bad["conditioning"]["offset_bound"] = 0.0
+            normalize_position_config_v2(
+                "qk",
+                bad,
+                model_dim=self.HEADS * self.HEAD_DIM,
+                heads=self.HEADS,
+                rope_theta=10_000.0,
+            )
+        with self.assertRaises(ValueError):
+            bad = self._cfg("amplitude_slope")
+            bad["application"] = "rotary"
+            bad["geometry"] = "phase"
+            normalize_position_config_v2(
+                "qk",
+                bad,
+                model_dim=self.HEADS * self.HEAD_DIM,
+                heads=self.HEADS,
+                rope_theta=10_000.0,
+            )
 
 
 if __name__ == "__main__":

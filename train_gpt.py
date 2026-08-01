@@ -171,6 +171,8 @@ DEFAULT_CONFIG = {
     "rope_theta": 10000.0,
     "qk_norm": True,
     "post_position_qk_norm": False,
+    "qk_norm_per_head": False,
+    "exclude_position_from_decay": False,
     "qk_norm_mode": "legacy_layernorm",
     "position_content_dim": 64,
     "position_content_coupling": "separate",
@@ -290,6 +292,7 @@ def position_run_tag(cfg: dict) -> str:
                 "n_head": cfg["n_head"],
                 "use_rope": cfg["use_rope"],
                 "post_position_qk_norm": cfg["post_position_qk_norm"],
+                "qk_norm_per_head": cfg["qk_norm_per_head"],
                 "qk_norm_mode": cfg["qk_norm_mode"],
                 "position_content_dim": cfg["position_content_dim"],
                 "position_content_coupling": cfg[
@@ -443,6 +446,10 @@ def load_config(cli_args):
         raise TypeError("use_rope must be a boolean")
     if not isinstance(cfg["post_position_qk_norm"], bool):
         raise TypeError("post_position_qk_norm must be a boolean")
+    if not isinstance(cfg["qk_norm_per_head"], bool):
+        raise TypeError("qk_norm_per_head must be a boolean")
+    if not isinstance(cfg["exclude_position_from_decay"], bool):
+        raise TypeError("exclude_position_from_decay must be a boolean")
     if cfg["qk_norm_mode"] not in {
         "legacy_layernorm",
         "method_aware_rms",
@@ -683,6 +690,7 @@ def make_model(args, vocab_size):
         rope_theta=args.rope_theta,
         qk_norm=args.qk_norm,
         post_position_qk_norm=args.post_position_qk_norm,
+        qk_norm_per_head=args.qk_norm_per_head,
         qk_norm_mode=args.qk_norm_mode,
         position_content_dim=args.position_content_dim,
         position_content_coupling=args.position_content_coupling,
@@ -695,15 +703,33 @@ def make_model(args, vocab_size):
     )
 
 
+# Parameters whose meaningful anchor is not zero. Decaying these does not
+# shrink "large weights", it pulls the mechanism back to its no-op: the carrier
+# readouts are zero-initialized so that the channel starts at exactly
+# cis(omega*p), and decay toward zero is a prior against using the channel at
+# all. Static learned amplitudes anchored at 0.3 or 1.0 have the same problem.
+POSITION_DECAY_EXEMPT = (
+    "qk_position",
+    "logit_bias_position",
+    "position_content",
+    "carrier_hypernetwork",
+)
+
+
 def make_optimizer(args, model):
     if args.optimizer != "adamw":
         raise ValueError("Only AdamW is supported.")
     no_decay = ("bias", "norm")
+    exempt_position = bool(getattr(args, "exclude_position_from_decay", False))
     grouped = {}
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        wd = 0.0 if any(nd in name for nd in no_decay) else args.weight_decay
+        exempt = any(nd in name for nd in no_decay) or (
+            exempt_position
+            and any(tag in name for tag in POSITION_DECAY_EXEMPT)
+        )
+        wd = 0.0 if exempt else args.weight_decay
         grouped.setdefault(wd, []).append(param)
     param_groups = [{"params": params, "weight_decay": wd} for wd, params in grouped.items()]
     return torch.optim.AdamW(
@@ -988,6 +1014,8 @@ def main():
             "attention_write": args.attention_write,
             "use_rope": args.use_rope,
             "post_position_qk_norm": args.post_position_qk_norm,
+            "qk_norm_per_head": args.qk_norm_per_head,
+            "exclude_position_from_decay": args.exclude_position_from_decay,
             "qk_norm_mode": args.qk_norm_mode,
             "position_content_dim": args.position_content_dim,
             "position_content_coupling": args.position_content_coupling,

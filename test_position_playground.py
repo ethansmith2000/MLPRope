@@ -46,6 +46,8 @@ def qk_config(
     conditioning_static_complement: bool = False,
     phase_bound: float = 0.25,
     conditioning_input_mode: str = "content",
+    conditioning_input_normalization: str = "none",
+    conditioning_learnable_input_gains: bool = False,
     conditioning_network: str = "linear",
     conditioning_components: str = "phase",
     conditioning_head_coupling: str = "per_head_independent",
@@ -99,6 +101,8 @@ def qk_config(
                 "phase_bound": phase_bound,
                 "hidden_dim": 12,
                 "input_mode": conditioning_input_mode,
+                "input_normalization": conditioning_input_normalization,
+                "learnable_input_gains": conditioning_learnable_input_gains,
                 "network": conditioning_network,
                 "components": conditioning_components,
                 "head_coupling": conditioning_head_coupling,
@@ -580,6 +584,149 @@ class GeometryAndContentTest(unittest.TestCase):
         scale_gradient, phase_gradient = gradient.split(4, dim=-1)
         self.assertGreater(scale_gradient.abs().sum().item(), 0)
         self.assertGreater(phase_gradient.abs().sum().item(), 0)
+
+    def test_hypernetwork_modality_rms_and_learnable_gains(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_input_mode="content_position",
+            conditioning_input_normalization="modality_rms",
+            conditioning_learnable_input_gains=True,
+            conditioning_components="amplitude_phase",
+            amplitude_parameterization="signed",
+            amplitude_init=1.0,
+            parameter_source="direct",
+            learn_amplitude=False,
+            learn_phase=False,
+        )
+        channel = self._channel(config)
+        hyper = channel.carrier_hypernetwork
+        self.assertEqual(hyper.content_input_gain.item(), 1.0)
+        self.assertEqual(hyper.position_input_gain.item(), 1.0)
+        content = torch.randn(2, 4, 9, 8) * 7.0
+        position = channel._hyper_position_features(9, dtype=content.dtype)
+        inputs = hyper._inputs(content, position)
+        content_inputs = inputs[..., :8]
+        position_inputs = inputs[..., 8:]
+        torch.testing.assert_close(
+            content_inputs.square().mean(dim=-1),
+            torch.ones_like(content_inputs[..., 0]),
+            rtol=2e-5,
+            atol=2e-5,
+        )
+        torch.testing.assert_close(
+            position_inputs.square().mean(dim=-1),
+            torch.ones_like(position_inputs[..., 0]),
+            rtol=2e-5,
+            atol=2e-5,
+        )
+        with torch.no_grad():
+            hyper.content_input_gain.fill_(2.0)
+            hyper.position_input_gain.fill_(0.5)
+        scaled = hyper._inputs(content, position)
+        torch.testing.assert_close(scaled[..., :8], content_inputs * 2.0)
+        torch.testing.assert_close(scaled[..., 8:], position_inputs * 0.5)
+
+    def test_hyperaddrope_output_geometries_preserve_anchor_and_gradients(self):
+        modes = {
+            "amplitude": (False, False),
+            "phase": (False, False),
+            "amplitude_phase": (False, False),
+            "cartesian": (False, False),
+            "frequency_phase": (True, False),
+            "amplitude_phase_frequency": (False, False),
+        }
+        content = torch.randn(2, 4, 9, 8)
+        for components, (learn_amplitude, learn_phase) in modes.items():
+            with self.subTest(components=components):
+                config = qk_config(
+                    "additive",
+                    "amplitude_phase",
+                    qk_coupling="shared_trunk_separate_readouts",
+                    conditioning="carrier_hypernetwork",
+                    conditioning_source="dedicated",
+                    conditioning_input_mode="content_position",
+                    conditioning_components=components,
+                    amplitude_parameterization="signed",
+                    amplitude_init=1.0,
+                    parameter_source="direct",
+                    learn_amplitude=learn_amplitude,
+                    learn_phase=learn_phase,
+                )
+                channel = self._channel(config)
+                output = channel(9, q_content=content, k_content=content)
+                expected = torch.cat(
+                    (channel.base_cos[:9], channel.base_sin[:9]),
+                    dim=-1,
+                )[None, None].expand(2, 4, -1, -1)
+                torch.testing.assert_close(output.q, expected)
+                torch.testing.assert_close(output.k, expected)
+                target = torch.randn_like(output.q)
+                (output.q * target).sum().backward()
+                gradient = channel.carrier_hypernetwork.q_readout.weight.grad
+                for chunk in gradient.split(4, dim=-1):
+                    self.assertGreater(chunk.abs().sum().item(), 0)
+
+    def test_frequency_multiplier_uses_unwrapped_base_angle(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_input_mode="content_position",
+            conditioning_components="frequency_phase",
+            amplitude_init=1.0,
+            parameter_source="direct",
+            learn_amplitude=True,
+            learn_phase=False,
+        )
+        channel = self._channel(config)
+        hyper = channel.carrier_hypernetwork
+        with torch.no_grad():
+            hyper.q_readout.bias[:, :4].fill_(0.25)
+            hyper.q_readout.bias[:, 4:].fill_(0.1)
+        content = torch.randn(2, 4, 9, 8)
+        output = channel(9, q_content=content, k_content=content)
+        expected_angle = 1.25 * (channel.base_angle[:9] + 0.1)
+        expected = torch.cat(
+            (expected_angle.cos(), expected_angle.sin()),
+            dim=-1,
+        )[None, None].expand(2, 4, -1, -1)
+        torch.testing.assert_close(output.q, expected)
+
+    def test_cartesian_residual_multiplies_base_carrier(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            qk_coupling="shared_trunk_separate_readouts",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_input_mode="content_position",
+            conditioning_components="cartesian",
+            amplitude_init=1.0,
+            parameter_source="direct",
+            learn_amplitude=False,
+            learn_phase=False,
+        )
+        channel = self._channel(config)
+        hyper = channel.carrier_hypernetwork
+        with torch.no_grad():
+            hyper.q_readout.bias[:, :4].fill_(0.2)
+            hyper.q_readout.bias[:, 4:].fill_(-0.1)
+        content = torch.randn(2, 4, 9, 8)
+        output = channel(9, q_content=content, k_content=content)
+        base_cos = channel.base_cos[:9]
+        base_sin = channel.base_sin[:9]
+        expected = torch.cat(
+            (1.2 * base_cos + 0.1 * base_sin,
+             1.2 * base_sin - 0.1 * base_cos),
+            dim=-1,
+        )[None, None].expand(2, 4, -1, -1)
+        torch.testing.assert_close(output.q, expected)
 
     def test_unit_anchor_shared_content_keeps_separate_qk_readouts(self):
         config = qk_config(

@@ -21,7 +21,7 @@ LOG_DIR="${SCRIPT_DIR}/logs"
 CONFIG_DIR="${SCRIPT_DIR}/sweep_configs"
 WANDB_PROJECT="${WANDB_PROJECT:-mlprope-position-bias}"
 WANDB_ENTITY="${WANDB_ENTITY:-ethansmith2000}"
-EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | ... | phase9_qk_independence | phase9_hyper_capacity | individual | all
+EXPERIMENT_FAMILY="${EXPERIMENT_FAMILY:-phase1}" # phase1 | ... | phase9_hyper_capacity | phase10_hyper_geometry | phase11_spectral | phase12_offset_qknorm | phase13_decomp_qknorm | phase14_angular_rank | phase15_decay_mixing | phase16_cheap_mixing | individual | all
 if [[ "${EXPERIMENT_FAMILY}" == "phase1b" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1b"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase1c" ]]; then
@@ -98,6 +98,20 @@ elif [[ "${EXPERIMENT_FAMILY}" == "phase9_qk_independence" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase9_qk_independence"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase9_hyper_capacity" ]]; then
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase9_hyper_capacity"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase10_hyper_geometry" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase10_hyper_geometry"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase11_spectral" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase11_spectral"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase12_offset_qknorm" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase12_offset_qknorm"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase13_decomp_qknorm" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase13_decomp_qknorm"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase14_angular_rank" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase14_angular_rank"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase15_decay_mixing" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase15_decay_mixing"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase16_cheap_mixing" ]]; then
+  DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase16_cheap_mixing"
 else
   DEFAULT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase1"
 fi
@@ -148,7 +162,14 @@ if [[ -z "${GPU_SELECTOR:-}" ]]; then
     || "${EXPERIMENT_FAMILY}" == "phase9_carrier_followup" \
     || "${EXPERIMENT_FAMILY}" == "phase9_hyper_30k" \
     || "${EXPERIMENT_FAMILY}" == "phase9_qk_independence" \
-    || "${EXPERIMENT_FAMILY}" == "phase9_hyper_capacity" ]]; then
+    || "${EXPERIMENT_FAMILY}" == "phase9_hyper_capacity" \
+    || "${EXPERIMENT_FAMILY}" == "phase10_hyper_geometry" \
+    || "${EXPERIMENT_FAMILY}" == "phase11_spectral" \
+    || "${EXPERIMENT_FAMILY}" == "phase12_offset_qknorm" \
+    || "${EXPERIMENT_FAMILY}" == "phase13_decomp_qknorm" \
+    || "${EXPERIMENT_FAMILY}" == "phase14_angular_rank" \
+    || "${EXPERIMENT_FAMILY}" == "phase15_decay_mixing" \
+    || "${EXPERIMENT_FAMILY}" == "phase16_cheap_mixing" ]]; then
     GPU_SELECTOR="any"
   else
     GPU_SELECTOR="6,7"
@@ -227,6 +248,20 @@ elif [[ "${EXPERIMENT_FAMILY}" == "phase9_qk_independence" ]]; then
   CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase9_qk_independence"
 elif [[ "${EXPERIMENT_FAMILY}" == "phase9_hyper_capacity" ]]; then
   CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase9_hyper_capacity"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase10_hyper_geometry" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase10_hyper_geometry"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase11_spectral" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase11_spectral"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase12_offset_qknorm" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase12_offset_qknorm"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase13_decomp_qknorm" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase13_decomp_qknorm"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase14_angular_rank" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase14_angular_rank"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase15_decay_mixing" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase15_decay_mixing"
+elif [[ "${EXPERIMENT_FAMILY}" == "phase16_cheap_mixing" ]]; then
+  CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase16_cheap_mixing"
 fi
 PIDS=()
 JOB_NAMES=()
@@ -587,16 +622,25 @@ v2_unit_hyper_qk_json() {
   local conditioning_coupling="${6:-shared_trunk_separate_readouts}"
   local conditioning_head_coupling="${7:-per_head_independent}"
   local conditioning_hidden_dim="${8:-64}"
+  local amplitude_parameterization="${9:-signed}"
+  local components="${10:-amplitude_phase}"
+  local input_normalization="${11:-none}"
+  local learnable_input_gains="${12:-false}"
+  local learn_static_amplitude="${13:-false}"
+  local offset_parameterization="${14:-raw}"
+  local angular_rank="${15:-8}"
+  local readout_head_mixing="${16:-none}"
+  local readout_mix_rank="${17:-32}"
   local learn_amplitude=true
   local learn_phase=true
   local conditioning='{"kind": "none"}'
   if [[ "${mode}" == "hyper" ]]; then
-    learn_amplitude=false
+    learn_amplitude="${learn_static_amplitude}"
     learn_phase=false
-    conditioning="{\"kind\": \"carrier_hypernetwork\", \"source\": \"dedicated\", \"hidden_dim\": ${conditioning_hidden_dim}, \"input_mode\": \"${input_mode}\", \"network\": \"${network}\", \"components\": \"amplitude_phase\", \"target\": \"${target}\", \"coupling\": \"${conditioning_coupling}\", \"static_complement\": ${static_complement}, \"head_coupling\": \"${conditioning_head_coupling}\"}"
+    conditioning="{\"kind\": \"carrier_hypernetwork\", \"source\": \"dedicated\", \"hidden_dim\": ${conditioning_hidden_dim}, \"input_mode\": \"${input_mode}\", \"input_normalization\": \"${input_normalization}\", \"learnable_input_gains\": ${learnable_input_gains}, \"network\": \"${network}\", \"components\": \"${components}\", \"target\": \"${target}\", \"coupling\": \"${conditioning_coupling}\", \"static_complement\": ${static_complement}, \"head_coupling\": \"${conditioning_head_coupling}\", \"offset_parameterization\": \"${offset_parameterization}\", \"angular_rank\": ${angular_rank}, \"readout_head_mixing\": \"${readout_head_mixing}\", \"readout_mix_rank\": ${readout_mix_rank}}"
   fi
   cat <<JSON
-{"enabled": true, "application": "additive", "geometry": "amplitude_phase", "input": {"kind": "frozen_fourier", "basis_dim": 16, "theta": null, "scalars": ["normalized_position", "log_position"]}, "mapper": {"kind": "linear", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "output": {"parameter_source": "direct", "amplitude_init": 1.0, "amplitude_parameterization": "signed", "learn_amplitude": ${learn_amplitude}, "learn_phase": ${learn_phase}, "phase_scale": 1.0, "additive_normalization": "none"}, "conditioning": ${conditioning}, "qk_coupling": "shared_trunk_separate_readouts", "head_coupling": "per_head_independent"}
+{"enabled": true, "application": "additive", "geometry": "amplitude_phase", "input": {"kind": "frozen_fourier", "basis_dim": 16, "theta": null, "scalars": ["normalized_position", "log_position"]}, "mapper": {"kind": "linear", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "output": {"parameter_source": "direct", "amplitude_init": 1.0, "amplitude_parameterization": "${amplitude_parameterization}", "learn_amplitude": ${learn_amplitude}, "learn_phase": ${learn_phase}, "phase_scale": 1.0, "additive_normalization": "none"}, "conditioning": ${conditioning}, "qk_coupling": "shared_trunk_separate_readouts", "head_coupling": "per_head_independent"}
 JSON
 }
 
@@ -880,6 +924,48 @@ want_phase9_qk_independence_family() {
 want_phase9_hyper_capacity_family() {
   local family="$1"
   [[ "${EXPERIMENT_FAMILY}" == "phase9_hyper_capacity" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase10_hyper_geometry_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase10_hyper_geometry" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase16_cheap_mixing_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase16_cheap_mixing" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase15_decay_mixing_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase15_decay_mixing" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase14_angular_rank_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase14_angular_rank" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase13_decomp_qknorm_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase13_decomp_qknorm" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase12_offset_qknorm_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase12_offset_qknorm" \
+    || "${EXPERIMENT_FAMILY}" == "${family}" ]]
+}
+
+want_phase11_spectral_family() {
+  local family="$1"
+  [[ "${EXPERIMENT_FAMILY}" == "phase11_spectral" \
     || "${EXPERIMENT_FAMILY}" == "${family}" ]]
 }
 
@@ -2558,6 +2644,341 @@ if want_phase9_hyper_capacity_family "hyper_capacity_5k_story"; then
     cfg_file="${CONFIG_DIR}/${job_name}.json"
     write_common_config "${cfg_file}" \
       "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"position_content_dim\": ${content_dim}, \"position_content_coupling\": \"shared\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Normalization/output-geometry micro-screen around the c128/h64
+# HyperAddRoPE structural default. All hypernetwork readouts start at an exact
+# unit RoPE carrier; each arm changes only the named input/output geometry axis.
+if want_phase10_hyper_geometry_family "hyper_geometry_5k_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  mapped_qk="$(v2_promoted_qk_json amplitude_phase 16)"
+  polar_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+      shared_trunk_separate_readouts per_head_independent 64 \
+      signed amplitude_phase none false false
+  )"
+  modality_rms_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+      shared_trunk_separate_readouts per_head_independent 64 \
+      signed amplitude_phase modality_rms false false
+  )"
+  modality_rms_gains_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+      shared_trunk_separate_readouts per_head_independent 64 \
+      signed amplitude_phase modality_rms true false
+  )"
+  softplus_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+      shared_trunk_separate_readouts per_head_independent 64 \
+      softplus amplitude_phase none false false
+  )"
+  cartesian_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+      shared_trunk_separate_readouts per_head_independent 64 \
+      signed cartesian none false false
+  )"
+  full_frequency_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+      shared_trunk_separate_readouts per_head_independent 64 \
+      signed amplitude_phase_frequency none false false
+  )"
+  static_amplitude_frequency_phase_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+      shared_trunk_separate_readouts per_head_independent 64 \
+      signed frequency_phase none false true
+  )"
+  amplitude_only_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+      shared_trunk_separate_readouts per_head_independent 64 \
+      signed amplitude none false false
+  )"
+  phase_only_qk="$(
+    v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+      shared_trunk_separate_readouts per_head_independent 64 \
+      signed phase none false false
+  )"
+
+  for spec in \
+    "standard-rope|legacy_layernorm|${disabled_channel}" \
+    "mapped-addrope-a03|method_aware_rms|${mapped_qk}" \
+    "polar-signed-control|method_aware_rms|${polar_qk}" \
+    "polar-modality-rms|method_aware_rms|${modality_rms_qk}" \
+    "polar-modality-rms-gains|method_aware_rms|${modality_rms_gains_qk}" \
+    "polar-softplus|method_aware_rms|${softplus_qk}" \
+    "cartesian-residual|method_aware_rms|${cartesian_qk}" \
+    "polar-amplitude-phase-frequency|method_aware_rms|${full_frequency_qk}" \
+    "static-amplitude-frequency-phase|method_aware_rms|${static_amplitude_frequency_phase_qk}" \
+    "polar-amplitude-only|method_aware_rms|${amplitude_only_qk}" \
+    "polar-phase-only|method_aware_rms|${phase_only_qk}"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    qk_norm_mode="${remainder%%|*}"
+    qk_json="${remainder#*|}"
+    job_name="phase10-geometry-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"${qk_norm_mode}\", \"post_position_qk_norm\": false, \"position_content_dim\": 128, \"position_content_coupling\": \"shared\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# Narrow spectral readouts around the c128/h64 HyperAddRoPE default. phase10
+# showed the carrier gain lives in the amplitude branch (amplitude-only 4.3024
+# vs full 4.2840, phase-only 4.4348) and that a content-conditioned frequency
+# multiplier is destructive (4.5369), because content-dependent omega makes the
+# logit depend on absolute position with error growing as m*p.
+#
+# Both new arms are translation-invariant by construction:
+#   amplitude_slope  - 2 scalars/head tilt the amplitude envelope across
+#                      log-frequency (a locality / decay-rate control);
+#   position_offset  - 1 scalar/head sets phase = omega*m, which is exactly
+#                      cis(omega*((p+m_q)-(p+m_k))), i.e. a content-dependent
+#                      shift of effective position rather than a free phase.
+# Free per-frequency controls are re-run in-family so the delta is measured
+# against identical conditions rather than across families.
+if want_phase11_spectral_family "spectral_5k_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  hyper_args=(hyper content_position silu_mlp both false
+    shared_trunk_separate_readouts per_head_independent 64 signed)
+  full_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" amplitude_phase none false false)"
+  amplitude_only_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" amplitude none false false)"
+  amplitude_slope_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" amplitude_slope none false false)"
+  position_offset_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" position_offset none false false)"
+  slope_offset_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" slope_offset none false false)"
+
+  for spec in \
+    "standard-rope|legacy_layernorm|${disabled_channel}" \
+    "free-amplitude-phase-control|method_aware_rms|${full_qk}" \
+    "free-amplitude-only|method_aware_rms|${amplitude_only_qk}" \
+    "amplitude-slope|method_aware_rms|${amplitude_slope_qk}" \
+    "position-offset|method_aware_rms|${position_offset_qk}" \
+    "slope-offset|method_aware_rms|${slope_offset_qk}"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    qk_norm_mode="${remainder%%|*}"
+    qk_json="${remainder#*|}"
+    job_name="phase11-spectral-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"${qk_norm_mode}\", \"post_position_qk_norm\": false, \"position_content_dim\": 128, \"position_content_coupling\": \"shared\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# phase11 follow-up. Three axes, all against re-run phase11 controls:
+#   (a) offset parameterization -- phase11 used bound*tanh(raw); tanh saturates
+#       and compresses the integer-token scale the offset actually lives on, so
+#       `raw` (unbounded signed) and `softplus(z + log(e-1)) - 1` (zero-anchored,
+#       positive-leaning, lower-bounded at -1) are tested instead;
+#   (b) compression decomposition -- phase11's slope+offset narrows the
+#       amplitude readout (48->2) and the angular readout (48->1) at once, so
+#       its 0.0112 gap cannot be attributed. One arm narrows each in isolation;
+#   (c) per-head Q/K norm -- [heads, head_dim] gains instead of one shared
+#       [head_dim], on plain RoPE and on the free carrier control.
+if want_phase12_offset_qknorm_family "offset_qknorm_5k_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  hyper_args=(hyper content_position silu_mlp both false
+    shared_trunk_separate_readouts per_head_independent 64 signed)
+  full_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" amplitude_phase none false false raw)"
+  offset_raw_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" position_offset none false false raw)"
+  offset_softplus_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" position_offset none false false softplus)"
+  slope_offset_raw_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" slope_offset none false false raw)"
+  slope_offset_softplus_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" slope_offset none false false softplus)"
+  warp_qk="$(v2_unit_hyper_qk_json hyper position silu_mlp both false \
+    shared_trunk_separate_readouts per_head_independent 64 signed \
+    position_offset none false false raw)"
+
+  # label|qk_norm_mode|per_head_qk_norm|qk_json
+  for spec in \
+    "offset-raw|method_aware_rms|false|${offset_raw_qk}" \
+    "offset-softplus|method_aware_rms|false|${offset_softplus_qk}" \
+    "slope-offset-raw|method_aware_rms|false|${slope_offset_raw_qk}" \
+    "slope-offset-softplus|method_aware_rms|false|${slope_offset_softplus_qk}" \
+    "position-warp-offset|method_aware_rms|false|${warp_qk}" \
+    "qknorm-perhead-rope|legacy_layernorm|true|${disabled_channel}" \
+    "qknorm-perhead-free-carrier|method_aware_rms|true|${full_qk}"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    qk_norm_mode="${remainder%%|*}"
+    remainder="${remainder#*|}"
+    per_head_qk_norm="${remainder%%|*}"
+    qk_json="${remainder#*|}"
+    job_name="phase12-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"${qk_norm_mode}\", \"post_position_qk_norm\": false, \"qk_norm_per_head\": ${per_head_qk_norm}, \"position_content_dim\": 128, \"position_content_coupling\": \"shared\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# (1) De-confounded per-head Q/K norm: phase12 compared PerHeadRMSNorm against a
+#     legacy_layernorm baseline, mixing per-head gains with a LayerNorm ->
+#     RMSNorm change. LayerNorm centers, which is not a typical Q/K choice, so
+#     both cells here use RMSNorm and differ only in shared vs per-head gains.
+# (2) Compression decomposition: phase11 narrowed the amplitude readout (48->2)
+#     and the angular readout (48->1) simultaneously, so its 0.0112 gap could
+#     not be attributed. Each mixed arm narrows exactly one branch. Offsets use
+#     tanh, which phase12 found mildly best.
+if want_phase13_decomp_qknorm_family "decomp_qknorm_5k_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  hyper_args=(hyper content_position silu_mlp both false
+    shared_trunk_separate_readouts per_head_independent 64 signed)
+  amplitude_offset_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" amplitude_offset none false false tanh)"
+  slope_phase_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" slope_phase none false false tanh)"
+
+  for spec in \
+    "rope-shared-rmsnorm|false|${disabled_channel}" \
+    "rope-perhead-rmsnorm|true|${disabled_channel}" \
+    "freeamp-plus-offset|false|${amplitude_offset_qk}" \
+    "slope-plus-freephase|false|${slope_phase_qk}"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    per_head_qk_norm="${remainder%%|*}"
+    qk_json="${remainder#*|}"
+    job_name="phase13-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"qk_norm_per_head\": ${per_head_qk_norm}, \"position_content_dim\": 128, \"position_content_coupling\": \"shared\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# phase13 localized the cost to the angular branch: narrowing amplitude 48->2
+# costs 0.0035, narrowing angular 48->1 costs 0.0219. This traces the angular
+# curve between those endpoints with a factorized phase readout (rank r, then a
+# learned [r, pair_dim] basis), to find whether the cost is smooth or has a
+# knee. The rank-48 endpoint is `slope_phase` from phase13 (4.28827) and the
+# rank-1-like endpoint is `slope_offset` from phase11 (4.29601).
+# The rank-8 cell saves final weights so the learned amplitude and phase
+# profiles can be inspected offline; no other cell writes weights.
+if want_phase14_angular_rank_family "angular_rank_5k_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  hyper_args=(hyper content_position silu_mlp both false
+    shared_trunk_separate_readouts per_head_independent 64 signed)
+
+  for rank in 2 4 8 16 32; do
+    qk_json="$(v2_unit_hyper_qk_json "${hyper_args[@]}" slope_phase_lowrank none false false tanh "${rank}")"
+    save_weights=false
+    if [[ "${rank}" == "8" ]]; then save_weights=true; fi
+    job_name="phase14-angular-rank${rank}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"save_final_model\": ${save_weights}, \"position_content_dim\": 128, \"position_content_coupling\": \"shared\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+
+  # Free-phase reference that also saves weights, for the profile comparison.
+  free_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" slope_phase none false false tanh)"
+  job_name="phase14-angular-free-weights-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+  cfg_file="${CONFIG_DIR}/${job_name}.json"
+  write_common_config "${cfg_file}" \
+    "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"save_final_model\": true, \"position_content_dim\": 128, \"position_content_coupling\": \"shared\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${free_qk}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+    5000 1000
+  run_job "${job_name}" "${cfg_file}"
+fi
+
+# Two axes found by inspecting shapes and optimizer groups rather than by sweeping.
+#
+# (a) Weight decay on zero-anchored position parameters. The no_decay rule
+#     matches only "bias"/"norm", so the carrier readouts -- which are
+#     zero-initialized precisely so the channel starts at exactly cis(omega*p)
+#     -- are decayed toward zero at 0.01. For these, zero is the anchor, so
+#     decay is a prior against using the mechanism at all rather than a
+#     shrinkage prior on large weights. Every hypernetwork screen so far ran
+#     under that force.
+# (b) Cross-head readout mixing. The trunk's grouping is free (its input is
+#     identical across heads, so grouped == dense-then-split), but the grouped
+#     readout confines head h to its own post-nonlinearity features. A dense
+#     [heads*hidden -> heads*out] readout mirrors how one W_q feeds all heads.
+#     It costs heads-times the readout parameters, so it needs the
+#     parameter-matched wide-trunk control alongside it.
+if want_phase15_decay_mixing_family "decay_mixing_5k_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  hyper_args=(hyper content_position silu_mlp both false
+    shared_trunk_separate_readouts per_head_independent 64 signed)
+  full_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" amplitude_phase none false false tanh 8 none)"
+  slope_offset_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" slope_offset none false false tanh 8 none)"
+  mapped_qk="$(v2_promoted_qk_json amplitude_phase 16)"
+  mixed_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" amplitude_phase none false false tanh 8 dense)"
+  wide_qk="$(v2_unit_hyper_qk_json hyper content_position silu_mlp both false \
+    shared_trunk_separate_readouts per_head_independent 256 signed \
+    amplitude_phase none false false tanh 8 none)"
+
+  # label|exclude_position_from_decay|qk_norm_mode|qk_json
+  for spec in \
+    "nodecay-free-control|true|method_aware_rms|${full_qk}" \
+    "nodecay-slope-offset|true|method_aware_rms|${slope_offset_qk}" \
+    "nodecay-mapped-addrope|true|method_aware_rms|${mapped_qk}" \
+    "headmix-readout|false|method_aware_rms|${mixed_qk}" \
+    "headmix-readout-nodecay|true|method_aware_rms|${mixed_qk}" \
+    "widetrunk256-control|false|method_aware_rms|${wide_qk}"
+  do
+    label="${spec%%|*}"
+    remainder="${spec#*|}"
+    no_decay="${remainder%%|*}"
+    remainder="${remainder#*|}"
+    qk_norm_mode="${remainder%%|*}"
+    qk_json="${remainder#*|}"
+    job_name="phase15-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"${qk_norm_mode}\", \"post_position_qk_norm\": false, \"exclude_position_from_decay\": ${no_decay}, \"position_content_dim\": 128, \"position_content_coupling\": \"shared\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+fi
+
+# phase15 found dense cross-head readout mixing worth -0.0162 against the free
+# control, and -0.0125 against a parameter-matched wide trunk, so the gain is
+# feature sharing rather than capacity. It costs 3.5x the control's positional
+# parameters. This screen asks how much of that survives a low-rank residual:
+# the per-head readout is kept and a rank-r cross-head path is added alongside.
+# Init follows LoRA (down random with rank-independent fan-in, up zero) with
+# alpha/rank scaling, so ranks differ in capacity rather than in effective
+# learning rate -- the confound that made phase14's angular sweep unreadable.
+if want_phase16_cheap_mixing_family "cheap_mixing_5k_story"; then
+  seed=123
+  disabled_channel='{"enabled": false}'
+  base=(hyper content_position silu_mlp both false
+    shared_trunk_separate_readouts per_head_independent 64 signed
+    amplitude_phase none false false tanh 8)
+  none_qk="$(v2_unit_hyper_qk_json "${base[@]}" none)"
+  dense_qk="$(v2_unit_hyper_qk_json "${base[@]}" dense)"
+
+  for spec in "free-control|${none_qk}" "dense-mixing|${dense_qk}"; do
+    label="${spec%%|*}"; qk_json="${spec#*|}"
+    job_name="phase16-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"position_content_dim\": 128, \"position_content_coupling\": \"shared\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      5000 1000
+    run_job "${job_name}" "${cfg_file}"
+  done
+
+  for rank in 8 16 32 64; do
+    qk_json="$(v2_unit_hyper_qk_json "${base[@]}" lowrank "${rank}")"
+    job_name="phase16-lowrank-r${rank}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
+    cfg_file="${CONFIG_DIR}/${job_name}.json"
+    write_common_config "${cfg_file}" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"position_content_dim\": 128, \"position_content_coupling\": \"shared\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
       5000 1000
     run_job "${job_name}" "${cfg_file}"
   done

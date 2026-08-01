@@ -102,6 +102,8 @@ V2_CONDITIONING_KEYS = {
     "activation",
     "hidden_dim",
     "input_mode",
+    "input_normalization",
+    "learnable_input_gains",
     "network",
     "components",
     "head_coupling",
@@ -110,6 +112,12 @@ V2_CONDITIONING_KEYS = {
     "coupling",
     "static_complement",
     "phase_bound",
+    "offset_bound",
+    "offset_parameterization",
+    "angular_rank",
+    "readout_head_mixing",
+    "readout_mix_rank",
+    "readout_mix_alpha",
     "pair_rank",
     "position_mode",
     "num_profiles",
@@ -119,6 +127,13 @@ V2_CONDITIONING_KEYS = {
 }
 
 POSITION_CONTENT_COUPLINGS = {"shared", "separate"}
+
+
+def _normalize_head_mixing(value: Any) -> str:
+    """Accept the legacy boolean form of ``readout_head_mixing``."""
+    if isinstance(value, bool):
+        return "dense" if value else "none"
+    return value
 
 # Legacy v1 names that must not appear on a v2 channel (except enabled).
 V1_ONLY_KEYS = {"feature_map", "sharing", "apply", "rank", "mlp_hidden"}
@@ -245,6 +260,12 @@ V2_CHANNEL_DEFAULTS = {
             "coupling": "shared_trunk_separate_readouts",
             "static_complement": False,
             "phase_bound": 0.25,
+            "offset_bound": 8.0,
+            "offset_parameterization": "raw",
+            "angular_rank": 8,
+            "readout_head_mixing": "none",
+            "readout_mix_rank": 32,
+            "readout_mix_alpha": 16.0,
             "pair_rank": 16,
             "position_mode": "relative_only",
             "num_profiles": 8,
@@ -302,6 +323,12 @@ V2_CHANNEL_DEFAULTS = {
             "coupling": "shared_trunk_separate_readouts",
             "static_complement": False,
             "phase_bound": 0.25,
+            "offset_bound": 8.0,
+            "offset_parameterization": "raw",
+            "angular_rank": 8,
+            "readout_head_mixing": "none",
+            "readout_mix_rank": 32,
+            "readout_mix_alpha": 16.0,
             "pair_rank": 16,
             "position_mode": "relative_only",
             "num_profiles": 8,
@@ -953,6 +980,12 @@ def normalize_position_config_v2(
         "activation": conditioning_cfg.get("activation", "tanh"),
         "hidden_dim": int(conditioning_cfg.get("hidden_dim", 64)),
         "input_mode": conditioning_cfg.get("input_mode", "content"),
+        "input_normalization": conditioning_cfg.get(
+            "input_normalization", "none"
+        ),
+        "learnable_input_gains": conditioning_cfg.get(
+            "learnable_input_gains", False
+        ),
         "network": conditioning_cfg.get("network", "linear"),
         "components": conditioning_cfg.get("components", "phase"),
         "head_coupling": conditioning_cfg.get(
@@ -965,6 +998,18 @@ def normalize_position_config_v2(
         ),
         "static_complement": conditioning_cfg.get("static_complement", False),
         "phase_bound": float(conditioning_cfg.get("phase_bound", 0.25)),
+        "offset_bound": float(conditioning_cfg.get("offset_bound", 8.0)),
+        "offset_parameterization": conditioning_cfg.get(
+            "offset_parameterization", "raw"
+        ),
+        "angular_rank": int(conditioning_cfg.get("angular_rank", 8)),
+        "readout_head_mixing": _normalize_head_mixing(
+            conditioning_cfg.get("readout_head_mixing", "none")
+        ),
+        "readout_mix_rank": int(conditioning_cfg.get("readout_mix_rank", 32)),
+        "readout_mix_alpha": float(
+            conditioning_cfg.get("readout_mix_alpha", 16.0)
+        ),
         "pair_rank": int(conditioning_cfg.get("pair_rank", 16)),
         "position_mode": conditioning_cfg.get(
             "position_mode", "relative_only"
@@ -1019,6 +1064,34 @@ def normalize_position_config_v2(
             f"{channel_name}.conditioning.input_mode must be 'content', "
             "'position', or 'content_position'"
         )
+    if conditioning["input_normalization"] not in {"none", "modality_rms"}:
+        raise ValueError(
+            f"{channel_name}.conditioning.input_normalization must be "
+            "'none' or 'modality_rms'"
+        )
+    if not isinstance(conditioning["learnable_input_gains"], bool):
+        raise TypeError(
+            f"{channel_name}.conditioning.learnable_input_gains must be a boolean"
+        )
+    if (
+        conditioning["learnable_input_gains"]
+        and conditioning["input_normalization"] != "modality_rms"
+    ):
+        raise ValueError(
+            f"{channel_name}.conditioning.learnable_input_gains requires "
+            "input_normalization='modality_rms'"
+        )
+    if (
+        conditioning_kind != "carrier_hypernetwork"
+        and (
+            conditioning["input_normalization"] != "none"
+            or conditioning["learnable_input_gains"]
+        )
+    ):
+        raise ValueError(
+            f"{channel_name}: hypernetwork input normalization/gains require "
+            "conditioning.kind='carrier_hypernetwork'"
+        )
     if conditioning["network"] not in {"linear", "silu_mlp", "swiglu_mlp"}:
         raise ValueError(
             f"{channel_name}.conditioning.network must be 'linear', "
@@ -1027,11 +1100,20 @@ def normalize_position_config_v2(
     if conditioning["components"] not in {
         "phase",
         "log_gain_phase",
+        "amplitude",
         "amplitude_phase",
+        "cartesian",
+        "frequency_phase",
+        "amplitude_phase_frequency",
+        "amplitude_slope",
+        "position_offset",
+        "slope_offset",
+        "amplitude_offset",
+        "slope_phase",
+        "slope_phase_lowrank",
     }:
         raise ValueError(
-            f"{channel_name}.conditioning.components must be 'phase', "
-            "'log_gain_phase', or 'amplitude_phase'"
+            f"{channel_name}.conditioning.components is unsupported"
         )
     if conditioning["head_coupling"] not in {
         "shared_head",
@@ -1044,6 +1126,36 @@ def normalize_position_config_v2(
     if conditioning["phase_bound"] <= 0:
         raise ValueError(
             f"{channel_name}.conditioning.phase_bound must be positive"
+        )
+    if conditioning["offset_parameterization"] not in {
+        "raw",
+        "softplus",
+        "tanh",
+    }:
+        raise ValueError(
+            f"{channel_name}.conditioning.offset_parameterization must be "
+            "'raw', 'softplus', or 'tanh'"
+        )
+    if conditioning["readout_head_mixing"] not in {"none", "dense", "lowrank"}:
+        raise ValueError(
+            f"{channel_name}.conditioning.readout_head_mixing must be "
+            "'none', 'dense', or 'lowrank'"
+        )
+    if conditioning["readout_mix_rank"] <= 0:
+        raise ValueError(
+            f"{channel_name}.conditioning.readout_mix_rank must be positive"
+        )
+    if conditioning["readout_mix_alpha"] <= 0:
+        raise ValueError(
+            f"{channel_name}.conditioning.readout_mix_alpha must be positive"
+        )
+    if conditioning["angular_rank"] <= 0:
+        raise ValueError(
+            f"{channel_name}.conditioning.angular_rank must be positive"
+        )
+    if conditioning["offset_bound"] <= 0:
+        raise ValueError(
+            f"{channel_name}.conditioning.offset_bound must be positive"
         )
     if conditioning["activation"] not in {
         "tanh",
@@ -1109,25 +1221,78 @@ def normalize_position_config_v2(
             raise ValueError(
                 "carrier_hypernetwork uses the dedicated normalized content stream"
             )
-        if conditioning["components"] == "amplitude_phase":
+        additive_components = {
+            "amplitude",
+            "amplitude_phase",
+            "cartesian",
+            "frequency_phase",
+            "amplitude_phase_frequency",
+            "amplitude_slope",
+            "position_offset",
+            "slope_offset",
+            "amplitude_offset",
+            "slope_phase",
+            "slope_phase_lowrank",
+        }
+        if conditioning["components"] in additive_components:
             if not (
                 application == "additive"
                 and geometry == "amplitude_phase"
-                and not learn_amplitude
-                and not learn_phase
             ):
                 raise ValueError(
-                    "carrier_hypernetwork components='amplitude_phase' requires "
-                    "additive amplitude_phase with static amplitude/phase learning "
-                    "disabled"
+                    "additive carrier-hypernetwork components require "
+                    "additive amplitude_phase Q/K"
                 )
-            if amplitude_parameterization not in {"signed", "softplus"}:
+            controls_amplitude = conditioning["components"] in {
+                "amplitude",
+                "amplitude_phase",
+                "cartesian",
+                "amplitude_phase_frequency",
+                "amplitude_slope",
+                "slope_offset",
+                "amplitude_offset",
+                "slope_phase",
+                "slope_phase_lowrank",
+            }
+            controls_phase = conditioning["components"] in {
+                "amplitude_phase",
+                "cartesian",
+                "frequency_phase",
+                "amplitude_phase_frequency",
+                "position_offset",
+                "slope_offset",
+                "amplitude_offset",
+                "slope_phase",
+                "slope_phase_lowrank",
+            }
+            if not (
+                (not controls_amplitude or not learn_amplitude)
+                and (not controls_phase or not learn_phase)
+            ):
                 raise ValueError(
-                    "carrier_hypernetwork components='amplitude_phase' requires "
+                    "carrier_hypernetwork dynamic amplitude/phase components "
+                    "cannot overlap learned static amplitude/phase"
+                )
+            if (
+                controls_amplitude
+                and conditioning["components"] != "cartesian"
+                and amplitude_parameterization not in {"signed", "softplus"}
+            ):
+                raise ValueError(
+                    "dynamic amplitude conditioning requires "
                     "output.amplitude_parameterization='signed' or 'softplus'"
                 )
+            if (
+                conditioning["components"] == "cartesian"
+                and amplitude_init != 1.0
+            ):
+                raise ValueError(
+                    "carrier_hypernetwork components='cartesian' requires "
+                    "output.amplitude_init=1"
+                )
             if conditioning["static_complement"] and not (
-                parameter_source == "direct"
+                conditioning["components"] == "amplitude_phase"
+                and parameter_source == "direct"
                 and conditioning["target"] in {"q", "k"}
                 and qk_coupling != "shared"
             ):
