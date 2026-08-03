@@ -2515,3 +2515,184 @@ all 8, and dense mixing at only a subset of layers.
 | slope + free phase | 4.28827 | 1,804,544 |
 | slope + offset | 4.29601 | 1,413,504 |
 | standard RoPE | 4.41137 | 0 |
+
+## 2026-07-31 — Phase-17 30k horizon gate
+
+Six seed-123 cells at 30,000 steps, all on `method_aware_rms` so standard RoPE
+differs from the rest only in the position channel. All completed `rc=0`.
+Nothing in phases 11-16 had been run past 5k.
+
+| Cell | 30k | 5k | 30k vs free control | 5k vs free control | Tokens/s | Position params |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| wide trunk 256 | **3.55872** | 4.28106 | **-0.0161** | -0.0035 | 140,679 | 6,352,896 |
+| dense head mixing | 3.56074 | 4.26756 | -0.0141 | **-0.0170** | 153,100 | 7,692,288 |
+| slope + free phase | 3.57243 | 4.28827 | -0.0024 | +0.0038 | 151,630 | 1,804,544 |
+| free control | 3.57480 | 4.28451 | — | — | 154,745 | 2,187,264 |
+| position-only | 3.57865 | ~4.304 | +0.0039 | ~+0.014 | 169,405 | 876,544 |
+| standard RoPE | 3.62539 | 4.41137 | +0.0506 | +0.1269 | 180,198 | 0 |
+
+### The phase-15 "it is not capacity" conclusion is refuted
+
+At 5k, dense cross-head mixing beat the parameter-matched wide-trunk control by
+`0.0125`, which is why phase15 concluded the gain was feature sharing rather
+than capacity. At 30k the ordering **reverses**: wide trunk reaches `3.55872`
+against head mixing's `3.56074`, and does so with 17% fewer positional
+parameters. Capacity simply needed longer to pay off. The two are now within
+`0.002`, close to the `~0.0015` replication floor, so they are effectively tied.
+
+This is the third 5k-to-longer-horizon reversal in the project, after the
+rank-32 logit and the Q/K basis size. Head mixing survives as a real effect
+(`-0.0141` against the free control, ten times the floor) but the *mechanistic*
+claim made for it does not.
+
+### Content conditioning contributes almost nothing
+
+Position-only conditioning lands within `0.0039` of the full content+position
+control, down from about `0.014` at 5k. It uses `876,544` positional parameters
+against `2,187,264` and runs 9% faster. The gap is shrinking with training, so
+the "content-conditioned positional encoding" framing is not what this line of
+work has actually been demonstrating; the durable object is a **learned per-head
+positional profile**, with content conditioning a small and diminishing
+correction.
+
+### The RoPE gap keeps halving
+
+`0.127` at 5k, `0.0506` at 30k -- consistent with the earlier observation of
+roughly halving per 6x tokens (`0.122 -> 0.056` on the phase9 line). Naive
+extension gives `~0.020` at 180k and `~0.008` at 1M steps.
+
+### Iso-wallclock
+
+The local slope at 30k is `0.250` loss per `ln(step)` (from the 25k and 30k eval
+points), **not** the `0.44` average across 5k-30k; using the average
+overstates what extra RoPE steps buy. Granting standard RoPE the extra steps its
+throughput advantage affords:
+
+| Arm | 30k loss | RoPE iso-steps | RoPE loss there | Margin |
+| --- | ---: | ---: | ---: | ---: |
+| wide trunk 256 | 3.5587 | 38,428 | 3.5636 | +0.0049 |
+| dense head mixing | 3.5607 | 35,310 | 3.5847 | +0.0240 |
+| slope + free phase | 3.5724 | 35,652 | 3.5823 | +0.0099 |
+| free control | 3.5748 | 34,934 | 3.5874 | +0.0126 |
+| **position-only** | 3.5787 | 31,911 | 3.6100 | **+0.0313** |
+
+Every conditioned arm still beats RoPE at equal wall clock, but the margins are
+much smaller than the raw losses suggest, and wide-trunk's advantage nearly
+vanishes (`+0.0049`) once its 22% throughput cost is charged.
+
+**Position-only is the best throughput-adjusted variant in the project.** It
+costs only 6% throughput against RoPE, uses the fewest positional parameters of
+any conditioned arm, and its iso-wallclock margin (`+0.0313`) is the largest.
+The entire content-conditioning apparatus costs 12% more throughput and `1.3M`
+more parameters to buy `0.0039` of loss.
+
+### Standing conclusions
+
+- Nothing measured within the conditioned group at 5k survived unchanged to 30k;
+  5k orderings inside `~0.02` should be treated as unreliable, not merely noisy.
+- The efficiency and throughput-adjusted default is **position-only conditioning**.
+- The best raw loss is wide trunk 256 / dense head mixing, effectively tied, at
+  3-3.5x the positional parameters and 15-22% throughput.
+- Standard RoPE remains the throughput endpoint and its deficit continues to
+  shrink with training.
+
+## 2026-08-02 — Phase-18 h1024/d12 scale gate
+
+Four seed-123 cells at 30,000 steps, h1024/d12 with **8 heads** (head_dim 128,
+pair_dim 64) so the carrier has the same number of groups as h768/d8, lr `4e-4`,
+`beta1=0.95`, `beta2=0.999`, batch 8. Betas are family-scoped in the launcher so
+earlier families keep the settings their results were produced under. An initial
+launch using the phase6 recipe (16 heads, lr `2.5e-4`, betas `0.9/0.98`) was
+stopped and discarded before completion.
+
+| Cell | h1024/d12 | h768/d8 | Gap vs RoPE (h1024) | Gap vs RoPE (h768) | Erosion | Tokens/s |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| wide trunk 256 | **3.29126** | 3.55872 | 0.0573 | 0.0667 | 14% | 71,075 |
+| free control | 3.30178 | 3.57480 | 0.0467 | 0.0506 | 8% | 75,008 |
+| position-only | 3.30639 | 3.57865 | 0.0421 | 0.0467 | 10% | 85,285 |
+| standard RoPE | 3.34852 | 3.62539 | — | — | — | 89,536 |
+
+### Width barely erodes the gap; tokens do
+
+Going from h768/d8 to h1024/d12 -- about 2.7x the non-embedding parameters --
+costs the positional advantage only `8-14%` of its size. Compare the token axis,
+where 6x more tokens **halved** it (`0.127` at 5k to `0.0506` at 30k). This
+independently reproduces the phase6 observation that the logit stack held
+`0.094` over RoPE at both h768 and h1024 while the token axis eroded it.
+
+**The practical consequence is that the shrinking-gap concern is specifically
+about training duration, not model size.** A positional method that looks good
+at a given token budget should keep most of its advantage as the model grows,
+but should be expected to lose roughly half per 6x tokens.
+
+This is also the first ordering in phases 11-18 to survive a scale change
+unchanged: wide trunk < free control < position-only < RoPE at both sizes.
+
+### Content conditioning stays negligible at scale
+
+Position-only's deficit to full content+position conditioning is `0.0046` at
+h1024 against `0.0038` at h768 -- essentially flat, and near the replication
+floor. Content conditioning does not become more useful with model size. It
+costs `2.36M` extra positional parameters and 12% throughput to buy `0.005`.
+
+### Capacity matters less at larger width
+
+Wide trunk's advantage over the free control shrank from `0.0161` at h768 to
+`0.0105` at h1024. Extra positional capacity is worth less when the model itself
+is wider, which is the expected direction and further weakens the case for the
+high-parameter arms.
+
+### Iso-wallclock: position-only is the only arm that survives
+
+Local slope at 30k is `0.272` loss per `ln(step)` (25k/30k eval points).
+Granting RoPE the extra steps its throughput affords:
+
+| Arm | h1024 loss | Tokens/s | Iso-wallclock margin vs RoPE |
+| --- | ---: | ---: | ---: |
+| **position-only** | 3.30639 | 85,285 | **+0.0289** |
+| free control | 3.30178 | 75,008 | -0.0014 |
+| wide trunk 256 | 3.29126 | 71,075 | -0.0055 |
+
+At h768 every conditioned arm beat RoPE at equal wall clock. At h1024 only
+**position-only** does. The heavier arms are now *worse than RoPE* per unit of
+compute: their 16-21% throughput cost exceeds the loss they buy. Position-only
+costs only 4.7% throughput, which is why it survives.
+
+### Caveat
+
+lr and betas differ from phase17 (`4e-4` / `0.95` / `0.999` versus `3e-4` /
+`0.9` / `0.98`), so the cross-scale gap comparison carries an optimizer
+confound; some of the `8-14%` erosion could be optimizer rather than width.
+Within-family comparisons at h1024 are clean. The consistency with phase6's
+independent h768-versus-h1024 result argues the direction is real. Closing this
+would take one h768 run at the new recipe.
+
+### Standing conclusion
+
+**Position-only conditioning is the recommended method.** It is the only arm
+that beats standard RoPE per unit of compute at h1024/d12, uses the fewest
+positional parameters (`1.71M`), and its `0.0421` raw advantage erodes only
+slowly with width. Content conditioning and extra positional capacity are both
+dominated once throughput is charged.
+
+## 2026-08-02 — Documentation checkpoint and handoff
+
+`HANDOFF.md` rewritten for an incoming agent with no prior context. It now leads
+with the headline claim, the current standing at both model sizes, and the three
+scaling facts, and contains an **audit brief** intended to invite scrutiny rather
+than transfer confidence: the four errors actually made during this work (the
+invalid causal-Toeplitz rank bound, the phase15 mechanism claim refuted at 30k,
+the near-miss on average-versus-local slope in the iso-wallclock analysis, and
+the silently ignored `angular_rank` config key), seven specific things to verify,
+and three framing questions worth an independent view.
+
+`POSITION_CONFIG.md` gained a recommended-default section naming position-only
+conditioning, with the content-conditioning cost stated in both loss and
+throughput terms.
+
+The weakest links in the current headline, in order: the phase18 optimizer
+confound (lr and betas differ from phase17, so some of the `8-14%` width erosion
+may be optimizer); single-seed everywhere, with the position-only versus free
+control gap of `0.0046` below what one seed resolves; and throughput figures
+taken from a single logged value that includes warmup, on which the entire
+compute-adjusted argument rests.

@@ -114,7 +114,6 @@ V2_CONDITIONING_KEYS = {
     "phase_bound",
     "offset_bound",
     "offset_parameterization",
-    "angular_rank",
     "readout_head_mixing",
     "readout_mix_rank",
     "readout_mix_alpha",
@@ -262,7 +261,6 @@ V2_CHANNEL_DEFAULTS = {
             "phase_bound": 0.25,
             "offset_bound": 8.0,
             "offset_parameterization": "raw",
-            "angular_rank": 8,
             "readout_head_mixing": "none",
             "readout_mix_rank": 32,
             "readout_mix_alpha": 16.0,
@@ -325,7 +323,6 @@ V2_CHANNEL_DEFAULTS = {
             "phase_bound": 0.25,
             "offset_bound": 8.0,
             "offset_parameterization": "raw",
-            "angular_rank": 8,
             "readout_head_mixing": "none",
             "readout_mix_rank": 32,
             "readout_mix_alpha": 16.0,
@@ -1002,7 +999,6 @@ def normalize_position_config_v2(
         "offset_parameterization": conditioning_cfg.get(
             "offset_parameterization", "raw"
         ),
-        "angular_rank": int(conditioning_cfg.get("angular_rank", 8)),
         "readout_head_mixing": _normalize_head_mixing(
             conditioning_cfg.get("readout_head_mixing", "none")
         ),
@@ -1103,14 +1099,11 @@ def normalize_position_config_v2(
         "amplitude",
         "amplitude_phase",
         "cartesian",
-        "frequency_phase",
-        "amplitude_phase_frequency",
         "amplitude_slope",
         "position_offset",
         "slope_offset",
         "amplitude_offset",
         "slope_phase",
-        "slope_phase_lowrank",
     }:
         raise ValueError(
             f"{channel_name}.conditioning.components is unsupported"
@@ -1148,10 +1141,6 @@ def normalize_position_config_v2(
     if conditioning["readout_mix_alpha"] <= 0:
         raise ValueError(
             f"{channel_name}.conditioning.readout_mix_alpha must be positive"
-        )
-    if conditioning["angular_rank"] <= 0:
-        raise ValueError(
-            f"{channel_name}.conditioning.angular_rank must be positive"
         )
     if conditioning["offset_bound"] <= 0:
         raise ValueError(
@@ -1225,15 +1214,12 @@ def normalize_position_config_v2(
             "amplitude",
             "amplitude_phase",
             "cartesian",
-            "frequency_phase",
-            "amplitude_phase_frequency",
-            "amplitude_slope",
+                    "amplitude_slope",
             "position_offset",
             "slope_offset",
             "amplitude_offset",
             "slope_phase",
-            "slope_phase_lowrank",
-        }
+            }
         if conditioning["components"] in additive_components:
             if not (
                 application == "additive"
@@ -1247,24 +1233,19 @@ def normalize_position_config_v2(
                 "amplitude",
                 "amplitude_phase",
                 "cartesian",
-                "amplitude_phase_frequency",
-                "amplitude_slope",
+                        "amplitude_slope",
                 "slope_offset",
                 "amplitude_offset",
                 "slope_phase",
-                "slope_phase_lowrank",
-            }
+                    }
             controls_phase = conditioning["components"] in {
                 "amplitude_phase",
                 "cartesian",
-                "frequency_phase",
-                "amplitude_phase_frequency",
-                "position_offset",
+                                "position_offset",
                 "slope_offset",
                 "amplitude_offset",
                 "slope_phase",
-                "slope_phase_lowrank",
-            }
+                    }
             if not (
                 (not controls_amplitude or not learn_amplitude)
                 and (not controls_phase or not learn_phase)

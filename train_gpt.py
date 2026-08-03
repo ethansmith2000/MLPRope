@@ -136,6 +136,9 @@ DEFAULT_CONFIG = {
     "lr_scheduler_type": "linear",
     "num_warmup_steps": 200,
     "seed": 123,
+    # When set, shared parameter names initialize identically across arms even
+    # when optional position modules consume different amounts of RNG.
+    "paired_initialization_seed": None,
     "max_grad_norm": 1.0,
     "checkpointing_steps": None,
     "save_final_model": False,
@@ -155,6 +158,11 @@ DEFAULT_CONFIG = {
     "prefetch_factor": 2,
     "non_blocking": True,
     "num_validation_batches": 25,
+    # Final confirmation can use a larger, disjoint holdout window.
+    "num_final_validation_batches": None,
+    "validation_start_batch": 0,
+    "final_validation_start_batch": None,
+    "save_evaluation_details": False,
     "validate_every": 1000,
     "log_every_n_steps": 50,
     # CUDA-event stage timings (data / forward / backward / optimizer).
@@ -167,8 +175,13 @@ DEFAULT_CONFIG = {
     "n_head": 8,
     "ff_mult": 4,
     "ff_hidden_dim": None,
+    # Optional close parameter-match control: widen only selected FFN layers.
+    "ff_widened_hidden_dim": None,
+    "ff_widened_layers": [],
     "use_rope": True,
     "rope_theta": 10000.0,
+    # Learn the multiplicative RoPE schedule per layer, optionally per head.
+    "rope_frequency_mode": "fixed",
     "qk_norm": True,
     "post_position_qk_norm": False,
     "qk_norm_per_head": False,
@@ -400,6 +413,30 @@ def load_config(cli_args):
         cfg["checkpointing_steps"] = checkpointing_steps
     if not isinstance(cfg["save_final_model"], bool):
         raise TypeError("save_final_model must be a boolean")
+    if not isinstance(cfg["save_evaluation_details"], bool):
+        raise TypeError("save_evaluation_details must be a boolean")
+    for key in ("num_validation_batches", "num_final_validation_batches"):
+        if cfg[key] is not None:
+            value = int(cfg[key])
+            if value <= 0:
+                raise ValueError(f"{key} must be positive")
+            cfg[key] = value
+    validation_start_batch = int(cfg["validation_start_batch"])
+    if validation_start_batch < 0:
+        raise ValueError("validation_start_batch must be non-negative")
+    cfg["validation_start_batch"] = validation_start_batch
+    final_start = cfg["final_validation_start_batch"]
+    if final_start is None:
+        final_start = validation_start_batch
+    final_start = int(final_start)
+    if final_start < 0:
+        raise ValueError("final_validation_start_batch must be non-negative")
+    cfg["final_validation_start_batch"] = final_start
+    paired_seed = cfg["paired_initialization_seed"]
+    if paired_seed is not None:
+        if isinstance(paired_seed, bool):
+            raise TypeError("paired_initialization_seed must be an integer or null")
+        cfg["paired_initialization_seed"] = int(paired_seed)
 
     raw_evaluation_lengths = cfg["evaluation_lengths"]
     if raw_evaluation_lengths is None:
@@ -440,10 +477,44 @@ def load_config(cli_args):
         raise ValueError("rel_extent must cover every evaluation length")
 
     model_dim = int(cfg["hidden_size"])
+    depth = int(cfg["depth"])
     heads = int(cfg["n_head"])
+    widened_hidden = cfg["ff_widened_hidden_dim"]
+    if widened_hidden is not None:
+        widened_hidden = int(widened_hidden)
+        if widened_hidden <= 0:
+            raise ValueError("ff_widened_hidden_dim must be positive")
+    cfg["ff_widened_hidden_dim"] = widened_hidden
+    widened_layers = cfg["ff_widened_layers"]
+    if not isinstance(widened_layers, list):
+        raise TypeError("ff_widened_layers must be a list")
+    normalized_widened_layers = []
+    for layer_idx in widened_layers:
+        if isinstance(layer_idx, bool) or not isinstance(layer_idx, int):
+            raise TypeError("ff_widened_layers must contain only integers")
+        if layer_idx < 0 or layer_idx >= depth:
+            raise ValueError("ff_widened_layers contains an invalid layer index")
+        if layer_idx not in normalized_widened_layers:
+            normalized_widened_layers.append(layer_idx)
+    if normalized_widened_layers and widened_hidden is None:
+        raise ValueError(
+            "ff_widened_hidden_dim is required when ff_widened_layers is set"
+        )
+    cfg["ff_widened_layers"] = normalized_widened_layers
     rope_theta = float(cfg["rope_theta"])
     if not isinstance(cfg["use_rope"], bool):
         raise TypeError("use_rope must be a boolean")
+    if cfg["rope_frequency_mode"] not in {
+        "fixed",
+        "layer_shared",
+        "layer_head",
+    }:
+        raise ValueError(
+            "rope_frequency_mode must be 'fixed', 'layer_shared', or "
+            "'layer_head'"
+        )
+    if not cfg["use_rope"] and cfg["rope_frequency_mode"] != "fixed":
+        raise ValueError("learned RoPE frequencies require use_rope=true")
     if not isinstance(cfg["post_position_qk_norm"], bool):
         raise TypeError("post_position_qk_norm must be a boolean")
     if not isinstance(cfg["qk_norm_per_head"], bool):
@@ -683,11 +754,14 @@ def make_model(args, vocab_size):
         heads=args.n_head,
         ff_mult=args.ff_mult,
         ff_hidden_dim=args.ff_hidden_dim,
+        ff_widened_hidden_dim=args.ff_widened_hidden_dim,
+        ff_widened_layers=args.ff_widened_layers,
         vocab_size=vocab_size,
         max_seq_len=args.model_position_extent,
         gradient_checkpointing=args.gradient_checkpointing,
         use_rope=args.use_rope,
         rope_theta=args.rope_theta,
+        rope_frequency_mode=args.rope_frequency_mode,
         qk_norm=args.qk_norm,
         post_position_qk_norm=args.post_position_qk_norm,
         qk_norm_per_head=args.qk_norm_per_head,
@@ -700,6 +774,7 @@ def make_model(args, vocab_size):
         residual_stream_config=args.residual_stream,
         attention_write_config=args.attention_write,
         attn_impl=args.attn_impl,
+        paired_initialization_seed=args.paired_initialization_seed,
     )
 
 
@@ -740,10 +815,83 @@ def make_optimizer(args, model):
     )
 
 
+TOKENIZED_CACHE_MANIFEST = "mlprope_cache_manifest.json"
+
+
+def _source_file_identity(path: str | None) -> dict | None:
+    if path is None:
+        return None
+    resolved = Path(path).expanduser().resolve()
+    stat = resolved.stat()
+    return {
+        "path": str(resolved),
+        "size": stat.st_size,
+        "mtime_ns": stat.st_mtime_ns,
+    }
+
+
+def tokenized_cache_manifest(args, tokenizer) -> dict:
+    signature = {
+        "schema_version": 1,
+        "dataset_name": args.dataset_name,
+        "dataset_config_name": args.dataset_config_name,
+        "train_file": _source_file_identity(args.train_file),
+        "validation_file": _source_file_identity(args.validation_file),
+        "validation_split_percentage": args.validation_split_percentage,
+        "tokenizer_name": args.tokenizer_name or args.model_name_or_path,
+        "tokenizer_name_or_path": getattr(tokenizer, "name_or_path", None),
+        "tokenizer_class": type(tokenizer).__name__,
+        "tokenizer_vocab_size": len(tokenizer),
+        "use_slow_tokenizer": bool(args.use_slow_tokenizer),
+        "block_size": int(args.block_size),
+    }
+    canonical = json.dumps(signature, sort_keys=True, separators=(",", ":"))
+    return {
+        "fingerprint": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        "signature": signature,
+    }
+
+
+def _validate_tokenized_cache(path: str | Path, args, tokenizer):
+    path = Path(path)
+    expected = tokenized_cache_manifest(args, tokenizer)
+    manifest_path = path / TOKENIZED_CACHE_MANIFEST
+    if manifest_path.is_file():
+        with manifest_path.open() as handle:
+            actual = json.load(handle)
+        if actual.get("fingerprint") != expected["fingerprint"]:
+            raise ValueError(
+                "Tokenized cache fingerprint mismatch at "
+                f"{path}: expected {expected['signature']}, "
+                f"found {actual.get('signature')}"
+            )
+    else:
+        logger.warning(
+            "Tokenized cache %s predates cache manifests and cannot be fully "
+            "verified; its row width will still be checked.",
+            path,
+        )
+    dataset = datasets.load_from_disk(str(path))
+    for split_name in ("train", "validation"):
+        if split_name not in dataset or len(dataset[split_name]) == 0:
+            raise ValueError(f"Tokenized cache is missing non-empty {split_name!r}")
+        row_width = len(dataset[split_name][0]["input_ids"])
+        if row_width != args.block_size:
+            raise ValueError(
+                f"Tokenized cache {split_name} row width {row_width} does not "
+                f"match block_size {args.block_size}"
+            )
+    return dataset
+
+
 def _load_tokenized_datasets(args, tokenizer):
     if args.tokenized_dataset_path and os.path.isdir(args.tokenized_dataset_path):
         logger.info("Loading tokenized dataset from %s", args.tokenized_dataset_path)
-        return datasets.load_from_disk(args.tokenized_dataset_path)
+        return _validate_tokenized_cache(
+            args.tokenized_dataset_path,
+            args,
+            tokenizer,
+        )
 
     if args.train_file is not None:
         files = {"train": args.train_file}
@@ -796,6 +944,10 @@ def _load_tokenized_datasets(args, tokenizer):
     )
     if args.tokenized_dataset_path:
         lm_datasets.save_to_disk(args.tokenized_dataset_path)
+        _write_json_atomic(
+            Path(args.tokenized_dataset_path) / TOKENIZED_CACHE_MANIFEST,
+            tokenized_cache_manifest(args, tokenizer),
+        )
     return lm_datasets
 
 
@@ -862,6 +1014,22 @@ def build_evaluation_datasets(validation_dataset, evaluation_lengths):
     }
 
 
+def _write_json_atomic(path: str | Path, payload: dict) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        "w",
+        dir=path.parent,
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        delete=False,
+    ) as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        temporary_path = Path(handle.name)
+    os.replace(temporary_path, path)
+
+
 @torch.no_grad()
 def evaluate(
     args,
@@ -871,49 +1039,109 @@ def evaluate(
     step,
     *,
     include_extrapolation: bool = False,
+    final_evaluation: bool = False,
 ):
     model.eval()
     evaluation_metrics = {}
+    evaluation_details = {}
     active_dataloaders = (
         eval_dataloaders
         if include_extrapolation
         else {args.training_length: eval_dataloaders[args.training_length]}
     )
+    start_batch = (
+        args.final_validation_start_batch
+        if final_evaluation
+        else args.validation_start_batch
+    )
+    max_batches = (
+        args.num_final_validation_batches
+        if final_evaluation and args.num_final_validation_batches is not None
+        else args.num_validation_batches
+    )
     diagnostic_input_ids = None
     for context_length, eval_dataloader in active_dataloaders.items():
         losses = []
+        token_counts = []
+        evaluated_batches = 0
         for idx, batch in enumerate(eval_dataloader):
+            if idx < start_batch:
+                continue
             input_ids = batch["input_ids"][:, :-1]
             targets = batch["input_ids"][:, 1:]
             if context_length == args.training_length and diagnostic_input_ids is None:
                 diagnostic_input_ids = input_ids[:1].detach()
             loss = model(input_ids=input_ids, targets=targets)
-            losses.append(accelerator.gather_for_metrics(loss.detach().float()))
-            if (
-                args.num_validation_batches is not None
-                and idx + 1 >= args.num_validation_batches
-            ):
+            gathered_loss = accelerator.gather_for_metrics(
+                loss.detach().float().reshape(1)
+            )
+            local_token_count = torch.tensor(
+                [targets.numel()],
+                device=targets.device,
+                dtype=torch.long,
+            )
+            gathered_token_count = accelerator.gather_for_metrics(local_token_count)
+            losses.append(gathered_loss.cpu())
+            token_counts.append(gathered_token_count.cpu())
+            evaluated_batches += 1
+            if max_batches is not None and evaluated_batches >= max_batches:
                 break
-        eval_loss = torch.cat([loss.reshape(-1) for loss in losses]).mean()
+        if not losses:
+            raise ValueError(
+                f"Evaluation window starts at batch {start_batch}, beyond the "
+                f"available context-{context_length} validation data"
+            )
+        loss_values = torch.cat([value.reshape(-1) for value in losses]).double()
+        count_values = torch.cat(
+            [value.reshape(-1) for value in token_counts]
+        ).double()
+        eval_loss = (loss_values * count_values).sum() / count_values.sum()
         eval_loss_value = eval_loss.item()
+        batch_std = (
+            loss_values.std(unbiased=True).item()
+            if loss_values.numel() > 1
+            else 0.0
+        )
+        batch_se = batch_std / math.sqrt(loss_values.numel())
         perplexity = (
             math.exp(eval_loss_value) if eval_loss_value < 20 else float("inf")
         )
-        evaluation_metrics[f"eval_loss/context_{context_length}"] = eval_loss_value
-        evaluation_metrics[f"perplexity/context_{context_length}"] = (
+        suffix = f"context_{context_length}"
+        evaluation_metrics[f"eval_loss/{suffix}"] = eval_loss_value
+        evaluation_metrics[f"eval_loss_batch_std/{suffix}"] = batch_std
+        evaluation_metrics[f"eval_loss_batch_se/{suffix}"] = batch_se
+        evaluation_metrics[f"eval_batches/{suffix}"] = int(loss_values.numel())
+        evaluation_metrics[f"eval_target_tokens/{suffix}"] = int(
+            count_values.sum().item()
+        )
+        evaluation_metrics[f"perplexity/{suffix}"] = (
             perplexity if math.isfinite(perplexity) else None
         )
         if context_length == args.training_length:
             evaluation_metrics["eval_loss"] = eval_loss_value
+            evaluation_metrics["eval_loss_batch_std"] = batch_std
+            evaluation_metrics["eval_loss_batch_se"] = batch_se
+            evaluation_metrics["eval_batches"] = int(loss_values.numel())
+            evaluation_metrics["eval_target_tokens"] = int(
+                count_values.sum().item()
+            )
             evaluation_metrics["perplexity"] = (
                 perplexity if math.isfinite(perplexity) else None
             )
+        evaluation_details[context_length] = {
+            "losses": loss_values.tolist(),
+            "target_tokens": [int(value) for value in count_values.tolist()],
+        }
         logger.info(
-            "step %s context %s: eval_loss %.4f perplexity %.4f",
+            "step %s context %s: eval_loss %.4f se %.6f perplexity %.4f "
+            "(%s batches, start=%s)",
             step,
             context_length,
             eval_loss_value,
+            batch_se,
             perplexity,
+            loss_values.numel(),
+            start_batch,
         )
     diagnostic_model = accelerator.unwrap_model(model)
     while hasattr(diagnostic_model, "_orig_mod"):
@@ -926,11 +1154,27 @@ def evaluate(
         metrics = {
             "step": int(step),
             "timestamp": time.time(),
+            "evaluation_kind": "final_holdout" if final_evaluation else "development",
+            "evaluation_start_batch": int(start_batch),
             **evaluation_metrics,
             **position_metrics,
         }
         with open(os.path.join(args.output_dir, "metrics.jsonl"), "a") as f:
             f.write(json.dumps(metrics, sort_keys=True) + "\n")
+        if final_evaluation and args.save_evaluation_details:
+            detail_dir = Path(args.output_dir) / "evaluation_details"
+            for context_length, details in evaluation_details.items():
+                _write_json_atomic(
+                    detail_dir
+                    / f"step_{int(step):08d}_context_{int(context_length):06d}.json",
+                    {
+                        "step": int(step),
+                        "context_length": int(context_length),
+                        "evaluation_kind": "final_holdout",
+                        "evaluation_start_batch": int(start_batch),
+                        **details,
+                    },
+                )
         if position_profiles:
             profile_dir = Path(args.output_dir) / "position_profiles"
             profile_dir.mkdir(parents=True, exist_ok=True)
@@ -950,6 +1194,7 @@ def evaluate(
             step=step,
         )
     model.train()
+    return evaluation_metrics
 
 
 def save_model(args, model, tokenizer, accelerator, completed_steps, max_train_steps):
@@ -973,6 +1218,8 @@ def save_model(args, model, tokenizer, accelerator, completed_steps, max_train_s
         )
         return
     unwrapped = accelerator.unwrap_model(model)
+    while hasattr(unwrapped, "_orig_mod"):
+        unwrapped = unwrapped._orig_mod
     accelerator.save(unwrapped.state_dict(), os.path.join(args.output_dir, "pytorch_model.bin"))
     tokenizer.save_pretrained(args.output_dir)
     logger.info("saved model to %s", args.output_dir)
@@ -1013,6 +1260,7 @@ def main():
             "residual_stream": args.residual_stream,
             "attention_write": args.attention_write,
             "use_rope": args.use_rope,
+            "rope_frequency_mode": args.rope_frequency_mode,
             "post_position_qk_norm": args.post_position_qk_norm,
             "qk_norm_per_head": args.qk_norm_per_head,
             "exclude_position_from_decay": args.exclude_position_from_decay,
@@ -1026,6 +1274,9 @@ def main():
             "per_device_train_batch_size": args.per_device_train_batch_size,
             "per_device_eval_batch_size": args.per_device_eval_batch_size,
             "gradient_accumulation_steps": args.gradient_accumulation_steps,
+            "paired_initialization_seed": args.paired_initialization_seed,
+            "ff_widened_hidden_dim": args.ff_widened_hidden_dim,
+            "ff_widened_layers": args.ff_widened_layers,
             "rel_extent": args.rel_extent or args.model_position_extent,
             "position_schema_version": args.position_schema_version,
             "position_source_schema": args.position_source_schema,
@@ -1301,10 +1552,26 @@ def main():
             * args.gradient_accumulation_steps
             * args.training_length
         )
+        measured_target_tokens = (
+            measured_steps
+            * args.per_device_train_batch_size
+            * args.gradient_accumulation_steps
+            * (args.training_length - 1)
+        )
         training_summary = {
+            "measurement": "wall_clock_after_initial_optimizer_steps",
+            "warmup_steps_excluded": int(throughput_warmup_steps),
             "optimizer_steps": measured_steps,
             "elapsed_seconds": measured_seconds,
+            # Preserve the historical nominal-token metric and add the exact
+            # number of shifted causal targets processed by the model.
             "tokens_per_second": measured_tokens / measured_seconds,
+            "target_tokens_per_second": measured_target_tokens / measured_seconds,
+            "nominal_tokens": measured_tokens,
+            "target_tokens": measured_target_tokens,
+            "includes_periodic_evaluation": bool(args.validate_every),
+            "includes_tracking": bool(args.with_tracking),
+            "profile_every_n_steps": int(args.profile_every_n_steps or 0),
         }
         if torch.cuda.is_available():
             training_summary.update({
@@ -1312,6 +1579,10 @@ def main():
                 "peak_reserved_mib": torch.cuda.max_memory_reserved() / 2**20,
             })
         if accelerator.is_main_process:
+            _write_json_atomic(
+                Path(args.output_dir) / "training_summary.json",
+                training_summary,
+            )
             print("training_summary:", json.dumps(training_summary))
 
     evaluate(
@@ -1321,6 +1592,7 @@ def main():
         accelerator,
         completed_steps,
         include_extrapolation=True,
+        final_evaluation=True,
     )
     if args.with_tracking:
         accelerator.end_training()

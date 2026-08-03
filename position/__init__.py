@@ -44,7 +44,13 @@ from position.config import (
     v2_position_run_tag,
 )
 from position.mappers import FeatureMapper, build_mapper
-from position.rotary import apply_rotary, build_rope_cache, compose_phase, rotate_half
+from position.rotary import (
+    apply_rotary,
+    build_rope_cache,
+    build_rope_frequencies,
+    compose_phase,
+    rotate_half,
+)
 
 __all__ = [
     "FrozenFourierBasis",
@@ -73,6 +79,7 @@ __all__ = [
     "build_residual_position_channel",
     "build_position_basis",
     "build_rope_cache",
+    "build_rope_frequencies",
     "channel_theta",
     "compose_phase",
     "count_position_parameters",

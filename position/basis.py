@@ -7,6 +7,7 @@ from typing import Literal
 import torch
 
 from position.autograd import exp_with_identity_grad
+from position.precision import PreserveFP32BuffersMixin
 
 
 BasisKind = Literal[
@@ -44,10 +45,11 @@ def interleaved_fourier_basis(
     return torch.stack((angles.cos(), angles.sin()), dim=-1).flatten(-2)
 
 
-class FrozenFourierBasis(torch.nn.Module):
+class FrozenFourierBasis(PreserveFP32BuffersMixin, torch.nn.Module):
     """Cached interleaved Fourier features for absolute or relative indices."""
 
     kind: BasisKind = "frozen_fourier"
+    _fp32_buffer_names = ("basis",)
 
     def __init__(
         self,

@@ -1,0 +1,82 @@
+{
+  "attention_write": {
+    "enabled": false
+  },
+  "attn_impl": "sdpa",
+  "base_output_dir": "/workspace/MLPRope/model-output/position_bias_phase19_confirmation",
+  "beta1": 0.95,
+  "beta2": 0.999,
+  "block_size": 1024,
+  "checkpointing_steps": null,
+  "compile": true,
+  "compile_fullgraph": false,
+  "compile_mode": "default",
+  "depth": 12,
+  "evaluation_lengths": [
+    1024
+  ],
+  "ff_hidden_dim": null,
+  "ff_widened_hidden_dim": 4160,
+  "ff_widened_layers": [
+    0,
+    1,
+    3,
+    4,
+    5,
+    7,
+    8,
+    9,
+    11
+  ],
+  "final_validation_start_batch": 2048,
+  "hidden_size": 1024,
+  "learning_rate": 0.0004,
+  "log_every_n_steps": 50,
+  "logit_bias": {
+    "enabled": false
+  },
+  "max_train_steps": 30000,
+  "model_position_extent": 1024,
+  "n_head": 8,
+  "non_blocking": true,
+  "num_final_validation_batches": 1024,
+  "num_validation_batches": 25,
+  "num_warmup_steps": 200,
+  "num_workers": 4,
+  "paired_initialization_seed": 789,
+  "per_device_eval_batch_size": 1,
+  "per_device_train_batch_size": 8,
+  "persistent_workers": true,
+  "pos_mlp_hidden": 128,
+  "pos_rank": 32,
+  "pos_variant": null,
+  "position_content_coupling": "shared",
+  "position_content_dim": 128,
+  "position_schema_version": 2,
+  "post_position_qk_norm": false,
+  "prefetch_factor": 2,
+  "profile_every_n_steps": 0,
+  "qk": {
+    "enabled": false
+  },
+  "qk_norm_mode": "method_aware_rms",
+  "rel_extent": null,
+  "residual_stream": {
+    "enabled": false
+  },
+  "resume_from_checkpoint": null,
+  "run_name": "phase19-rope-matched-ffn-seed789-s30000-h1024d12",
+  "save_evaluation_details": true,
+  "save_final_model": true,
+  "scalar_normalization_extent": 1024,
+  "seed": 789,
+  "tokenized_dataset_path": "/workspace/.cache/tokenized/openwebtext_gpt2_bs1024",
+  "training_length": 1024,
+  "validate_every": 5000,
+  "validation_start_batch": 0,
+  "wandb_entity": "ethansmith2000",
+  "wandb_group": null,
+  "wandb_project": "mlprope-position-bias",
+  "weight_decay": 0.01,
+  "with_tracking": false
+}

@@ -12,6 +12,7 @@ import torch
 
 from position.autograd import exp_with_identity_grad
 from position.basis import build_position_basis
+from position.precision import PreserveFP32BuffersMixin
 from position.config import (
     channel_theta,
     ensure_channel_v2,
@@ -521,8 +522,10 @@ class _MixedReadout(torch.nn.Module):
         return grouped + residual
 
 
-class CarrierHypernetwork(torch.nn.Module):
+class CarrierHypernetwork(PreserveFP32BuffersMixin, torch.nn.Module):
     """Anchor-relative token-local gain/phase deltas for additive or rotary Q/K."""
+
+    _fp32_buffer_names = ("spectral_tilt", "spectral_omega")
 
     def __init__(
         self,
@@ -556,12 +559,6 @@ class CarrierHypernetwork(torch.nn.Module):
             "amplitude": ("amplitude",),
             "amplitude_phase": ("amplitude", "phase"),
             "cartesian": ("cartesian_real", "cartesian_imag"),
-            "frequency_phase": ("frequency", "phase"),
-            "amplitude_phase_frequency": (
-                "amplitude",
-                "phase",
-                "frequency",
-            ),
         }
         # Spectral parameterizations predict one scalar per head per token and
         # expand it over the frequency axis with a fixed profile. Both are
@@ -579,10 +576,6 @@ class CarrierHypernetwork(torch.nn.Module):
         mixed_components = {
             "amplitude_offset": ("amplitude", "offset"),
             "slope_phase": ("gain", "slope", "phase"),
-            # Same as slope_phase, but the phase readout is factorized through
-            # `angular_rank` so the cost of angular width can be traced between
-            # rank 1 (a coherent position offset) and rank pair_dim (free).
-            "slope_phase_lowrank": ("gain", "slope", "phase"),
         }
         narrow_names = {"gain", "slope", "offset"}
         if self.components in spectral_components:
@@ -592,19 +585,8 @@ class CarrierHypernetwork(torch.nn.Module):
         else:
             names = pairwise_components[self.components]
         self.component_names = names
-        self.angular_rank = int(config["angular_rank"])
-        self.low_rank_phase = self.components == "slope_phase_lowrank"
-        if self.low_rank_phase and not 0 < self.angular_rank < pair_dim:
-            raise ValueError(
-                "angular_rank must lie strictly between 0 and pair_dim "
-                f"({pair_dim}), got {self.angular_rank}"
-            )
-        phase_width = self.angular_rank if self.low_rank_phase else pair_dim
         self.component_widths = tuple(
-            1
-            if name in narrow_names
-            else (phase_width if name == "phase" else pair_dim)
-            for name in names
+            1 if name in narrow_names else pair_dim for name in names
         )
         self.spectral = any(name in narrow_names for name in names)
         self.offset_bound = float(config["offset_bound"])
@@ -623,12 +605,6 @@ class CarrierHypernetwork(torch.nn.Module):
             persistent=False,
         )
         self.register_buffer("spectral_omega", omega, persistent=False)
-        self.angular_basis = None
-        if self.low_rank_phase:
-            basis = torch.empty(self.groups, self.angular_rank, pair_dim)
-            for group in basis:
-                torch.nn.init.xavier_normal_(group)
-            self.angular_basis = torch.nn.Parameter(basis)
         input_dim = 0
         if self.input_mode in {"content", "content_position"}:
             input_dim += content_dim
@@ -827,12 +803,6 @@ class CarrierHypernetwork(torch.nn.Module):
             for name, tensor in values.items()
             if name not in {"gain", "slope", "offset"}
         }
-        if self.low_rank_phase and "phase" in deltas:
-            deltas["phase"] = torch.einsum(
-                "bglr,grd->bgld",
-                deltas["phase"],
-                self.angular_basis.to(dtype=raw.dtype),
-            )
         if "slope" in values:
             amplitude = values["slope"] * self.spectral_tilt.to(
                 dtype=raw.dtype
@@ -874,7 +844,7 @@ class CarrierHypernetwork(torch.nn.Module):
             q_raw = self._branch(q_values, "q")
             k_raw = q_raw
         else:
-            output_dim = self.pair_dim * len(self.component_names)
+            output_dim = self.readout_output_dim
             q_raw = (
                 self._branch(q_values, "q")
                 if self.target in {"q", "both"}
@@ -988,8 +958,10 @@ def _expand_shared_readout(
     return output
 
 
-class QKPositionChannel(PositionChannel):
+class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
     """Q/K absolute-position channel with configurable coupling and geometry."""
+
+    _fp32_buffer_names = ("base_sin", "base_cos", "base_angle")
 
     def __init__(
         self,
@@ -1429,9 +1401,10 @@ class QKPositionChannel(PositionChannel):
         projected = self._apply_phase_head(features, head)
         half = projected.shape[-1] // 2
         radial_x, radial_y = projected[..., :half], projected[..., half:]
-        sin = self.base_sin[:sequence_length].to(projected.dtype)[None, :, :]
-        cos = self.base_cos[:sequence_length].to(projected.dtype)[None, :, :]
-        return -sin * radial_x + cos * radial_y
+        sin = self.base_sin[:sequence_length].float()[None, :, :]
+        cos = self.base_cos[:sequence_length].float()[None, :, :]
+        phase = -sin * radial_x.float() + cos * radial_y.float()
+        return phase.to(dtype=projected.dtype)
 
     def _unit_pair_to_phase(
         self,
@@ -1442,16 +1415,16 @@ class QKPositionChannel(PositionChannel):
         projected = self._apply_phase_head(features, head)
         half = projected.shape[-1] // 2
         delta_x, delta_y = projected[..., :half], projected[..., half:]
-        base_sin = self.base_sin[:sequence_length].to(projected.dtype)[None]
-        base_cos = self.base_cos[:sequence_length].to(projected.dtype)[None]
-        pair_x = base_cos + delta_x
-        pair_y = base_sin + delta_y
+        base_sin = self.base_sin[:sequence_length].float()[None]
+        base_cos = self.base_cos[:sequence_length].float()[None]
+        pair_x = base_cos + delta_x.float()
+        pair_y = base_sin + delta_y.float()
         inverse_norm = torch.rsqrt(pair_x.square() + pair_y.square() + 1e-6)
         pair_x = pair_x * inverse_norm
         pair_y = pair_y * inverse_norm
         relative_sin = pair_y * base_cos - pair_x * base_sin
         relative_cos = pair_x * base_cos + pair_y * base_sin
-        return torch.atan2(relative_sin, relative_cos)
+        return torch.atan2(relative_sin, relative_cos).to(dtype=projected.dtype)
 
     def _amplitude(
         self,
@@ -1536,7 +1509,8 @@ class QKPositionChannel(PositionChannel):
             output = output.unsqueeze(0).expand(phase.shape[0], -1, -1, -1)
         half = output.shape[-1] // 2
         pair_x, pair_y = output[..., :half], output[..., half:]
-        phase_sin, phase_cos = phase.sin(), phase.cos()
+        phase_sin = phase.float().sin().to(dtype=output.dtype)
+        phase_cos = phase.float().cos().to(dtype=output.dtype)
         rotated_x = pair_x * phase_cos - pair_y * phase_sin
         rotated_y = pair_x * phase_sin + pair_y * phase_cos
         return torch.cat((rotated_x, rotated_y), dim=-1)
@@ -1651,11 +1625,16 @@ class QKPositionChannel(PositionChannel):
             sin = total_phase.sin().to(dtype=phase.dtype)
             cos = total_phase.cos().to(dtype=phase.dtype)
         else:
-            base_sin = self.base_sin[:sequence_length].to(phase.dtype)[None]
-            base_cos = self.base_cos[:sequence_length].to(phase.dtype)[None]
-            delta_sin, delta_cos = phase.sin(), phase.cos()
-            sin = base_sin * delta_cos + base_cos * delta_sin
-            cos = base_cos * delta_cos - base_sin * delta_sin
+            base_sin = self.base_sin[:sequence_length].float()[None]
+            base_cos = self.base_cos[:sequence_length].float()[None]
+            delta_sin = phase.float().sin()
+            delta_cos = phase.float().cos()
+            sin = (base_sin * delta_cos + base_cos * delta_sin).to(
+                dtype=phase.dtype
+            )
+            cos = (base_cos * delta_cos - base_sin * delta_sin).to(
+                dtype=phase.dtype
+            )
         return torch.cat((amplitude * cos, amplitude * sin), dim=-1)
 
     def _condition_outputs(
@@ -3275,6 +3254,7 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
         return total
 
     qk_total = 0
+    rope_frequency_total = 0
     logit_total = 0
     content_total = 0
     attention_write_total = 0
@@ -3291,6 +3271,9 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
             if attn is None:
                 continue
             qk_total += _unique_numel(getattr(attn, "qk_position", None))
+            rope_parameter = getattr(attn, "rope_log_frequency_delta", None)
+            if rope_parameter is not None:
+                rope_frequency_total += rope_parameter.numel()
             logit_total += _unique_numel(getattr(attn, "logit_bias", None))
             content_total += _unique_numel(
                 getattr(attn, "position_content", None)
@@ -3300,6 +3283,7 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
             )
     position_total = (
         qk_total
+        + rope_frequency_total
         + logit_total
         + content_total
         + attention_write_total
@@ -3307,6 +3291,7 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
     )
     return {
         "qk_position_params": qk_total,
+        "rope_frequency_params": rope_frequency_total,
         "logit_bias_params": logit_total,
         "position_content_params": content_total,
         "attention_write_params": attention_write_total,

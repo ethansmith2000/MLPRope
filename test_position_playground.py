@@ -7,7 +7,9 @@ import os
 import tempfile
 import unittest
 from argparse import Namespace
+from unittest import mock
 from pathlib import Path
+from types import SimpleNamespace
 
 import torch
 
@@ -22,11 +24,12 @@ from position import (
     normalize_position_config_v2,
     normalize_residual_stream_config,
 )
-from train_gpt import RechunkedTokenDataset, load_config, make_model
+from train_gpt import RechunkedTokenDataset, evaluate, load_config, make_model
 from transformer import (
     Attention,
     Transformer,
     TransformerBlock,
+    count_parameters,
     suggest_matched_baselines,
 )
 
@@ -424,6 +427,156 @@ class GeometryAndContentTest(unittest.TestCase):
         summary = attention.qk_position_summary_from_input(x)
         self.assertEqual(summary["hyper_phase_delta_q/rms"], 0.0)
 
+    def test_paired_initialization_matches_every_shared_tensor(self):
+        common = {
+            "dim": 32,
+            "depth": 2,
+            "heads": 4,
+            "ff_mult": 2,
+            "vocab_size": 64,
+            "max_seq_len": 16,
+            "attn_impl": "sdpa",
+            "logit_bias_config": {"enabled": False},
+            "paired_initialization_seed": 456,
+        }
+        position_config = qk_config(
+            "additive",
+            "amplitude_phase",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_input_mode="position",
+            conditioning_network="silu_mlp",
+            conditioning_components="amplitude_phase",
+            parameter_source="direct",
+            amplitude_init=1.0,
+            learn_amplitude=False,
+            learn_phase=False,
+        )
+        torch.manual_seed(1)
+        baseline = Transformer(**common, qk_config={"enabled": False})
+        torch.manual_seed(999)
+        candidate = Transformer(**common, qk_config=position_config)
+        baseline_state = baseline.state_dict()
+        candidate_state = candidate.state_dict()
+        shared = {
+            name
+            for name, value in baseline_state.items()
+            if name in candidate_state and candidate_state[name].shape == value.shape
+        }
+        self.assertGreater(len(shared), 20)
+        for name in shared:
+            with self.subTest(name=name):
+                torch.testing.assert_close(
+                    baseline_state[name],
+                    candidate_state[name],
+                    rtol=0,
+                    atol=0,
+                )
+
+    def test_learned_rope_frequencies_are_exact_at_initialization(self):
+        fixed = Attention(
+            32,
+            4,
+            max_seq_len=64,
+            rope_frequency_mode="fixed",
+        )
+        shared = Attention(
+            32,
+            4,
+            max_seq_len=64,
+            rope_frequency_mode="layer_shared",
+        )
+        per_head = Attention(
+            32,
+            4,
+            max_seq_len=64,
+            rope_frequency_mode="layer_head",
+        )
+        q = torch.randn(2, 4, 64, 8)
+        fixed_q, fixed_k = fixed._apply_rope(q, q)
+        for attention, expected_shape in (
+            (shared, (1, 4)),
+            (per_head, (4, 4)),
+        ):
+            with self.subTest(mode=attention.rope_frequency_mode):
+                self.assertEqual(
+                    tuple(attention.rope_log_frequency_delta.shape),
+                    expected_shape,
+                )
+                learned_q, learned_k = attention._apply_rope(q, q)
+                torch.testing.assert_close(learned_q, fixed_q, rtol=0, atol=0)
+                torch.testing.assert_close(learned_k, fixed_k, rtol=0, atol=0)
+
+        with torch.no_grad():
+            per_head.rope_log_frequency_delta[2, 1] = torch.tensor(2.0).log()
+        frequencies = per_head.rope_frequencies()
+        base = fixed.rope_frequencies()
+        torch.testing.assert_close(frequencies[:2], base[:2])
+        torch.testing.assert_close(frequencies[3:], base[3:])
+        torch.testing.assert_close(frequencies[2, 1], 2.0 * base[2, 1])
+
+    def test_learned_rope_frequency_parameter_counts_and_gradients(self):
+        common = {
+            "dim": 32,
+            "depth": 3,
+            "heads": 4,
+            "ff_mult": 2,
+            "vocab_size": 64,
+            "max_seq_len": 16,
+            "qk_config": {"enabled": False},
+            "logit_bias_config": {"enabled": False},
+        }
+        shared = Transformer(**common, rope_frequency_mode="layer_shared")
+        per_head = Transformer(**common, rope_frequency_mode="layer_head")
+        self.assertEqual(count_parameters(shared)["rope_frequency_params"], 12)
+        self.assertEqual(count_parameters(per_head)["rope_frequency_params"], 48)
+        self.assertEqual(count_parameters(shared)["position_params"], 12)
+        self.assertEqual(count_parameters(per_head)["position_params"], 48)
+
+        loss = per_head(torch.randint(0, 64, (2, 16))).square().mean()
+        loss.backward()
+        for block in per_head.blocks:
+            gradient = block.attn.rope_log_frequency_delta.grad
+            self.assertIsNotNone(gradient)
+            self.assertTrue(torch.isfinite(gradient).all())
+            self.assertGreater(gradient.abs().sum().item(), 0.0)
+
+        with self.assertRaisesRegex(ValueError, "multiplicative RoPE"):
+            Attention(
+                32,
+                4,
+                use_rope=False,
+                rope_frequency_mode="layer_head",
+            )
+
+    def test_layer_selective_ffn_widening(self):
+        common = {
+            "dim": 32,
+            "depth": 4,
+            "heads": 4,
+            "ff_mult": 2,
+            "vocab_size": 64,
+            "max_seq_len": 16,
+            "qk_config": {"enabled": False},
+            "logit_bias_config": {"enabled": False},
+        }
+        baseline = Transformer(**common)
+        widened = Transformer(
+            **common,
+            ff_widened_hidden_dim=128,
+            ff_widened_layers=[1, 3],
+        )
+        self.assertEqual(
+            [block.ff.proj_out.in_features for block in widened.blocks],
+            [64, 128, 64, 128],
+        )
+        expected_added = 2 * (128 - 64) * (3 * 32 + 2)
+        self.assertEqual(
+            count_parameters(widened)["non_embed"]
+            - count_parameters(baseline)["non_embed"],
+            expected_added,
+        )
+
     def test_additive_carrier_hypernetwork_is_composed_before_qk_rms(self):
         config = qk_config(
             "additive",
@@ -636,8 +789,6 @@ class GeometryAndContentTest(unittest.TestCase):
             "phase": (False, False),
             "amplitude_phase": (False, False),
             "cartesian": (False, False),
-            "frequency_phase": (True, False),
-            "amplitude_phase_frequency": (False, False),
         }
         content = torch.randn(2, 4, 9, 8)
         for components, (learn_amplitude, learn_phase) in modes.items():
@@ -669,34 +820,6 @@ class GeometryAndContentTest(unittest.TestCase):
                 gradient = channel.carrier_hypernetwork.q_readout.weight.grad
                 for chunk in gradient.split(4, dim=-1):
                     self.assertGreater(chunk.abs().sum().item(), 0)
-
-    def test_frequency_multiplier_uses_unwrapped_base_angle(self):
-        config = qk_config(
-            "additive",
-            "amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_input_mode="content_position",
-            conditioning_components="frequency_phase",
-            amplitude_init=1.0,
-            parameter_source="direct",
-            learn_amplitude=True,
-            learn_phase=False,
-        )
-        channel = self._channel(config)
-        hyper = channel.carrier_hypernetwork
-        with torch.no_grad():
-            hyper.q_readout.bias[:, :4].fill_(0.25)
-            hyper.q_readout.bias[:, 4:].fill_(0.1)
-        content = torch.randn(2, 4, 9, 8)
-        output = channel(9, q_content=content, k_content=content)
-        expected_angle = 1.25 * (channel.base_angle[:9] + 0.1)
-        expected = torch.cat(
-            (expected_angle.cos(), expected_angle.sin()),
-            dim=-1,
-        )[None, None].expand(2, 4, -1, -1)
-        torch.testing.assert_close(output.q, expected)
 
     def test_cartesian_residual_multiplies_base_carrier(self):
         config = qk_config(
@@ -1627,6 +1750,35 @@ class ResidualAndWriteTest(unittest.TestCase):
         torch.testing.assert_close(captured["q_input"], projected + addend)
         self.assertIsInstance(attention.q_norm, torch.nn.RMSNorm)
 
+    def test_method_aware_diagnostics_reference_raw_projection(self):
+        config = qk_config(
+            "additive",
+            "free",
+            qk_coupling="shared",
+        )
+        attention = Attention(
+            32,
+            4,
+            max_seq_len=16,
+            qk_config=config,
+            qk_norm_mode="method_aware_rms",
+        )
+        with torch.no_grad():
+            attention.to_q.weight.mul_(0.05)
+        x = torch.randn(2, 7, 32)
+        projected = attention._split_heads(attention.to_q(x))
+        addend = attention.qk_position(7, dtype=projected.dtype).q[None]
+        expected = (
+            addend.float().square().mean().sqrt()
+            / projected.float().square().mean().sqrt()
+        ).item()
+        summary = attention.qk_position_summary_from_input(x)
+        self.assertAlmostEqual(
+            summary["addend_q_to_q_rms_ratio"],
+            expected,
+            places=5,
+        )
+
     def test_attention_write_modes_and_zero_gate(self):
         ids = torch.randint(0, 64, (2, 8))
         for mode in ("key_position", "relative_offset"):
@@ -1684,6 +1836,78 @@ class ResidualAndWriteTest(unittest.TestCase):
             channel.query_projection.weight.grad.abs().sum().item(),
             0,
         )
+
+
+class EvaluationProtocolTest(unittest.TestCase):
+    def test_final_evaluation_uses_disjoint_window_and_saves_details(self):
+        class TinyModel(torch.nn.Module):
+            def forward(self, input_ids, targets):
+                return targets.float().mean()
+
+            def position_diagnostics(self, **_kwargs):
+                return {}, {}
+
+        class TinyAccelerator:
+            is_main_process = True
+
+            @staticmethod
+            def gather_for_metrics(value):
+                return value
+
+            @staticmethod
+            def unwrap_model(model):
+                return model
+
+        batches = [
+            {"input_ids": torch.arange(start, start + 4).reshape(1, 4)}
+            for start in range(6)
+        ]
+        with tempfile.TemporaryDirectory() as output_dir:
+            args = SimpleNamespace(
+                training_length=4,
+                validation_start_batch=1,
+                final_validation_start_batch=3,
+                num_validation_batches=2,
+                num_final_validation_batches=2,
+                save_evaluation_details=True,
+                output_dir=output_dir,
+                with_tracking=False,
+            )
+            model = TinyModel()
+            with mock.patch("train_gpt.logger.info"):
+                development = evaluate(
+                    args,
+                    model,
+                    {4: batches},
+                    TinyAccelerator(),
+                    10,
+                )
+                final = evaluate(
+                    args,
+                    model,
+                    {4: batches},
+                    TinyAccelerator(),
+                    10,
+                    final_evaluation=True,
+                )
+            self.assertAlmostEqual(development["eval_loss"], 3.5)
+            self.assertAlmostEqual(final["eval_loss"], 5.5)
+            detail_path = (
+                Path(output_dir)
+                / "evaluation_details"
+                / "step_00000010_context_000004.json"
+            )
+            details = json.loads(detail_path.read_text())
+            self.assertEqual(details["evaluation_start_batch"], 3)
+            self.assertEqual(details["losses"], [5.0, 6.0])
+            rows = [
+                json.loads(line)
+                for line in (Path(output_dir) / "metrics.jsonl").read_text().splitlines()
+            ]
+            self.assertEqual(
+                [row["evaluation_kind"] for row in rows],
+                ["development", "final_holdout"],
+            )
 
 
 class InklingAndConfigTest(unittest.TestCase):
@@ -1910,6 +2134,14 @@ class InklingAndConfigTest(unittest.TestCase):
                 "checkpointing_steps": 5000,
                 "resume_from_checkpoint": "auto",
                 "save_final_model": True,
+                "paired_initialization_seed": 77,
+                "rope_frequency_mode": "layer_head",
+                "ff_widened_hidden_dim": 128,
+                "ff_widened_layers": [0, 2],
+                "num_final_validation_batches": 128,
+                "validation_start_batch": 4,
+                "final_validation_start_batch": 512,
+                "save_evaluation_details": True,
                 "compile_mode": "max-autotune-no-cudagraphs",
             }
         )
@@ -1925,6 +2157,14 @@ class InklingAndConfigTest(unittest.TestCase):
         self.assertEqual(config.checkpointing_steps, 5000)
         self.assertEqual(config.resume_from_checkpoint, "auto")
         self.assertTrue(config.save_final_model)
+        self.assertEqual(config.paired_initialization_seed, 77)
+        self.assertEqual(config.rope_frequency_mode, "layer_head")
+        self.assertEqual(config.ff_widened_hidden_dim, 128)
+        self.assertEqual(config.ff_widened_layers, [0, 2])
+        self.assertEqual(config.num_final_validation_batches, 128)
+        self.assertEqual(config.validation_start_batch, 4)
+        self.assertEqual(config.final_validation_start_batch, 512)
+        self.assertTrue(config.save_evaluation_details)
         self.assertEqual(config.compile_mode, "max-autotune-no-cudagraphs")
 
         with self.assertRaisesRegex(ValueError, "must cover"):

@@ -1,3 +1,4 @@
+import hashlib
 import math
 from typing import Literal
 
@@ -18,6 +19,7 @@ from position import (
     build_qk_position_channel,
     build_residual_position_channel,
     build_rope_cache,
+    build_rope_frequencies,
     count_position_parameters,
     ensure_channel_v2,
     interleaved_fourier_basis,
@@ -25,6 +27,7 @@ from position import (
     normalize_position_content_config,
     normalize_residual_stream_config,
 )
+from position.precision import PreserveFP32BuffersMixin
 
 # Inductor's default FlexAttention tiles need ~120KiB SMEM; this GPU reports a
 # 101376 cap, so pin small tiles. Compile flex alone (not nested under the outer
@@ -132,7 +135,13 @@ class PositionContentProjection(torch.nn.Module):
         )
 
 
-class Attention(torch.nn.Module):
+class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
+    _fp32_buffer_names = (
+        "rope_sin",
+        "rope_cos",
+        "rope_inverse_frequency",
+    )
+
     def __init__(
         self,
         dim,
@@ -152,6 +161,7 @@ class Attention(torch.nn.Module):
         position_content_dim: int = 64,
         position_content_coupling: str = "separate",
         qk_norm_mode: str = "legacy_layernorm",
+        rope_frequency_mode: str = "fixed",
     ):
         super().__init__()
         self.dim = dim
@@ -160,6 +170,12 @@ class Attention(torch.nn.Module):
         self.use_rope = use_rope
         self.head_dim = dim // heads
         self.rope_theta = rope_theta
+        if rope_frequency_mode not in {"fixed", "layer_shared", "layer_head"}:
+            raise ValueError(
+                "rope_frequency_mode must be 'fixed', 'layer_shared', or "
+                "'layer_head'"
+            )
+        self.rope_frequency_mode = rope_frequency_mode
         self.max_seq_len = max_seq_len
         self.rel_extent = rel_extent or max_seq_len
         self.attn_impl = attn_impl
@@ -292,6 +308,10 @@ class Attention(torch.nn.Module):
             self.qk_position is not None
             and not self.qk_position.uses_multiplicative_rope
         )
+        if rope_frequency_mode != "fixed" and not self.multiplicative_rope:
+            raise ValueError(
+                "Learned RoPE frequencies require active multiplicative RoPE"
+            )
         if not use_rope and (
             self.qk_position is not None
             and self.qk_position.application != "additive"
@@ -341,6 +361,70 @@ class Attention(torch.nn.Module):
         )
         self.register_buffer("rope_sin", rope_sin, persistent=False)
         self.register_buffer("rope_cos", rope_cos, persistent=False)
+        self.register_buffer(
+            "rope_inverse_frequency",
+            build_rope_frequencies(self.head_dim, self.rope_theta),
+            persistent=False,
+        )
+        frequency_shape = {
+            "fixed": None,
+            "layer_shared": (1, self.head_dim // 2),
+            "layer_head": (self.heads, self.head_dim // 2),
+        }[self.rope_frequency_mode]
+        self.rope_log_frequency_delta = (
+            None
+            if frequency_shape is None
+            else torch.nn.Parameter(torch.zeros(frequency_shape))
+        )
+
+    def rope_frequencies(self) -> torch.Tensor:
+        """Return the effective per-head frequencies in fp32."""
+        base = self.rope_inverse_frequency.float()[None, :]
+        if self.rope_log_frequency_delta is None:
+            return base.expand(self.heads, -1)
+        multiplier = self.rope_log_frequency_delta.float().exp()
+        return (base * multiplier).expand(self.heads, -1)
+
+    def _rope_tables(
+        self,
+        sequence_length: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.rope_log_frequency_delta is None:
+            return self.rope_sin, self.rope_cos
+        frequencies = self.rope_frequencies()
+        positions = torch.arange(
+            sequence_length,
+            device=frequencies.device,
+            dtype=torch.float32,
+        )
+        angles = positions[None, :, None] * frequencies[:, None, :]
+        return angles.sin(), angles.cos()
+
+    @torch.no_grad()
+    def rope_frequency_diagnostics(
+        self,
+    ) -> tuple[dict[str, float], torch.Tensor]:
+        frequencies = self.rope_frequencies().detach().float()
+        base = self.rope_inverse_frequency.detach().float()[None]
+        multipliers = frequencies / base
+        log_spacing = frequencies.log().diff(dim=-1).abs()
+        spacing_min = log_spacing.min().item() if log_spacing.numel() else 0.0
+        spacing_mean = log_spacing.mean().item() if log_spacing.numel() else 0.0
+        metrics = {
+            "multiplier_mean": multipliers.mean().item(),
+            "multiplier_std": multipliers.std(unbiased=False).item(),
+            "multiplier_min": multipliers.min().item(),
+            "multiplier_max": multipliers.max().item(),
+            "frequency_min": frequencies.min().item(),
+            "frequency_max": frequencies.max().item(),
+            "log_spacing_min": spacing_min,
+            "log_spacing_mean": spacing_mean,
+            "head_frequency_std_mean": frequencies.std(
+                dim=0,
+                unbiased=False,
+            ).mean().item(),
+        }
+        return metrics, frequencies
 
     def _apply_rope(
         self,
@@ -360,11 +444,12 @@ class Attention(torch.nn.Module):
                 )
             q_phase_delta = phase_delta
             k_phase_delta = phase_delta
+        rope_sin, rope_cos = self._rope_tables(q.shape[-2])
         return apply_rotary(
             q,
             k,
-            self.rope_sin,
-            self.rope_cos,
+            rope_sin,
+            rope_cos,
             q_phase_delta=q_phase_delta,
             k_phase_delta=k_phase_delta,
             q_scale=q_scale,
@@ -734,11 +819,22 @@ class Attention(torch.nn.Module):
             q_content, k_content = q, k
         parameter = next(self.qk_position.parameters(), None)
         dtype = parameter.dtype if parameter is not None else x.dtype
+        diagnostic_q_ref = q
+        diagnostic_k_ref = k
+        if (
+            self.qk_norm_mode == "method_aware_rms"
+            and self.qk_position.application == "additive"
+        ):
+            # Method-aware additive attention composes position with the raw
+            # projections and normalizes only afterward. Ratios and cosines
+            # must therefore use the raw projections as their reference.
+            diagnostic_q_ref = q_projected
+            diagnostic_k_ref = k_projected
         summary = self.qk_position.summarize(
             x.shape[1],
             dtype=dtype,
-            q_ref=q,
-            k_ref=k,
+            q_ref=diagnostic_q_ref,
+            k_ref=diagnostic_k_ref,
             q_content=q_content,
             k_content=k_content,
         )
@@ -818,6 +914,7 @@ class TransformerBlock(torch.nn.Module):
         position_content_dim: int = 64,
         position_content_coupling: str = "separate",
         qk_norm_mode: str = "legacy_layernorm",
+        rope_frequency_mode: str = "fixed",
     ):
         super().__init__()
         self.attn = Attention(
@@ -838,6 +935,7 @@ class TransformerBlock(torch.nn.Module):
             position_content_dim=position_content_dim,
             position_content_coupling=position_content_coupling,
             qk_norm_mode=qk_norm_mode,
+            rope_frequency_mode=rope_frequency_mode,
         )
         self.ff = GeGLU(dim, hidden_dim=ff_hidden_dim)
         self.norm1 = torch.nn.LayerNorm(dim)
@@ -874,6 +972,10 @@ class Transformer(torch.nn.Module):
         position_content_dim: int = 64,
         position_content_coupling: str = "separate",
         qk_norm_mode: str = "legacy_layernorm",
+        paired_initialization_seed: int | None = None,
+        ff_widened_hidden_dim: int | None = None,
+        ff_widened_layers: list[int] | tuple[int, ...] | None = None,
+        rope_frequency_mode: str = "fixed",
     ):
         super().__init__()
 
@@ -914,11 +1016,25 @@ class Transformer(torch.nn.Module):
                 )
                 for _ in range(layer_count)
             )
+        base_ff_hidden_dim = ff_hidden_dim or dim * ff_mult
+        widened_layers = set(ff_widened_layers or ())
+        if any(layer_idx < 0 or layer_idx >= depth for layer_idx in widened_layers):
+            raise ValueError("ff_widened_layers must contain valid layer indices")
+        if widened_layers and ff_widened_hidden_dim is None:
+            raise ValueError(
+                "ff_widened_hidden_dim is required when ff_widened_layers is set"
+            )
+        if ff_widened_hidden_dim is not None and ff_widened_hidden_dim <= 0:
+            raise ValueError("ff_widened_hidden_dim must be positive")
         self.blocks = torch.nn.ModuleList([
             TransformerBlock(
                 dim,
                 heads,
-                ff_hidden_dim or dim * ff_mult,
+                (
+                    ff_widened_hidden_dim
+                    if layer_idx in widened_layers
+                    else base_ff_hidden_dim
+                ),
                 is_causal=True,
                 use_rope=use_rope,
                 rope_theta=rope_theta,
@@ -934,8 +1050,9 @@ class Transformer(torch.nn.Module):
                 position_content_dim=position_content_dim,
                 position_content_coupling=position_content_coupling,
                 qk_norm_mode=qk_norm_mode,
+                rope_frequency_mode=rope_frequency_mode,
             )
-            for _ in range(depth)
+            for layer_idx in range(depth)
         ])
         self.in_proj = torch.nn.Sequential(
             torch.nn.LayerNorm(dim),
@@ -945,24 +1062,63 @@ class Transformer(torch.nn.Module):
             torch.nn.LayerNorm(dim),
             torch.nn.Linear(dim, vocab_size, bias=True),
         )
-        self._init_weights(dim)
+        self._init_weights(dim, paired_initialization_seed)
 
-    def _init_weights(self, dim):
+    @staticmethod
+    def _named_generator(
+        seed: int | None,
+        parameter_name: str,
+    ) -> torch.Generator | None:
+        """Return a stable per-parameter RNG for paired comparisons."""
+        if seed is None:
+            return None
+        payload = f"{int(seed)}:{parameter_name}".encode("utf-8")
+        digest = hashlib.sha256(payload).digest()
+        parameter_seed = int.from_bytes(digest[:8], "big", signed=False)
+        return torch.Generator().manual_seed(parameter_seed)
+
+    def _init_weights(
+        self,
+        dim,
+        paired_initialization_seed: int | None = None,
+    ):
         embed_std = dim ** -0.5
         lm_head_std = 0.02
         with torch.no_grad():
-            for module in self.modules():
+            for module_name, module in self.named_modules():
                 if isinstance(module, torch.nn.Embedding):
-                    torch.nn.init.normal_(module.weight, mean=0.0, std=embed_std)
+                    torch.nn.init.normal_(
+                        module.weight,
+                        mean=0.0,
+                        std=embed_std,
+                        generator=self._named_generator(
+                            paired_initialization_seed,
+                            f"{module_name}.weight",
+                        ),
+                    )
                 elif isinstance(module, torch.nn.Linear):
-                    torch.nn.init.xavier_normal_(module.weight)
+                    torch.nn.init.xavier_normal_(
+                        module.weight,
+                        generator=self._named_generator(
+                            paired_initialization_seed,
+                            f"{module_name}.weight",
+                        ),
+                    )
                     if module.bias is not None:
                         torch.nn.init.zeros_(module.bias)
                 elif isinstance(module, torch.nn.LayerNorm):
                     torch.nn.init.ones_(module.weight)
                     torch.nn.init.zeros_(module.bias)
             lm_head = self.out_proj[1]
-            torch.nn.init.normal_(lm_head.weight, mean=0.0, std=lm_head_std)
+            torch.nn.init.normal_(
+                lm_head.weight,
+                mean=0.0,
+                std=lm_head_std,
+                generator=self._named_generator(
+                    paired_initialization_seed,
+                    "out_proj.1.lm_head_weight",
+                ),
+            )
             if lm_head.bias is not None:
                 torch.nn.init.zeros_(lm_head.bias)
             for module in self.modules():
@@ -1015,6 +1171,16 @@ class Transformer(torch.nn.Module):
                     block.norm1(diagnostic_x)
                 )
             curves = block.attn.logit_bias_curves()
+            rope_metrics, rope_frequencies = (
+                block.attn.rope_frequency_diagnostics()
+            )
+            rope_prefix = f"position/layer_{layer_idx:02d}/rope_frequency"
+            for key, value in rope_metrics.items():
+                metrics[f"{rope_prefix}/{key}"] = value
+            if layer_idx in selected_layers:
+                profiles[f"rope_frequency_layer_{layer_idx:02d}"] = (
+                    rope_frequencies.cpu()
+                )
             if curves is not None:
                 curves_cpu = curves.cpu()
                 prefix = f"position/layer_{layer_idx:02d}"
@@ -1150,6 +1316,7 @@ def count_parameters(model: torch.nn.Module) -> dict[str, int]:
         "lm_head": head,
         "position_params": position_counts["position_params"],
         "qk_position_params": position_counts["qk_position_params"],
+        "rope_frequency_params": position_counts["rope_frequency_params"],
         "logit_bias_params": position_counts["logit_bias_params"],
         "attention_write_params": position_counts["attention_write_params"],
         "residual_stream_params": position_counts["residual_stream_params"],

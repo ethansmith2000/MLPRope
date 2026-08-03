@@ -389,11 +389,13 @@ Additional additive component modes retain zero-initialized exact anchors:
   remains fixed;
 - `cartesian` predicts a complex residual `(1+u)+iv` and multiplies it by the
   base carrier, so `u=v=0` is exactly `cis(omega*p)`;
-- `frequency_phase` composes
-  `cis((1+delta_frequency)*(omega*p+delta_phase))`; it may pair those dynamic
-  angular components with a directly learned static amplitude vector;
-- `amplitude_phase_frequency` makes all three polar components dynamic using
-  the same frequency-multiplier formula.
+**Removed 2026-07-31:** `frequency_phase` and `amplitude_phase_frequency`
+(content-conditioned frequency multipliers). Content-dependent `omega` makes the
+attention logit depend on absolute position with error growing as `m*p`, so a
+multiplier bounded by `epsilon` needs `epsilon < 1e-4` to keep drift under
+0.1 rad at L=1024. Measured at `4.5369` and `4.7788` against a `4.2840` control.
+The normalized form, where the multiplier is divided by `p`, is
+translation-preserving and survives as `position_offset`.
 
 Dynamic amplitude or phase cannot overlap a learned static parameter for the
 same component. This preserves the gauge correction while allowing a static
@@ -671,3 +673,44 @@ the caller's responsibility.
 
 They do not emit a sweep unless called by a future family. Existing completed
 JSON and output artifacts are not rewritten.
+
+
+## Status of conditioning axes (updated 2026-08-02)
+
+Effect sizes below are 5k / h768/d8 / seed 123, where the run-to-run replication
+floor is about `0.0015`. Only the first group is closed by a mechanism that
+predicts it worsens with scale; the rest lost at this scale and horizon only.
+
+### Removed
+
+| Axis | Result | Why removed |
+| --- | --- | --- |
+| `frequency_phase`, `amplitude_phase_frequency` | `4.5369` / `4.7788` vs `4.2840` | Phase error grows as `m*p`; worse at longer context, not better |
+| `slope_phase_lowrank`, `conditioning.angular_rank` | sweep unreadable | Rank-dependent init scale; superseded by `_MixedReadout`, and the SVD showed the angular branch needs ~rank 30 of 48 |
+
+### Deprecated — kept, default off, lost only at this scale
+
+| Axis | Result |
+| --- | --- |
+| `qk_norm_per_head` | `+0.0032` on RoPE, `+0.0025` on the free carrier (~2x floor); the gradient-averaging explanation predicts it improves with longer training |
+| `offset_parameterization` `raw` / `softplus` | `+0.004` to `+0.0065` versus `tanh`; saturation effects accumulate, so 5k is where they are least visible |
+| `amplitude_slope`, `position_offset`, `slope_offset` | on the efficiency frontier, never ahead on quality; their case is parameter cost at scale, which h768/d8 at L=1024 cannot test |
+| `log_gain_phase`, `inkling_table`, `inkling_cosnet`, `pairwise_low_rank` | superseded; retained to load archived configs |
+
+### Live
+
+`amplitude_phase`, `amplitude`, `phase`, `cartesian`, `slope_phase`,
+`amplitude_offset`, `readout_head_mixing` (`none` / `dense` / `lowrank`).
+
+### Recommended default (2026-08-02)
+
+`input_mode="position"` with `components="amplitude_phase"`, per-head readouts,
+no cross-head mixing. At h1024/d12 / 30k this is the only configuration that
+beats standard RoPE once throughput is charged (`+0.0289` iso-wallclock, versus
+`-0.0014` for content+position and `-0.0055` for a wide trunk). It uses
+`1,714,176` positional parameters and costs 4.7% throughput.
+
+Content conditioning adds `0.0038` at h768 and `0.0046` at h1024 -- flat across
+scale and near the `~0.0015` replication floor -- for `2.36M` extra parameters
+and 12% throughput. `input_mode="content_position"` remains supported but is not
+the recommended default.

@@ -13,6 +13,7 @@ import torch
 
 from position import (
     FrozenFourierBasis,
+    apply_rotary,
     build_logit_bias_channel,
     build_qk_position_channel,
     build_rope_cache,
@@ -24,7 +25,7 @@ from position import (
 )
 from position.config import detect_channel_schema
 from train_gpt import load_config
-from transformer import Transformer, count_parameters
+from transformer import Attention, Transformer, count_parameters
 
 
 FEATURE_MAPS = (
@@ -153,6 +154,90 @@ class BasisAndRotaryTest(unittest.TestCase):
         # Algebraic R(theta+delta) via complex multiply on first pair.
         # Nonzero delta must change the rotated result.
         self.assertFalse(torch.allclose(q_delta, q_out))
+
+    def test_fixed_position_tables_survive_explicit_half_conversion(self):
+        for dtype in (torch.float16, torch.bfloat16):
+            with self.subTest(dtype=dtype):
+                attention = Attention(32, 4, max_seq_len=1024)
+                rope_sin = attention.rope_sin.clone()
+                rope_cos = attention.rope_cos.clone()
+                inverse_frequency = attention.rope_inverse_frequency.clone()
+                attention.to(dtype=dtype)
+                self.assertEqual(attention.rope_sin.dtype, torch.float32)
+                self.assertEqual(attention.rope_cos.dtype, torch.float32)
+                torch.testing.assert_close(attention.rope_sin, rope_sin)
+                torch.testing.assert_close(attention.rope_cos, rope_cos)
+                self.assertEqual(
+                    attention.rope_inverse_frequency.dtype,
+                    torch.float32,
+                )
+                torch.testing.assert_close(
+                    attention.rope_inverse_frequency,
+                    inverse_frequency,
+                )
+
+                basis = FrozenFourierBasis(1024, 8, 10_000.0)
+                basis_reference = basis.basis.clone()
+                basis.to(dtype=dtype)
+                self.assertEqual(basis.basis.dtype, torch.float32)
+                torch.testing.assert_close(basis.basis, basis_reference)
+
+                channel = _build_qk(
+                    _v1_qk("identity", "per_head", "add"),
+                    extent=1024,
+                )
+                references = {
+                    name: getattr(channel, name).clone()
+                    for name in ("base_sin", "base_cos", "base_angle")
+                }
+                channel.to(dtype=dtype)
+                for name, reference in references.items():
+                    value = getattr(channel, name)
+                    self.assertEqual(value.dtype, torch.float32)
+                    torch.testing.assert_close(value, reference)
+                self.assertEqual(channel.pipeline.basis.basis.dtype, torch.float32)
+
+    def test_bf16_dynamic_phase_is_composed_in_fp32(self):
+        sequence_length = 1024
+        head_dim = 8
+        half = head_dim // 2
+        sin, cos = build_rope_cache(sequence_length, head_dim, 10_000.0)
+        q = torch.zeros(
+            1,
+            1,
+            sequence_length,
+            head_dim,
+            dtype=torch.bfloat16,
+        )
+        q[..., :half] = 1
+        delta = torch.linspace(
+            -1.0,
+            1.0,
+            sequence_length,
+            dtype=torch.bfloat16,
+        )[None, :, None].expand(1, -1, half)
+        q_out, _ = apply_rotary(
+            q,
+            q,
+            sin,
+            cos,
+            q_phase_delta=delta,
+            k_phase_delta=delta,
+        )
+
+        delta_fp32 = delta.float()[None]
+        sin_fp32 = sin[None, None]
+        cos_fp32 = cos[None, None]
+        expected_sin = (
+            sin_fp32 * delta_fp32.cos()
+            + cos_fp32 * delta_fp32.sin()
+        ).to(torch.bfloat16)
+        expected_cos = (
+            cos_fp32 * delta_fp32.cos()
+            - sin_fp32 * delta_fp32.sin()
+        ).to(torch.bfloat16)
+        expected = torch.cat((expected_cos, expected_sin), dim=-1)
+        torch.testing.assert_close(q_out, expected, rtol=0, atol=0)
 
 
 class PositionChannelTest(unittest.TestCase):
@@ -896,7 +981,14 @@ class SpectralCarrierComponentsTest(unittest.TestCase):
     HEAD_DIM = 8
     PAIR_DIM = HEAD_DIM // 2
 
-    def _cfg(self, components, *, amplitude_init=1.0, offset_parameterization="raw", angular_rank=2):
+    def _cfg(
+        self,
+        components,
+        *,
+        amplitude_init=1.0,
+        offset_parameterization="raw",
+        target="both",
+    ):
         return {
             "enabled": True,
             "application": "additive",
@@ -920,12 +1012,11 @@ class SpectralCarrierComponentsTest(unittest.TestCase):
                 "input_mode": "content_position",
                 "network": "silu_mlp",
                 "components": components,
-                "target": "both",
+                "target": target,
                 "coupling": "shared_trunk_separate_readouts",
                 "head_coupling": "per_head_independent",
                 "hidden_dim": 16,
                 "offset_parameterization": offset_parameterization,
-                "angular_rank": angular_rank,
             },
             "qk_coupling": "shared_trunk_separate_readouts",
             "head_coupling": "per_head_independent",
@@ -966,9 +1057,6 @@ class SpectralCarrierComponentsTest(unittest.TestCase):
             # Mixed modes narrow exactly one branch.
             "amplitude_offset": (PAIR + 1, (PAIR, 1)),
             "slope_phase": (2 + PAIR, (1, 1, PAIR)),
-            # Factorized angular readout: emits `angular_rank` values, expanded
-            # to pair_dim by a learned basis.
-            "slope_phase_lowrank": (2 + 2, (1, 1, 2)),
         }
         for components, (width, widths) in expected.items():
             with self.subTest(components=components):
@@ -980,6 +1068,27 @@ class SpectralCarrierComponentsTest(unittest.TestCase):
                 # Strictly narrower than the free per-frequency readout.
                 self.assertLess(width, self.PAIR_DIM * 2)
 
+    def test_asymmetric_narrow_targets_use_exact_component_width(self):
+        length = 6
+        content = self._content(length)
+        for components in (
+            "amplitude_slope",
+            "position_offset",
+            "slope_offset",
+            "amplitude_offset",
+            "slope_phase",
+        ):
+            for target in ("q", "k"):
+                with self.subTest(components=components, target=target):
+                    channel = self._channel(components, target=target)
+                    output = channel(
+                        length,
+                        q_content=content,
+                        k_content=content,
+                    )
+                    self.assertEqual(output.q.shape, content.shape)
+                    self.assertEqual(output.k.shape, content.shape)
+
     def test_zero_readout_recovers_exact_rope_anchor(self):
         length = 6
         content = self._content(length)
@@ -990,7 +1099,6 @@ class SpectralCarrierComponentsTest(unittest.TestCase):
             "slope_offset",
             "amplitude_offset",
             "slope_phase",
-            "slope_phase_lowrank",
         ):
             with self.subTest(components=components):
                 channel = self._channel(components)
@@ -1100,21 +1208,6 @@ class SpectralCarrierComponentsTest(unittest.TestCase):
         self.assertIsNotNone(q_grad)
         self.assertIsNotNone(k_grad)
         self.assertFalse(torch.allclose(q_grad, k_grad))
-
-    def test_low_rank_angular_expands_to_pair_dim(self):
-        channel = self._channel("slope_phase_lowrank", angular_rank=2)
-        hyper = channel.carrier_hypernetwork
-        self.assertEqual(hyper.angular_basis.shape, (self.HEADS, 2, self.PAIR_DIM))
-        raw = torch.zeros(1, self.HEADS, 4, 2 + 2)
-        raw[..., 2:] = 0.5
-        phase = hyper._parse(raw).phase
-        self.assertEqual(phase.shape[-1], self.PAIR_DIM)
-        # Rank-2 output cannot be an arbitrary pair_dim vector: it must lie in
-        # the row space of the learned basis.
-        expected = torch.einsum(
-            "bglr,grd->bgld", raw[..., 2:], hyper.angular_basis
-        )
-        torch.testing.assert_close(phase, expected)
 
     def test_readout_head_mixing_keeps_anchor_and_mixes_heads(self):
         length = 6
