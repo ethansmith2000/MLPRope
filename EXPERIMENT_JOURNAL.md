@@ -2696,3 +2696,79 @@ may be optimizer); single-seed everywhere, with the position-only versus free
 control gap of `0.0046` below what one seed resolves; and throughput figures
 taken from a single logged value that includes warmup, on which the entire
 compute-adjusted argument rests.
+
+## 2026-08-05 — Independent audit reconciliation and phase-19 disclosure
+
+An independent reviewer followed `INDEPENDENT_REVIEW_BRIEF.md` and inspected the
+implementation, configs, raw per-example evaluations, checkpoints, and logs.
+No comparison-invalidating code bug was found. In particular, the reviewer
+independently verified the fp32 RoPE path, exact frequency/controller anchors,
+controller locality and Q/K sharing, paired per-name initialization, optimizer
+grouping, and the phase-20 through phase-23 analysis arithmetic. This raises
+confidence that the recent static- and dynamic-frequency nulls are real results
+of the tested formulations rather than silent implementation failures.
+
+The audit found a material process omission: phase 19 had already locked and
+launched the paired h1024 confirmation described in
+`CONFIRMATION_PROTOCOL.md`, but its interrupted status was absent from this
+journal and `HANDOFF.md`. Artifact inspection gives the exact inventory:
+
+- 15 locked configs: 5 arms x seeds `123/456/789`;
+- one completed run: `position-only/seed123`;
+- three interrupted `content-position` jobs ending at training steps
+  29,350 / 29,491 / 29,988;
+- interrupted `standard-rope/seed456` at 21,449 and
+  `mapped-addrope/seed456` at 1,307;
+- nine jobs that were queued but never began (zero-byte logs);
+- no intermediate checkpoints, so interrupted runs must restart rather than
+  resume.
+
+All live logs stopped around 2026-08-02 11:28 UTC. The surviving artifacts do
+not establish why the parent launch was terminated, so the journal does not
+attribute a cause.
+
+The completed phase-19 position-only model reached development loss `3.30964`,
+within `0.00325` of phase 18's `3.30639` on the same 25-batch window. Its new
+disjoint 1,024-example holdout loss is `3.43016`; there is not yet a paired RoPE
+model on that holdout, so this absolute value cannot confirm the headline gap.
+The same-window replication supports the sign/stability of the candidate but
+does not repair the missing paired multi-seed comparison.
+
+The h1024 headline is therefore restated as a strong screening result, not a
+confirmed `0.0421` effect. Phase-17/18 endpoints were the last observations on
+a repeatedly used 25-batch development window; there was no early stopping, so
+comparisons remain internally consistent, but the values are not disjoint
+holdout estimates. Phase-18 arms also used independent rather than paired base
+initialization. The claim that content adds only `0.004-0.005` is unresolved at
+that precision.
+
+The throughput arithmetic itself checks out, but the inputs are single-run
+measurements including evaluation/profiling/tracking on a shared box. Same fixed
+RoPE configs measured across phases varied by about `2.8%`, comparable to the
+reported `4.7%` position-only cost and larger than the margin deciding the
+free-control/wide-trunk iso-wallclock negatives. Position-only's `0.0289` raw
+iso-wallclock margin is plausibly robust; the exact throughput cost and close
+negative rankings require a same-GPU steady-state benchmark.
+
+The audit also sharpened the frequency interpretation. Phase-22 additive
+frequencies did not numerically collapse, but `11-12%` became negative and p95
+extra phase at position 1024 reached `42-45` radians, so "finite spectra"
+undersells substantial winding and sign reversal. Phase-23 low-rank controllers
+were active but mostly operated inside tanh's near-linear region; rare extrema
+approached the one-radian bound. This makes free-vs-bounded output a legitimate
+conceptual question but a low-priority training experiment.
+
+Revised order of work:
+
+1. complete the decisive phase-19 position-only vs RoPE paired three-seed gate;
+2. run a controlled steady-state h1024 throughput benchmark;
+3. run phase-23 checkpoint-only zero/mean/shuffle ablations if the mechanism
+   wording is worth resolving;
+4. de-confound h768 vs h1024 optimizer settings;
+5. only then consider a genuinely distinct dynamic mechanism, such as a causal
+   cumulative content clock with explicitly positive increments, rather than
+   another bounded-output map.
+
+The checkpoint ablations require GPU inference but no retraining. They measure
+endpoint reliance on the learned controller and sensitivity to token alignment;
+they do not alone identify the causal source of any training-time gain.

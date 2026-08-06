@@ -43,6 +43,15 @@ from position.config import (
     upgrade_legacy_position_config,
     v2_position_run_tag,
 )
+from position.frequency import (
+    ROPE_FREQUENCY_DEFAULTS,
+    ROPE_FREQUENCY_MAPPERS,
+    ROPE_FREQUENCY_PARAMETERIZATIONS,
+    RopeFrequencyController,
+    legacy_rope_frequency_mode,
+    normalize_rope_frequency_config,
+    parameterize_rope_frequencies,
+)
 from position.mappers import FeatureMapper, build_mapper
 from position.rotary import (
     apply_rotary,
@@ -70,6 +79,10 @@ __all__ = [
     "V2_CHANNEL_DEFAULTS",
     "ATTENTION_WRITE_DEFAULTS",
     "RESIDUAL_STREAM_DEFAULTS",
+    "ROPE_FREQUENCY_DEFAULTS",
+    "ROPE_FREQUENCY_MAPPERS",
+    "ROPE_FREQUENCY_PARAMETERIZATIONS",
+    "RopeFrequencyController",
     "adapt_legacy_position_state_dict",
     "apply_rotary",
     "build_logit_bias_channel",
@@ -88,11 +101,14 @@ __all__ = [
     "exp_with_identity_grad",
     "interleaved_fourier_basis",
     "legacy_position_run_tag",
+    "legacy_rope_frequency_mode",
     "load_position_compatible_state_dict",
     "normalize_position_config_v2",
     "normalize_position_content_config",
     "normalize_attention_write_config",
     "normalize_residual_stream_config",
+    "normalize_rope_frequency_config",
+    "parameterize_rope_frequencies",
     "resolve_channel_config",
     "rotate_half",
     "upgrade_legacy_position_config",

@@ -3274,6 +3274,9 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
             rope_parameter = getattr(attn, "rope_log_frequency_delta", None)
             if rope_parameter is not None:
                 rope_frequency_total += rope_parameter.numel()
+            rope_frequency_total += _unique_numel(
+                getattr(attn, "rope_frequency_controller", None)
+            )
             logit_total += _unique_numel(getattr(attn, "logit_bias", None))
             content_total += _unique_numel(
                 getattr(attn, "position_content", None)

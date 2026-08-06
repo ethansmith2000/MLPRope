@@ -38,6 +38,8 @@ from position import (
     legacy_position_run_tag,
     normalize_attention_write_config,
     normalize_position_content_config,
+    normalize_rope_frequency_config,
+    legacy_rope_frequency_mode,
     normalize_residual_stream_config,
     resolve_channel_config,
     v2_position_run_tag,
@@ -182,6 +184,18 @@ DEFAULT_CONFIG = {
     "rope_theta": 10000.0,
     # Learn the multiplicative RoPE schedule per layer, optionally per head.
     "rope_frequency_mode": "fixed",
+    "rope_frequency": {
+        "mode": "fixed",
+        "head_coupling": "shared",
+        "parameterization": "exp",
+        "log_bound": 1.0,
+        "source": "normalized_residual",
+        "mapper": "linear",
+        "rank": 32,
+        "qk_coupling": "shared",
+        "phase_bound": 1.0,
+        "reference_length": 1024,
+    },
     "qk_norm": True,
     "post_position_qk_norm": False,
     "qk_norm_per_head": False,
@@ -504,15 +518,12 @@ def load_config(cli_args):
     rope_theta = float(cfg["rope_theta"])
     if not isinstance(cfg["use_rope"], bool):
         raise TypeError("use_rope must be a boolean")
-    if cfg["rope_frequency_mode"] not in {
-        "fixed",
-        "layer_shared",
-        "layer_head",
-    }:
-        raise ValueError(
-            "rope_frequency_mode must be 'fixed', 'layer_shared', or "
-            "'layer_head'"
-        )
+    frequency_config = normalize_rope_frequency_config(
+        cfg["rope_frequency"] if "rope_frequency" in overrides else None,
+        legacy_mode=cfg["rope_frequency_mode"],
+    )
+    cfg["rope_frequency"] = frequency_config
+    cfg["rope_frequency_mode"] = legacy_rope_frequency_mode(frequency_config)
     if not cfg["use_rope"] and cfg["rope_frequency_mode"] != "fixed":
         raise ValueError("learned RoPE frequencies require use_rope=true")
     if not isinstance(cfg["post_position_qk_norm"], bool):
@@ -762,6 +773,7 @@ def make_model(args, vocab_size):
         use_rope=args.use_rope,
         rope_theta=args.rope_theta,
         rope_frequency_mode=args.rope_frequency_mode,
+        rope_frequency_config=args.rope_frequency,
         qk_norm=args.qk_norm,
         post_position_qk_norm=args.post_position_qk_norm,
         qk_norm_per_head=args.qk_norm_per_head,
@@ -788,6 +800,8 @@ POSITION_DECAY_EXEMPT = (
     "logit_bias_position",
     "position_content",
     "carrier_hypernetwork",
+    "rope_frequency_controller",
+    "rope_log_frequency_delta",
 )
 
 
@@ -1261,6 +1275,7 @@ def main():
             "attention_write": args.attention_write,
             "use_rope": args.use_rope,
             "rope_frequency_mode": args.rope_frequency_mode,
+            "rope_frequency": args.rope_frequency,
             "post_position_qk_norm": args.post_position_qk_norm,
             "qk_norm_per_head": args.qk_norm_per_head,
             "exclude_position_from_decay": args.exclude_position_from_decay,

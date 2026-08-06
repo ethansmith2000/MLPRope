@@ -12,6 +12,7 @@ from torch.nn.attention.flex_attention import (
 
 from position import (
     PositionChannel,
+    RopeFrequencyController,
     adapt_legacy_position_state_dict,
     apply_rotary,
     build_attention_position_write_channel,
@@ -23,9 +24,11 @@ from position import (
     count_position_parameters,
     ensure_channel_v2,
     interleaved_fourier_basis,
+    normalize_rope_frequency_config,
     normalize_attention_write_config,
     normalize_position_content_config,
     normalize_residual_stream_config,
+    parameterize_rope_frequencies,
 )
 from position.precision import PreserveFP32BuffersMixin
 
@@ -162,6 +165,7 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         position_content_coupling: str = "separate",
         qk_norm_mode: str = "legacy_layernorm",
         rope_frequency_mode: str = "fixed",
+        rope_frequency_config: dict | None = None,
     ):
         super().__init__()
         self.dim = dim
@@ -170,12 +174,22 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         self.use_rope = use_rope
         self.head_dim = dim // heads
         self.rope_theta = rope_theta
-        if rope_frequency_mode not in {"fixed", "layer_shared", "layer_head"}:
-            raise ValueError(
-                "rope_frequency_mode must be 'fixed', 'layer_shared', or "
-                "'layer_head'"
+        self.rope_frequency_config = normalize_rope_frequency_config(
+            rope_frequency_config,
+            legacy_mode=rope_frequency_mode,
+        )
+        self.rope_frequency_mode = {
+            ("fixed", "shared"): "fixed",
+            ("static", "shared"): "layer_shared",
+            ("static", "per_head"): "layer_head",
+            ("content", "per_head"): "content",
+            ("content", "shared"): "content",
+        }[
+            (
+                self.rope_frequency_config["mode"],
+                self.rope_frequency_config["head_coupling"],
             )
-        self.rope_frequency_mode = rope_frequency_mode
+        ]
         self.max_seq_len = max_seq_len
         self.rel_extent = rel_extent or max_seq_len
         self.attn_impl = attn_impl
@@ -308,7 +322,7 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             self.qk_position is not None
             and not self.qk_position.uses_multiplicative_rope
         )
-        if rope_frequency_mode != "fixed" and not self.multiplicative_rope:
+        if self.rope_frequency_mode != "fixed" and not self.multiplicative_rope:
             raise ValueError(
                 "Learned RoPE frequencies require active multiplicative RoPE"
             )
@@ -370,11 +384,22 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             "fixed": None,
             "layer_shared": (1, self.head_dim // 2),
             "layer_head": (self.heads, self.head_dim // 2),
+            "content": None,
         }[self.rope_frequency_mode]
         self.rope_log_frequency_delta = (
             None
             if frequency_shape is None
             else torch.nn.Parameter(torch.zeros(frequency_shape))
+        )
+        self.rope_frequency_controller = (
+            RopeFrequencyController(
+                model_dim=dim,
+                heads=heads,
+                pair_dim=self.head_dim // 2,
+                config=self.rope_frequency_config,
+            )
+            if self.rope_frequency_config["mode"] == "content"
+            else None
         )
 
     def rope_frequencies(self) -> torch.Tensor:
@@ -382,8 +407,12 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         base = self.rope_inverse_frequency.float()[None, :]
         if self.rope_log_frequency_delta is None:
             return base.expand(self.heads, -1)
-        multiplier = self.rope_log_frequency_delta.float().exp()
-        return (base * multiplier).expand(self.heads, -1)
+        frequencies = parameterize_rope_frequencies(
+            base,
+            self.rope_log_frequency_delta,
+            self.rope_frequency_config,
+        )
+        return frequencies.expand(self.heads, -1)
 
     def _rope_tables(
         self,
@@ -407,7 +436,8 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         frequencies = self.rope_frequencies().detach().float()
         base = self.rope_inverse_frequency.detach().float()[None]
         multipliers = frequencies / base
-        log_spacing = frequencies.log().diff(dim=-1).abs()
+        nonpositive = frequencies <= 0
+        log_spacing = frequencies.abs().clamp_min(1e-30).log().diff(dim=-1).abs()
         spacing_min = log_spacing.min().item() if log_spacing.numel() else 0.0
         spacing_mean = log_spacing.mean().item() if log_spacing.numel() else 0.0
         metrics = {
@@ -417,6 +447,7 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             "multiplier_max": multipliers.max().item(),
             "frequency_min": frequencies.min().item(),
             "frequency_max": frequencies.max().item(),
+            "frequency_nonpositive_fraction": nonpositive.float().mean().item(),
             "log_spacing_min": spacing_min,
             "log_spacing_mean": spacing_mean,
             "head_frequency_std_mean": frequencies.std(
@@ -686,6 +717,18 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 k_phase_delta = position_output.k
                 q_scale = position_output.q_scale
                 k_scale = position_output.k_scale
+        if self.rope_frequency_controller is not None:
+            dynamic_phase = self.rope_frequency_controller.phase_delta(x)
+            q_phase_delta = (
+                dynamic_phase
+                if q_phase_delta is None
+                else q_phase_delta + dynamic_phase
+            )
+            k_phase_delta = (
+                dynamic_phase
+                if k_phase_delta is None
+                else k_phase_delta + dynamic_phase
+            )
         if self.multiplicative_rope:
             q, k = self._apply_rope(
                 q,
@@ -915,6 +958,7 @@ class TransformerBlock(torch.nn.Module):
         position_content_coupling: str = "separate",
         qk_norm_mode: str = "legacy_layernorm",
         rope_frequency_mode: str = "fixed",
+        rope_frequency_config: dict | None = None,
     ):
         super().__init__()
         self.attn = Attention(
@@ -936,6 +980,7 @@ class TransformerBlock(torch.nn.Module):
             position_content_coupling=position_content_coupling,
             qk_norm_mode=qk_norm_mode,
             rope_frequency_mode=rope_frequency_mode,
+            rope_frequency_config=rope_frequency_config,
         )
         self.ff = GeGLU(dim, hidden_dim=ff_hidden_dim)
         self.norm1 = torch.nn.LayerNorm(dim)
@@ -976,6 +1021,7 @@ class Transformer(torch.nn.Module):
         ff_widened_hidden_dim: int | None = None,
         ff_widened_layers: list[int] | tuple[int, ...] | None = None,
         rope_frequency_mode: str = "fixed",
+        rope_frequency_config: dict | None = None,
     ):
         super().__init__()
 
@@ -1051,6 +1097,7 @@ class Transformer(torch.nn.Module):
                 position_content_coupling=position_content_coupling,
                 qk_norm_mode=qk_norm_mode,
                 rope_frequency_mode=rope_frequency_mode,
+                rope_frequency_config=rope_frequency_config,
             )
             for layer_idx in range(depth)
         ])
@@ -1124,6 +1171,8 @@ class Transformer(torch.nn.Module):
             for module in self.modules():
                 if isinstance(module, PositionChannel):
                     module.reset_output_parameters()
+                elif isinstance(module, RopeFrequencyController):
+                    module.reset_output_parameters()
 
     def prepare_flex_masks(
         self,
@@ -1155,6 +1204,7 @@ class Transformer(torch.nn.Module):
                 )[None, :, :]
         for layer_idx, block in enumerate(self.blocks):
             actual_qk_summary = None
+            normalized_diagnostic_x = None
             if diagnostic_x is not None:
                 if self.residual_position_layers:
                     position_idx = (
@@ -1167,8 +1217,9 @@ class Transformer(torch.nn.Module):
                             dtype=diagnostic_x.dtype,
                         )[None, :, :]
                     )
+                normalized_diagnostic_x = block.norm1(diagnostic_x)
                 actual_qk_summary = block.attn.qk_position_summary_from_input(
-                    block.norm1(diagnostic_x)
+                    normalized_diagnostic_x
                 )
             curves = block.attn.logit_bias_curves()
             rope_metrics, rope_frequencies = (
@@ -1177,6 +1228,17 @@ class Transformer(torch.nn.Module):
             rope_prefix = f"position/layer_{layer_idx:02d}/rope_frequency"
             for key, value in rope_metrics.items():
                 metrics[f"{rope_prefix}/{key}"] = value
+            if (
+                normalized_diagnostic_x is not None
+                and block.attn.rope_frequency_controller is not None
+            ):
+                controller_metrics = (
+                    block.attn.rope_frequency_controller.diagnostics(
+                        normalized_diagnostic_x
+                    )
+                )
+                for key, value in controller_metrics.items():
+                    metrics[f"{rope_prefix}/{key}"] = value
             if layer_idx in selected_layers:
                 profiles[f"rope_frequency_layer_{layer_idx:02d}"] = (
                     rope_frequencies.cpu()

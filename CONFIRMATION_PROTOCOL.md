@@ -1,6 +1,8 @@
 # Phase-19 paired confirmation protocol
 
-_Status: locked before launch. Any change after a result exists must be recorded as a protocol revision, not silently regenerated._
+_Protocol status: locked before launch. Execution status: interrupted on
+2026-08-02 and incomplete. Any change after a result exists must be recorded as
+a protocol revision, not silently regenerated._
 
 ## Question
 
@@ -40,3 +42,26 @@ Training throughput is secondary. It will be read from structured summaries, but
 ## Decision rule
 
 Call position-only confirmed only if it beats standard RoPE in all three seeds and the mean advantage remains practically material on the final holdout. Call the hypernetwork-specific mechanism supported only if it also consistently beats mapped AddRoPE. Differences below `0.01` are reported as unresolved unless the paired intervals and seed consistency are unusually decisive.
+
+## Execution status recorded 2026-08-05
+
+An independent artifact audit found that the launch had not been documented
+after it stopped. Of the 15 locked runs:
+
+- `position-only/seed123` completed. Its step-30k development loss is `3.30964`
+  and its disjoint final-holdout loss is `3.43016`.
+- `content-position` seeds 123/456/789 were interrupted at training steps
+  29,350 / 29,491 / 29,988.
+- `standard-rope/seed456` was interrupted at step 21,449.
+- `mapped-addrope-a03/seed456` was interrupted at step 1,307.
+- The remaining nine jobs never began; their queue log files are empty.
+
+All active logs ended around 2026-08-02 11:28 UTC. They do not establish why
+the parent launch ended. Because `checkpointing_steps` was locked to `null`,
+the interrupted runs are not resumable and must restart if selected.
+
+No primary contrast can yet be computed on the locked holdout because there is
+no completed paired reference. The minimum headline tranche is the three
+standard-RoPE seeds and position-only seeds 456/789, reusing the completed
+position-only seed123. Remaining arms are still required for the mapped,
+matched-capacity, and content-conditioning questions in the original protocol.

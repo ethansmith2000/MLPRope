@@ -1,7 +1,12 @@
 # MLPRope Handoff Brief
 
-_Last updated: 2026-08-02. Written for an incoming agent who has not seen this
+_Last updated: 2026-08-05. Written for an incoming agent who has not seen this
 codebase. Read the "Audit brief" section before trusting anything else here._
+
+The current decision-driven roadmap is
+[`CONSOLIDATED_RESEARCH_PLAN.md`](CONSOLIDATED_RESEARCH_PLAN.md). It supersedes
+older "where to pick up" ordering when they conflict; locked protocol files
+remain authoritative for experiments already begun.
 
 ## What this project is
 
@@ -16,21 +21,25 @@ use: **h768/d8** (8 heads) and **h1024/d12** (8 heads). Eval loss at sequence
 length 1024 is the primary metric. Length extrapolation is explicitly **not**
 being optimized for right now.
 
-## The headline claim
+## The headline screening result
 
-> A **learned per-head positional profile, conditioned on position only**, beats
-> standard RoPE by `0.0421` at h1024/d12 / 30k steps, for `1.71M` positional
-> parameters and 4.7% throughput -- and it is the **only** variant tested that
-> is still ahead of RoPE once compute is charged.
+> In the phase-18 seed-123 screen, a **learned per-head positional profile,
+> conditioned on position only**, beat standard RoPE by `0.0421` at h1024/d12 /
+> 30k steps, for `1.71M` positional parameters and a reported 4.7% throughput
+> cost. Under that run's throughput estimate it was the only tested variant
+> still ahead after charging compute.
 
-Content conditioning, cross-head readout mixing, and extra positional capacity
-all lose to it on a compute-adjusted basis. That claim rests on single-seed runs
-at one token budget and two model sizes; see the audit brief.
+This is not yet a confirmed multi-seed headline. Phase 18 was unpaired and used
+a repeatedly observed 25-batch development window; its throughput values were
+single-run measurements on a shared box. Content conditioning, cross-head
+mixing, and extra positional capacity appeared to lose on a compute-adjusted
+basis, but the close negative iso-wallclock verdicts are below measured
+cross-day throughput variation. See the phase-19 status and audit brief below.
 
 ## Current standing
 
-h1024/d12, seed 123, 30k steps, SDPA, eval at 1024, lr `4e-4`, betas
-`0.95/0.999`, batch 8:
+h1024/d12, seed 123, 30k steps, SDPA, 25-batch development evaluation at 1024,
+lr `4e-4`, betas `0.95/0.999`, batch 8:
 
 | Cell | Loss | Gap vs RoPE | Tokens/s | Position params | Iso-wallclock vs RoPE |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -52,17 +61,21 @@ h768/d8, same protocol, lr `3e-4`, betas `0.9/0.98` (phase17):
 
 ## Three scaling facts that should shape any new work
 
-**1. Width barely erodes the positional advantage; tokens do.** Going h768/d8 ->
+**1. Width appears to erode the positional advantage less than tokens do.** Going h768/d8 ->
 h1024/d12 (2.7x non-embedding parameters) costs the gap only `8-14%`. Going 5k
 -> 30k steps (6x tokens) **halves** it (`0.127 -> 0.0506`). So the shrinking-gap
-concern is about training duration, not model size. Independently corroborated
-by the older phase6 gate, where the logit stack held `0.094` over RoPE at both
-sizes.
+concern may be more about training duration than model size. This is
+corroborated by the older phase6 gate, where the logit stack held `0.094` over
+RoPE at both sizes, but phase17/18 used different optimizer recipes and the
+comparison remains confounded.
 
-**2. Content conditioning contributes ~`0.004`, flat across scale.** Position-only
+**2. Content conditioning's measured increment is ~`0.004`, but unresolved.** Position-only
 sits `0.0038` behind full content+position at h768 and `0.0046` at h1024 -- near
-the replication floor and not growing. Despite the project's history, this line
-of work is not really about *content*-conditioned positional encoding.
+the replication floor and not growing. Both values are single-seed, unpaired
+contrasts; partial phase-19 cross-seed trajectories vary by more than this gap.
+The economical working hypothesis is that the line is about a learned per-head
+positional profile rather than content conditioning, but phase 19 must resolve
+that statement.
 
 **3. 5k screening is unreliable, not merely noisy.** No ordering measured inside
 the conditioned group at 5k survived to 30k. Treat 5k differences under `~0.02`
@@ -94,6 +107,11 @@ that suggest what kinds of errors to look for.
   every generated config after the key had been removed from the schema; a
   string-escaping bug in an earlier edit had also silently no-op'd the intended
   change. Caught by the config-loading test, not by inspection.
+- **An omitted interrupted confirmation.** Phase 19 was locked and launched on
+  2026-08-02, but only one run completed and its status was not added to the
+  journal or the earlier handoff. The omission was caught by an independent
+  artifact audit on 2026-08-05. The exact inventory is now recorded below; the
+  reason the launch was terminated is not established by the surviving logs.
 
 ### Specific things worth checking
 
@@ -110,6 +128,8 @@ that suggest what kinds of errors to look for.
    `~0.0015` replication floor comes from same-seed reruns of nominally identical
    configs, not from a proper seed study. Cross-seed spread was `0.002-0.027` in
    the older two-seed data. Anything claimed under `~0.01` deserves a second seed.
+   Phase 19 locked a paired three-seed confirmation, but only one of its 15 runs
+   completed; see "Where to pick up."
 4. **The phase18 optimizer confound.** h1024 used lr `4e-4` / betas `0.95/0.999`;
    h768 used `3e-4` / `0.9/0.98`. Some of the `8-14%` gap erosion attributed to
    width could be optimizer. One h768 run at the h1024 recipe closes this.
@@ -121,9 +141,13 @@ that suggest what kinds of errors to look for.
    (`test_position_channels.py`), but the gauge confound found in July
    (effective gains reaching 122x) came from exactly this area, so it is worth
    independent verification for the modes currently in use.
-7. **Eval protocol.** Eval is at 1024 only, and `final_eval_loss` is a single
-   point rather than an average over the last few evals. Averaging the last 2-3
-   would cut variance for free and was never adopted.
+7. **Eval protocol.** Phase-17/18 "final" loss is the last evaluation on the
+   same 25-batch development window used throughout training, not a large
+   disjoint holdout. There was no early stopping, so this does not create
+   training leakage, and all arms share the window. Phase 19 introduced a
+   disjoint 1,024-example holdout; its only completed model has development loss
+   `3.30964` and holdout loss `3.43016`, illustrating why absolute values from
+   the two windows must not be mixed.
 
 ### Questions worth forming an independent view on
 
@@ -153,6 +177,9 @@ exactly `amplitude_init * cis(omega*p)`. Logit-bias channels require
 | [`POSITION_CONFIG.md`](POSITION_CONFIG.md) | v2 schema reference plus a status table of removed / deprecated / live axes with effect sizes |
 | [`CONCAT_QK_POSITION.md`](CONCAT_QK_POSITION.md) | Why relative logit biases cannot be moved onto fused SDPA. Contains a retraction worth reading as a worked example |
 | [`axes.md`](axes.md) | Original research axes, largely historical |
+| [`CONFIRMATION_PROTOCOL.md`](CONFIRMATION_PROTOCOL.md) | locked phase-19 paired h1024 confirmation; currently incomplete |
+| [`CONSOLIDATED_RESEARCH_PLAN.md`](CONSOLIDATED_RESEARCH_PLAN.md) | current objectives, evidence rules, execution order, gates, and conditional methods backlog |
+| [`INDEPENDENT_REVIEW_BRIEF.md`](INDEPENDENT_REVIEW_BRIEF.md) | read-only prompts for code, evidence, methods, and synthesis reviews |
 | [`/workspace/GPU_QUEUEING.md`](/workspace/GPU_QUEUEING.md) | **Required** before launching any GPU job. Shared box |
 
 | Module | Role |
@@ -164,8 +191,19 @@ exactly `amplitude_init * cis(omega*p)`. Logit-bias channels require
 | `train_gpt.py` | Training entrypoint, `make_optimizer`, `POSITION_DECAY_EXEMPT` |
 | `launch_position_bias.sh` | Sweep launcher, ~880 lines after the 2026-07-31 prune |
 | `position_results.py` | Pull and summarize local run metrics |
-| `test_position_channels.py`, `test_position_playground.py` | 106 CPU tests, ~4s |
+| `test_position_channels.py`, `test_position_playground.py` | 121 passing CPU tests and 1 skipped test after the frequency-controller work |
 | `scripts/position_v2_cuda_smoke.py` | GPU smoke tests, eager and compiled |
+
+The learned-frequency work has its own compact trail:
+
+| Path | What it is |
+| --- | --- |
+| `ROPE_FREQUENCY_ROADMAP.md` | hypotheses, staging, and current interpretation for phases 20-23 |
+| `ROPE_DYNAMIC_FREQUENCY_PROTOCOL.md` | locked phase-23 protocol, results, diagnostics, and the remaining bounded-vs-free question |
+| `model-output/position_bias_phase20_rope_frequency/FREQUENCY_RESULTS.md` | direct static-frequency screen |
+| `model-output/position_bias_phase21_rope_parameterization/PARAMETERIZATION_RESULTS.md` | 5k static-parameterization screen |
+| `model-output/position_bias_phase22_rope_additive_30k/ADDITIVE_30K_RESULTS.md` | paired 30k additive-frequency confirmation |
+| `model-output/position_bias_phase23_dynamic_frequency/DYNAMIC_FREQUENCY_RESULTS.md` | bounded token-conditioned controller screen |
 
 Results live in `model-output/position_bias_<family>/<run>/metrics.jsonl`.
 Generated configs live in `sweep_configs/<family>/`. A test asserts every config
@@ -217,7 +255,7 @@ exists and is the correct default but changes nothing measurable.
 ```bash
 cd /workspace/MLPRope
 
-# CPU tests (106, ~4s) -- run these first, they catch schema drift
+# CPU tests -- run these first; they catch schema drift and null-anchor errors
 /venv/main/bin/python -m unittest test_position_channels test_position_playground
 
 # GPU smoke, eager and compiled
@@ -258,24 +296,85 @@ to re-run.
 
 ## Where to pick up
 
-Ordered by what the previous agent thought most valuable, but forming your own
-view is the point of the audit brief above.
+Ordered by current information value after the independent audit.
 
-1. **De-confound the scale comparison.** One h768/d8 run at the h1024 recipe
-   (lr `4e-4`, betas `0.95/0.999`, 8 heads) isolates width from optimizer in the
-   `8-14%` erosion figure. Cheap, and it is the weakest link in the headline.
-2. **Second seed on the h1024 gate.** Four runs. The position-only vs free
-   control gap (`0.0046`) is below what one seed can resolve, and that gap is
-   what justifies dropping content conditioning.
-3. **Clean throughput benchmark.** Steady-state tokens/s excluding warmup for
-   the four h1024 arms. The entire compute-adjusted argument depends on numbers
-   currently taken from a single logged value.
-4. **Decide whether to keep going or write up.** The project has a coherent
-   story; the marginal experiment is now worth less than a careful account of
-   what is already known.
+1. **Complete the phase-19 headline gate.** Phase 19 locked 15 paired h1024/d12
+   runs across three seeds and a disjoint 1,024-example holdout. Only
+   `position-only/seed123` completed. Five other jobs began but were interrupted
+   (`content-position` reached 29,350/29,491/29,988; `standard-rope/seed456`
+   reached 21,449; `mapped-addrope/seed456` reached 1,307), and nine never began.
+   The protocol used no intermediate checkpoints, so none of the interrupted
+   work is resumable. The first decisive tranche is standard RoPE seeds
+   123/456/789 plus position-only seeds 456/789; the completed position-only
+   seed123 can be reused. If that confirms the headline, finish the mapped,
+   content, and matched-FFN contrasts required by the locked protocol.
+2. **Clean throughput benchmark.** Measure the four h1024 phase-18 arms on the
+   same GPU, without eval/profiling/tracking in the timed region, with
+   interleaved repetitions. Position-only's raw margin is probably robust, but
+   the exact 4.7% cost and the negative free/wide iso-wallclock conclusions are
+   not.
+3. **De-confound the scale comparison.** Run both standard RoPE and
+   position-only at h768/d8 under the h1024 recipe (lr `4e-4`, betas
+   `0.95/0.999`, 8 heads). A single run cannot isolate an optimizer effect on a
+   two-arm loss gap.
+4. **Cheap phase-23 checkpoint ablations.** Zero, sequence-mean, and
+   token-shuffle controller outputs on the saved three-seed checkpoints before
+   training another frequency variant. These require inference GPU time but no
+   retraining. They distinguish endpoint reliance on same-token conditioning
+   from a quasi-static schedule; they do not by themselves prove what caused a
+   training-time improvement.
+5. **Then decide whether to stop and write up.** The free-vs-bounded controller
+   question is conceptually real, but existing low-rank outputs were mostly in
+   tanh's near-linear region, so it ranks below the headline confirmation.
 
-Do **not** re-open logit-bias/SDPA reformulations or frequency multipliers
-without new information -- both are closed by mechanism, not effect size.
+Phase 20 subsequently tested direct static base-RoPE frequency learning across
+three paired seeds. Layer-shared and layer-head schedules each improved 1024
+loss by about `0.0019`, while head-specific frequencies added nothing over a
+layer-shared schedule. This is reproducible but below the `0.01` materiality
+gate. The subsequent static and bounded-dynamic questions are recorded in
+`ROPE_FREQUENCY_ROADMAP.md`; both screens are now complete.
+
+Phases 21-22 resolved the static parameterization question. Free additive
+frequency (`omega = omega0 + u`) appeared promising at 5k (`-0.011992` mean,
+all three seeds favorable), but at 30k it fell to `-0.001593` with mixed signs
+(`-0.004342`, `+0.004510`, `-0.004947`). Full identity-backward exp, softplus,
+and bounded-log parameterizations were already below the 5k materiality gate.
+At 30k, additive frequencies were finite but not benign-looking: `11-12%` were
+negative and p95 extra phase at position 1024 reached `42-45` radians. There was
+no numerical collapse, but describing this only as "sane spectra" understates
+the winding and sign reversal. Together with the null loss result, this is
+evidence for a poorly identified/flat angular direction rather than a promising
+schedule. Static learned base frequencies are closed at h768/d8.
+
+Phase 23 tested that distinct dynamic hypothesis using the normalized residual,
+Q/K-shared per-head outputs, and an extra phase limited by `t/1024` times one
+radian. Full linear was worse than fixed RoPE (`+0.003057` mean). Rank-32 linear
+and rank-32 SiLU were favorable in all three seeds but only by `-0.001893` and
+`-0.002063`; neither approached the locked `-0.01` promotion gate. The low-rank
+controllers were not broadly pinned at the limit (maximum per-layer raw RMS
+`0.27-0.40`, maximum per-layer phase p95 `0.32-0.42` rad), although rare token/
+pair extrema did approach the one-radian bound. Per the locked protocol, Q/K
+separation, head sharing, source/rank sweeps, and the phase-residual control were
+not opened.
+
+The remaining methodological question is whether the one-radian `tanh` trust
+region was justified. It was a conservative safety choice, not a property of
+rotary phase. Before new training, use checkpoint ablations to determine whether
+same-token controller alignment matters. If a later focused reopening is
+justified, retain the best rank-32 SiLU mapper and the same three seeds and
+change only the output map. The cleanest alternative is a free
+horizon-normalized phase,
+`delta_phase = (t / 1024) * raw(norm_x)`, with diagnostics for raw magnitude and
+phase winding. A rational squash or clamp-with-STE can test optimizer behavior,
+but both retain an arbitrary output boundary and therefore do not answer the
+more fundamental free-vs-bounded question.
+
+Do **not** re-open logit-bias/SDPA reformulations or the old raw multiplicative
+content-conditioned frequency arms without new information. A free
+horizon-normalized phase is not identical to those old arms: its controller
+gradient is scaled by `t/1024`, and it changes phase additively rather than
+multiplying each base frequency. It still breaks joint-shift equivariance and
+must not be described as a translation-relative RoPE schedule.
 
 ## Transcript
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import tempfile
 import unittest
@@ -548,6 +549,237 @@ class GeometryAndContentTest(unittest.TestCase):
                 use_rope=False,
                 rope_frequency_mode="layer_head",
             )
+
+    def test_static_rope_frequency_parameterizations_anchor_and_gradients(self):
+        base_attention = Attention(32, 4, max_seq_len=16)
+        base = base_attention.rope_frequencies()[0]
+        softplus_slope = 1.0 - math.exp(-1.0)
+        expected_gradients = {
+            "exp": base,
+            "exp_full_ste": torch.ones_like(base),
+            "softplus": base * softplus_slope,
+            "additive": torch.ones_like(base),
+            "bounded_log": base,
+        }
+        for parameterization, expected_gradient in expected_gradients.items():
+            with self.subTest(parameterization=parameterization):
+                attention = Attention(
+                    32,
+                    4,
+                    max_seq_len=16,
+                    rope_frequency_config={
+                        "mode": "static",
+                        "head_coupling": "shared",
+                        "parameterization": parameterization,
+                        "log_bound": 1.0,
+                    },
+                )
+                frequencies = attention.rope_frequencies()[0]
+                torch.testing.assert_close(frequencies, base, rtol=0, atol=0)
+                frequencies.sum().backward()
+                torch.testing.assert_close(
+                    attention.rope_log_frequency_delta.grad[0],
+                    expected_gradient,
+                )
+
+        ordinary = Attention(
+            32,
+            4,
+            rope_frequency_config={
+                "mode": "static",
+                "head_coupling": "shared",
+                "parameterization": "exp",
+            },
+        )
+        identity_backward = Attention(
+            32,
+            4,
+            rope_frequency_config={
+                "mode": "static",
+                "head_coupling": "shared",
+                "parameterization": "exp_full_ste",
+            },
+        )
+        with torch.no_grad():
+            raw = torch.linspace(-0.5, 0.5, 4)[None]
+            ordinary.rope_log_frequency_delta.copy_(raw)
+            identity_backward.rope_log_frequency_delta.copy_(raw)
+        torch.testing.assert_close(
+            identity_backward.rope_frequencies(),
+            ordinary.rope_frequencies(),
+            rtol=0,
+            atol=0,
+        )
+
+    def test_additive_frequency_diagnostics_survive_frequency_reversal(self):
+        attention = Attention(
+            32,
+            4,
+            rope_frequency_config={
+                "mode": "static",
+                "head_coupling": "shared",
+                "parameterization": "additive",
+            },
+        )
+        with torch.no_grad():
+            attention.rope_log_frequency_delta.fill_(-2.0)
+        metrics, frequencies = attention.rope_frequency_diagnostics()
+        self.assertTrue(torch.isfinite(frequencies).all())
+        self.assertEqual(metrics["frequency_nonpositive_fraction"], 1.0)
+        self.assertTrue(all(math.isfinite(value) for value in metrics.values()))
+
+    def test_content_frequency_controllers_are_exact_nulls(self):
+        common = {
+            "dim": 32,
+            "depth": 2,
+            "heads": 4,
+            "ff_mult": 2,
+            "vocab_size": 64,
+            "max_seq_len": 16,
+            "qk_config": {"enabled": False},
+            "logit_bias_config": {"enabled": False},
+            "paired_initialization_seed": 123,
+        }
+        fixed = Transformer(**common)
+        tokens = torch.randint(0, 64, (2, 16))
+        fixed_logits = fixed(tokens)
+        for mapper in ("linear", "low_rank_linear", "low_rank_silu"):
+            with self.subTest(mapper=mapper):
+                candidate = Transformer(
+                    **common,
+                    rope_frequency_config={
+                        "mode": "content",
+                        "head_coupling": "per_head",
+                        "parameterization": "horizon_bounded",
+                        "mapper": mapper,
+                        "rank": 8,
+                        "phase_bound": 1.0,
+                        "reference_length": 16,
+                    },
+                )
+                logits = candidate(tokens)
+                torch.testing.assert_close(logits, fixed_logits, rtol=0, atol=0)
+                for block in candidate.blocks:
+                    controller = block.attn.rope_frequency_controller
+                    self.assertIsNotNone(controller)
+                    torch.testing.assert_close(
+                        controller.output.weight,
+                        torch.zeros_like(controller.output.weight),
+                        rtol=0,
+                        atol=0,
+                    )
+
+    def test_content_frequency_controller_shapes_bounds_and_gradients(self):
+        common_config = {
+            "mode": "content",
+            "head_coupling": "per_head",
+            "parameterization": "horizon_bounded",
+            "mapper": "low_rank_silu",
+            "rank": 8,
+            "phase_bound": 1.25,
+            "reference_length": 16,
+        }
+        attention = Attention(
+            32,
+            4,
+            max_seq_len=16,
+            rope_frequency_config=common_config,
+        )
+        controller = attention.rope_frequency_controller
+        normalized_residual = torch.randn(2, 16, 32)
+        with torch.no_grad():
+            controller.output.bias.fill_(100.0)
+        phase = controller.phase_delta(normalized_residual)
+        self.assertEqual(tuple(phase.shape), (2, 4, 16, 4))
+        self.assertEqual(phase.dtype, torch.float32)
+        self.assertLessEqual(phase.abs().max().item(), 1.25)
+        torch.testing.assert_close(
+            phase[:, :, 0],
+            torch.zeros_like(phase[:, :, 0]),
+            rtol=0,
+            atol=0,
+        )
+        self.assertAlmostEqual(
+            phase[:, :, -1].mean().item(),
+            1.25 * 15 / 16,
+            places=6,
+        )
+
+        phase_control = Attention(
+            32,
+            4,
+            max_seq_len=16,
+            rope_frequency_config={
+                **common_config,
+                "parameterization": "phase_residual",
+            },
+        ).rope_frequency_controller
+        with torch.no_grad():
+            phase_control.output.bias.fill_(100.0)
+        controlled_phase = phase_control.phase_delta(normalized_residual)
+        self.assertAlmostEqual(controlled_phase.mean().item(), 1.25, places=6)
+
+        model = Transformer(
+            dim=32,
+            depth=2,
+            heads=4,
+            ff_mult=2,
+            vocab_size=64,
+            max_seq_len=16,
+            qk_config={"enabled": False},
+            logit_bias_config={"enabled": False},
+            paired_initialization_seed=123,
+            rope_frequency_config=common_config,
+        )
+        loss = model(torch.randint(0, 64, (2, 16))).square().mean()
+        loss.backward()
+        for block in model.blocks:
+            controller = block.attn.rope_frequency_controller
+            self.assertIsNotNone(controller.output.weight.grad)
+            self.assertTrue(torch.isfinite(controller.output.weight.grad).all())
+            self.assertGreater(controller.output.weight.grad.abs().sum().item(), 0)
+            self.assertIsNotNone(controller.down.weight.grad)
+            torch.testing.assert_close(
+                controller.down.weight.grad,
+                torch.zeros_like(controller.down.weight.grad),
+                rtol=0,
+                atol=0,
+            )
+
+    def test_content_frequency_controller_parameter_counts(self):
+        common = {
+            "dim": 32,
+            "depth": 3,
+            "heads": 4,
+            "ff_mult": 2,
+            "vocab_size": 64,
+            "max_seq_len": 16,
+            "qk_config": {"enabled": False},
+            "logit_bias_config": {"enabled": False},
+        }
+        linear = Transformer(
+            **common,
+            rope_frequency_config={
+                "mode": "content",
+                "head_coupling": "per_head",
+                "parameterization": "horizon_bounded",
+                "mapper": "linear",
+            },
+        )
+        low_rank = Transformer(
+            **common,
+            rope_frequency_config={
+                "mode": "content",
+                "head_coupling": "per_head",
+                "parameterization": "horizon_bounded",
+                "mapper": "low_rank_linear",
+                "rank": 8,
+            },
+        )
+        self.assertEqual(count_parameters(linear)["rope_frequency_params"], 1584)
+        self.assertEqual(count_parameters(low_rank)["rope_frequency_params"], 1224)
+        self.assertEqual(count_parameters(linear)["position_params"], 1584)
+        self.assertEqual(count_parameters(low_rank)["position_params"], 1224)
 
     def test_layer_selective_ffn_widening(self):
         common = {
@@ -2185,6 +2417,85 @@ class InklingAndConfigTest(unittest.TestCase):
             with self.subTest(key=key):
                 with self.assertRaisesRegex(ValueError, "must be positive"):
                     self._load_payload({key: 0})
+
+    def test_structured_rope_frequency_config_round_trips_and_validates(self):
+        config = self._load_payload(
+            {
+                "rope_frequency": {
+                    "mode": "static",
+                    "head_coupling": "shared",
+                    "parameterization": "softplus",
+                }
+            }
+        )
+        self.assertEqual(config.rope_frequency_mode, "layer_shared")
+        self.assertEqual(config.rope_frequency["parameterization"], "softplus")
+        model = make_model(config, 64)
+        self.assertEqual(
+            model.blocks[0].attn.rope_frequency_config,
+            config.rope_frequency,
+        )
+
+        content = self._load_payload(
+            {
+                "rope_frequency": {
+                    "mode": "content",
+                    "head_coupling": "per_head",
+                    "parameterization": "horizon_bounded",
+                    "source": "normalized_residual",
+                    "mapper": "low_rank_silu",
+                    "rank": 16,
+                    "qk_coupling": "shared",
+                    "phase_bound": 1.0,
+                    "reference_length": 1024,
+                }
+            }
+        )
+        self.assertEqual(content.rope_frequency_mode, "content")
+        self.assertEqual(content.rope_frequency["mapper"], "low_rank_silu")
+        self.assertEqual(content.rope_frequency["rank"], 16)
+        content_model = make_model(content, 64)
+        self.assertIsNotNone(
+            content_model.blocks[0].attn.rope_frequency_controller
+        )
+
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            self._load_payload(
+                {
+                    "rope_frequency_mode": "layer_head",
+                    "rope_frequency": {
+                        "mode": "static",
+                        "head_coupling": "shared",
+                    },
+                }
+            )
+        with self.assertRaisesRegex(ValueError, "fixed rope_frequency"):
+            self._load_payload(
+                {
+                    "rope_frequency": {
+                        "mode": "fixed",
+                        "parameterization": "softplus",
+                    }
+                }
+            )
+        with self.assertRaisesRegex(ValueError, "Unknown rope_frequency keys"):
+            self._load_payload(
+                {
+                    "rope_frequency": {
+                        "mode": "static",
+                        "mystery": 1,
+                    }
+                }
+            )
+        with self.assertRaisesRegex(ValueError, "content rope_frequency"):
+            self._load_payload(
+                {
+                    "rope_frequency": {
+                        "mode": "content",
+                        "parameterization": "additive",
+                    }
+                }
+            )
 
     def test_50k_scale_configuration_round_trips(self):
         config = self._load_payload(
