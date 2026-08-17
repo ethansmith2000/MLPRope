@@ -428,6 +428,53 @@ class GeometryAndContentTest(unittest.TestCase):
         summary = attention.qk_position_summary_from_input(x)
         self.assertEqual(summary["hyper_phase_delta_q/rms"], 0.0)
 
+    def test_position_only_carrier_is_content_invariant(self):
+        """Behavioral form of the phase-19 severance guarantee.
+
+        The existing structural test asserts the content projector is never
+        built; this one asserts the carrier *values* cannot depend on content
+        even if a caller supplies some, with the hypernetwork deliberately
+        randomized away from its zero-initialized (trivially invariant) state.
+        """
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            conditioning="carrier_hypernetwork",
+            conditioning_source="dedicated",
+            conditioning_coupling="shared_trunk_separate_readouts",
+            conditioning_input_mode="position",
+            conditioning_network="silu_mlp",
+            conditioning_components="amplitude_phase",
+            learn_amplitude=False,
+            learn_phase=False,
+            amplitude_init=1.0,
+        )
+        anchor = self._channel(config)
+        channel = self._channel(config)
+        torch.manual_seed(7)
+        with torch.no_grad():
+            for parameter in channel.parameters():
+                torch.nn.init.normal_(parameter, std=0.05)
+        content_a = torch.randn(2, 4, 7, 8)
+        content_b = torch.randn(2, 4, 7, 8)
+        base = channel(7)
+        from_a = channel(7, q_content=content_a, k_content=content_a)
+        from_b = channel(7, q_content=content_b, k_content=content_b)
+        for attr in ("q", "k"):
+            randomized = getattr(base, attr)
+            zeroed = getattr(anchor(7), attr)
+            self.assertFalse(
+                torch.equal(randomized, zeroed),
+                f"randomized hypernetwork left {attr} on the anchor; "
+                "the invariance check below would be vacuous",
+            )
+            output_a = getattr(from_a, attr)
+            output_b = getattr(from_b, attr)
+            self.assertTrue(torch.equal(output_a, output_b))
+            self.assertTrue(
+                torch.equal(output_a, randomized.expand_as(output_a))
+            )
+
     def test_paired_initialization_matches_every_shared_tensor(self):
         common = {
             "dim": 32,

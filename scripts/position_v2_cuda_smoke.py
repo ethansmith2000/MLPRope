@@ -573,29 +573,10 @@ NULL_CONDITIONING_CASES = [
         None,
         None,
     ),
-    (
-        "unit_hyperaddrope_frequency",
-        _qk(
-            application="additive",
-            geometry="amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_coupling="shared_trunk_separate_readouts",
-            conditioning_input_mode="content_position",
-            conditioning_network="silu_mlp",
-            conditioning_components="amplitude_phase_frequency",
-            amplitude_init=1.0,
-            amplitude_parameterization="signed",
-            parameter_source="direct",
-            learn_amplitude=False,
-            learn_phase=False,
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
+    # "unit_hyperaddrope_frequency" removed 2026-08-17: it exercised
+    # conditioning_components="amplitude_phase_frequency", which was removed
+    # from the schema on 2026-07-31 (content-conditioned frequency multipliers,
+    # see POSITION_CONFIG.md). The stale case made this module crash at import.
     (
         "direct_canonical_addrope",
         _qk(
