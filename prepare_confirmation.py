@@ -79,8 +79,12 @@ def build_configs(*, force: bool = False) -> list[Path]:
                     "final_validation_start_batch": 2_048,
                     "save_evaluation_details": True,
                     "save_final_model": True,
-                    "checkpointing_steps": None,
-                    "resume_from_checkpoint": None,
+                    # Protocol revision 2026-08-17: resumable checkpoints on.
+                    # The 2026-08-02 interruption cost five in-flight runs and
+                    # the original artifacts are lost with the old box, so all
+                    # 15 runs restart fresh and can carry this uniformly.
+                    "checkpointing_steps": 5_000,
+                    "resume_from_checkpoint": "auto",
                     "with_tracking": False,
                     "profile_every_n_steps": 0,
                     "log_every_n_steps": 50,

@@ -7,7 +7,7 @@
   "beta1": 0.95,
   "beta2": 0.999,
   "block_size": 1024,
-  "checkpointing_steps": null,
+  "checkpointing_steps": 5000,
   "compile": true,
   "compile_fullgraph": false,
   "compile_mode": "default",
@@ -64,7 +64,7 @@
   "residual_stream": {
     "enabled": false
   },
-  "resume_from_checkpoint": null,
+  "resume_from_checkpoint": "auto",
   "run_name": "phase19-rope-matched-ffn-seed456-s30000-h1024d12",
   "save_evaluation_details": true,
   "save_final_model": true,
