@@ -65,3 +65,27 @@ no completed paired reference. The minimum headline tranche is the three
 standard-RoPE seeds and position-only seeds 456/789, reusing the completed
 position-only seed123. Remaining arms are still required for the mapped,
 matched-capacity, and content-conditioning questions in the original protocol.
+
+## Protocol revision recorded 2026-08-17
+
+The old box was lost with all run artifacts (see the journal entry of this
+date), including the completed `position-only/seed123`, so **all 15 runs
+restart fresh** on the new instance (8x RTX 5090, torch 2.12.0+cu130, rebuilt
+tokenized cache). Because no completed run survives to be reused, the following
+uniform changes are recorded as an intentional revision rather than silent
+regeneration:
+
+- `checkpointing_steps`: `null` -> `5000`, and `resume_from_checkpoint`:
+  `null` -> `"auto"`. Motivation: the 2026-08-02 interruption destroyed five
+  in-flight unresumable runs. The change applies identically to every arm and
+  seed; checkpoint I/O occurs outside evaluation and does not touch training
+  math. Throughput readings from these runs now include checkpoint I/O and are
+  not comparable with phase-18 logged throughput (which is already
+  hardware-obsolete); the controlled benchmark of work package B remains the
+  only throughput source for compute-adjusted claims.
+- Everything else in the locked design — arms, seeds, optimizer, evaluation
+  windows, holdout definition, decision rule, analysis plan — is unchanged.
+- Absolute losses from the new runs are not directly comparable with the lost
+  2026-08-02 partial results (different hardware, torch build, and a rebuilt
+  dataset cache under datasets 5.0.1; internal pairing is unaffected). The
+  lost partial results are recorded above for provenance only.
