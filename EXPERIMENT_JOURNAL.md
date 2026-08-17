@@ -2772,3 +2772,59 @@ Revised order of work:
 The checkpoint ablations require GPU inference but no retraining. They measure
 endpoint reliance on the learned controller and sensitivity to token alignment;
 they do not alone identify the causal source of any training-time gain.
+
+## 2026-08-17 — Instance migration, artifact loss, and literature review
+
+The project now runs on a fresh Vast instance (8x RTX 5090, torch
+2.12.0+cu130, Python 3.12). **Nothing outside git survived the previous box.**
+Lost: all of `model-output/` (every run's metrics, checkpoints, per-example
+final evaluations, and the four `*_RESULTS.md` analysis files), the tokenized
+OpenWebText cache, `gpu-claim`, and `/workspace/GPU_QUEUEING.md`. The journal
+preserved the numbers; the raw artifacts backing them are gone. `/workspace`
+on this instance is also **not** a persistent volume, so off-box sync of small
+artifacts (git) and weights (external storage) must precede new training.
+
+Consequences for the standing plan:
+
+- Phase-19 cannot reuse `position-only/seed123`; all 15 locked runs restart
+  fresh. This permits enabling `checkpointing_steps` uniformly across arms
+  without breaking reuse — to be recorded as a protocol revision in
+  `CONFIRMATION_PROTOCOL.md` at launch. Old absolute losses are reference
+  points only: new hardware, new torch, and a rebuilt dataset cache (datasets
+  5.0.1) mean the tokenized data may not be byte-identical. Internal pairing
+  is unaffected.
+- The phase-23 checkpoint ablations (consolidated plan, work package C) are
+  impossible as specified — the rank-32 SiLU checkpoints no longer exist.
+  The local dynamic branch is closed on the existing `-0.002` sub-gate result;
+  retraining for the mechanism diagnostic is not currently justified.
+- All prior throughput measurements are hardware-obsolete. Work package B is
+  to be re-run on this box; the `+0.0289` iso-wallclock margin should not be
+  quoted against new numbers.
+
+Environment verification on this box: 120/121 CPU tests pass (1 known skip)
+after installing `datasets`/`transformers`/`accelerate`/`wandb` into
+`/venv/main`; all 15 phase-19 configs load and `--dry_run` cleanly; SDPA,
+FlexAttention, and compiled forward/backward verified on the 5090s. One stale
+artifact: `scripts/position_v2_cuda_smoke.py` still constructs the removed
+`amplitude_phase_frequency` mode and crashes at import (fix before relying on
+the smoke gate). Launchers hard-require `gpu-claim`, which needs a shim here.
+
+An independent code re-audit of the load-bearing position-only claim
+confirmed the content path is severed *structurally* in that mode
+(`PositionContentProjection` is never constructed; the only content references
+on the carrier path are shape/dtype metadata reads). Two caveats recorded:
+`paired_initialization_seed` does not cover `_GroupedHyperTrunk.weight`
+(raw parameter, xavier init without a per-name generator, and construction
+order lets arm-specific modules shift the global RNG stream — harmless for the
+phase-19 contrasts, but pairing should not be assumed for carrier trunks), and
+there is no behavioral content-invariance test — the guarantee is only that
+the projector is `None`. A test feeding two different token batches and
+asserting identical position addends would close that gap cheaply.
+
+`LITERATURE_REVIEW.md` added (four web sweeps, 2026-08-16): the field's
+in-distribution evidence matches our effect sizes; cumulative content signals
+beat local bounded ones everywhere; decay beats phase wherever separated;
+closest neighbors to the carrier are Goat (arXiv:2601.15380) and, for the
+backlog clock, Selective RoPE (arXiv:2511.17388). The novelty framing, the
+must-cite list, the LeRoPE reconciliation obligation, and seven ranked
+experiment candidates are in that file.
