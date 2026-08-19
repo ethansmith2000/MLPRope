@@ -16,7 +16,6 @@ from position import (
     adapt_legacy_position_state_dict,
     apply_rotary,
     build_attention_position_write_channel,
-    build_logit_bias_channel,
     build_qk_position_channel,
     build_residual_position_channel,
     build_rope_cache,
@@ -24,6 +23,7 @@ from position import (
     count_position_parameters,
     ensure_channel_v2,
     interleaved_fourier_basis,
+    normalize_logit_bias_config,
     normalize_rope_frequency_config,
     normalize_attention_write_config,
     normalize_position_content_config,
@@ -73,33 +73,6 @@ sinusoidal_basis = interleaved_fourier_basis
 def causal_mask(batch_idx, head_idx, query_idx, key_value_idx):
     del batch_idx, head_idx
     return query_idx >= key_value_idx
-
-
-class PerHeadRMSNorm(torch.nn.Module):
-    """RMSNorm over head_dim with an independent learned gain per head.
-
-    Standard Q/K norm shares one ``[head_dim]`` gain across every head. This
-    gives each head its own ``[heads, head_dim]`` gain, initialized to ones so
-    it starts exactly equal to the shared-gain module.
-    """
-
-    def __init__(self, heads: int, head_dim: int, eps: float = 1e-6):
-        super().__init__()
-        self.heads = heads
-        self.head_dim = head_dim
-        self.eps = eps
-        self.weight = torch.nn.Parameter(torch.ones(heads, head_dim))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        if x.shape[-1] != self.head_dim or x.shape[-3] != self.heads:
-            raise ValueError(
-                "PerHeadRMSNorm expects [..., heads, sequence, head_dim], got "
-                f"{tuple(x.shape)}"
-            )
-        scale = torch.rsqrt(
-            x.float().square().mean(dim=-1, keepdim=True) + self.eps
-        ).to(dtype=x.dtype)
-        return x * scale * self.weight[:, None, :].to(dtype=x.dtype)
 
 
 class PositionContentProjection(torch.nn.Module):
@@ -160,7 +133,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         attn_impl: AttentionImpl = "sdpa",
         attention_write_config: dict | None = None,
         post_position_qk_norm: bool = False,
-        qk_norm_per_head: bool = False,
         position_content_dim: int = 64,
         position_content_coupling: str = "separate",
         qk_norm_mode: str = "legacy_layernorm",
@@ -194,7 +166,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         self.rel_extent = rel_extent or max_seq_len
         self.attn_impl = attn_impl
         self.post_position_qk_norm = bool(post_position_qk_norm)
-        self.qk_norm_per_head = bool(qk_norm_per_head)
         if qk_norm_mode not in {"legacy_layernorm", "method_aware_rms"}:
             raise ValueError(
                 "qk_norm_mode must be 'legacy_layernorm' or 'method_aware_rms'"
@@ -226,13 +197,9 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             heads=heads,
             rope_theta=rope_theta,
         )
-        self.logit_bias_config = ensure_channel_v2(
-            "logit_bias",
-            logit_bias_config,
-            model_dim=dim,
-            heads=heads,
-            rope_theta=rope_theta,
-        )
+        # The relative logit-bias channel was removed; only {"enabled": false}
+        # remains valid for archived-config compatibility.
+        self.logit_bias_config = normalize_logit_bias_config(logit_bias_config)
         self.attention_write_config = normalize_attention_write_config(
             attention_write_config,
             model_dim=dim,
@@ -254,19 +221,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             )
         self._prepared_block_mask: BlockMask | None = None
         self._prepared_query_length: int | None = None
-        # Stable score_mod closure target — updated each flex forward, not redefined.
-        self._flex_bias_curves: torch.Tensor | None = None
-        self._flex_pair_query: tuple[torch.Tensor, ...] | None = None
-        self._flex_pair_key: tuple[torch.Tensor, ...] | None = None
-        self._flex_pair_distance: tuple[torch.Tensor, ...] | None = None
-        self._flex_pair_gate: torch.Tensor | None = None
-        self._flex_pair_scale = 1.0
-
-        if self.logit_bias_config.get("enabled", False) and attn_impl != "flex":
-            raise ValueError(
-                "The logit-bias channel requires attn_impl='flex'. "
-                "Q/K-only position channels may use SDPA."
-            )
 
         # Split projections match the other experimental Transformer.
         self.to_q = torch.nn.Linear(dim, dim, bias=False)
@@ -274,10 +228,8 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         self.to_v = torch.nn.Linear(dim, dim, bias=False)
         self.to_out = torch.nn.Linear(dim, dim, bias=True)
 
-        conditioning_configs = (
-            self.qk_config["conditioning"],
-            self.logit_bias_config["conditioning"],
-        )
+        conditioning_configs = (self.qk_config["conditioning"],)
+
         def uses_content(config: dict) -> bool:
             return config["kind"] != "none" and not (
                 config["kind"] == "carrier_hypernetwork"
@@ -285,8 +237,7 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             )
 
         uses_dedicated_content = any(
-            uses_content(cfg) and cfg["source"] == "dedicated"
-            for cfg in conditioning_configs
+            uses_content(cfg) for cfg in conditioning_configs
         )
         self.position_content = (
             PositionContentProjection(
@@ -299,20 +250,12 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             else None
         )
 
-        def conditioning_dim(config: dict) -> int:
-            source = config["conditioning"]["source"]
-            if source == "dedicated":
-                return self.position_content_config["dim"]
-            if source == "residual":
-                return dim
-            return self.head_dim
-
         self.qk_position = build_qk_position_channel(
             self.qk_config,
             heads=heads,
             head_dim=self.head_dim,
             model_dim=dim,
-            content_dim=conditioning_dim(self.qk_config),
+            content_dim=self.position_content_config["dim"],
             extent=max_seq_len,
             rope_theta=rope_theta,
         )
@@ -335,15 +278,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 "channels; use an additive Q/K channel, residual-stream PE, "
                 "or no explicit position channel."
             )
-        self.logit_bias = build_logit_bias_channel(
-            self.logit_bias_config,
-            heads=heads,
-            head_dim=self.head_dim,
-            model_dim=dim,
-            content_dim=conditioning_dim(self.logit_bias_config),
-            extent=self.rel_extent,
-            rope_theta=rope_theta,
-        )
         self.position_write = build_attention_position_write_channel(
             self.attention_write_config,
             heads=heads,
@@ -353,10 +287,7 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             rope_theta=rope_theta,
         )
 
-        if qk_norm and self.qk_norm_per_head:
-            self.q_norm = PerHeadRMSNorm(heads, self.head_dim, eps=1e-6)
-            self.k_norm = PerHeadRMSNorm(heads, self.head_dim, eps=1e-6)
-        elif qk_norm:
+        if qk_norm:
             norm_type = (
                 torch.nn.RMSNorm
                 if qk_norm_mode == "method_aware_rms"
@@ -531,93 +462,9 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             device=q.device,
         )
 
-    def _position_bias_score_mod(self, score, batch_idx, head_idx, query_idx, key_value_idx):
-        bias_curves = self._flex_bias_curves
-        distance = query_idx - key_value_idx
-        in_range = (distance >= 0) & (distance < self.rel_extent)
-        distance = distance.clamp(0, self.rel_extent - 1)
-        if bias_curves.ndim == 2:
-            bias = bias_curves[head_idx, distance]
-        else:
-            bias = bias_curves[batch_idx, head_idx, query_idx, distance]
-        if self._flex_pair_query is not None:
-            pair_bias = (
-                self._flex_pair_query[0][batch_idx, head_idx, query_idx]
-                * self._flex_pair_key[0][
-                    batch_idx, head_idx, key_value_idx
-                ]
-                * self._flex_pair_distance[0][head_idx, distance]
-            )
-            # FlexAttention score modifiers are pointwise subgraphs. An
-            # explicit scalar reduction keeps this low-rank contraction
-            # fusable without materializing a [B,H,Q,K] bias tensor.
-            for rank_idx in range(1, len(self._flex_pair_query)):
-                pair_bias = pair_bias + (
-                    self._flex_pair_query[
-                        rank_idx
-                    ][
-                        batch_idx, head_idx, query_idx
-                    ]
-                    * self._flex_pair_key[
-                        rank_idx
-                    ][
-                        batch_idx, head_idx, key_value_idx
-                    ]
-                    * self._flex_pair_distance[
-                        rank_idx
-                    ][
-                        head_idx, distance
-                    ]
-                )
-            pair_bias = pair_bias * self._flex_pair_scale
-            bias = bias + self._flex_pair_gate[head_idx] * pair_bias
-        return score + torch.where(in_range, bias, 0.0)
-
     @torch.compiler.disable
-    def _flex_attention(self, q, k, v, query_content, key_content):
-        block_mask = self._block_mask(q)
-        if self.logit_bias is None:
-            return _flex_attention_call(q, k, v, block_mask=block_mask)
-
-        self._flex_bias_curves, pairwise = self.logit_bias.prepare(
-            dtype=q.dtype,
-            query=query_content,
-            key=key_content,
-        )
-        self._flex_pair_query = None
-        self._flex_pair_key = None
-        self._flex_pair_distance = None
-        self._flex_pair_gate = None
-        if pairwise is not None:
-            (
-                pair_query,
-                pair_key,
-                pair_distance,
-                self._flex_pair_gate,
-            ) = pairwise
-            # FlexAttention backward requires separately captured tensors when
-            # a score modifier performs multiple indexed reads. Component
-            # clones retain the factorized O(BHLr) storage contract.
-            self._flex_pair_query = tuple(
-                component.clone()
-                for component in pair_query.unbind(dim=-1)
-            )
-            self._flex_pair_key = tuple(
-                component.clone()
-                for component in pair_key.unbind(dim=-1)
-            )
-            self._flex_pair_distance = tuple(
-                component.clone()
-                for component in pair_distance.unbind(dim=-1)
-            )
-            self._flex_pair_scale = len(self._flex_pair_query) ** -0.5
-        return _flex_attention_call(
-            q,
-            k,
-            v,
-            score_mod=self._position_bias_score_mod,
-            block_mask=block_mask,
-        )
+    def _flex_attention(self, q, k, v):
+        return _flex_attention_call(q, k, v, block_mask=self._block_mask(q))
 
     def forward(self, x):
         q_projected = self._split_heads(self.to_q(x))
@@ -631,17 +478,12 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             dedicated_q_content, dedicated_k_content = self.position_content(x)
 
         def content_for(config: dict) -> tuple[torch.Tensor, torch.Tensor]:
-            source = config["conditioning"]["source"]
-            if source == "dedicated":
-                if dedicated_q_content is None or dedicated_k_content is None:
-                    raise ValueError(
-                        "Dedicated positional content was requested but not built"
-                    )
-                return dedicated_q_content, dedicated_k_content
-            if source == "residual":
-                residual = x[:, None, :, :].expand(-1, self.heads, -1, -1)
-                return residual, residual
-            return q_normed, k_normed
+            del config  # every conditioning source is the dedicated projection
+            if dedicated_q_content is None or dedicated_k_content is None:
+                raise ValueError(
+                    "Dedicated positional content was requested but not built"
+                )
+            return dedicated_q_content, dedicated_k_content
 
         position_q_content = position_k_content = None
         if self.qk_position is not None:
@@ -759,20 +601,7 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             )
             v = torch.cat((v, position_values), dim=-1)
         if self.attn_impl == "flex":
-            if (
-                self.logit_bias is not None
-                and self.logit_bias_config["conditioning"]["kind"] != "none"
-            ):
-                q_content, k_content = content_for(self.logit_bias_config)
-            else:
-                q_content, k_content = q_normed, k_normed
-            attn = self._flex_attention(
-                q,
-                k,
-                v,
-                q_content,
-                k_content,
-            )
+            attn = self._flex_attention(q, k, v)
         else:
             attn = F.scaled_dot_product_attention(
                 q,
@@ -806,15 +635,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         return output
 
     @torch.no_grad()
-    def logit_bias_curves(self) -> torch.Tensor | None:
-        if self.logit_bias is None:
-            return None
-        parameter = next(self.logit_bias.parameters())
-        return self.logit_bias.base_curves(
-            dtype=parameter.dtype
-        ).float().detach()
-
-    @torch.no_grad()
     def qk_position_summary(
         self,
         sequence_length: int,
@@ -844,22 +664,16 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         k_projected = self._split_heads(self.to_k(x))
         q = self.q_norm(q_projected)
         k = self.k_norm(k_projected)
-        source = self.qk_position.conditioning_config["source"]
         conditioning = self.qk_position.conditioning_config
         if conditioning["kind"] == "none" or (
             conditioning["kind"] == "carrier_hypernetwork"
             and conditioning["input_mode"] == "position"
         ):
             q_content = k_content = None
-        elif source == "dedicated":
+        else:
             if self.position_content is None:
                 raise ValueError("Dedicated positional content projector is missing")
             q_content, k_content = self.position_content(x)
-        elif source == "residual":
-            q_content = x[:, None, :, :].expand(-1, self.heads, -1, -1)
-            k_content = q_content
-        else:
-            q_content, k_content = q, k
         parameter = next(self.qk_position.parameters(), None)
         dtype = parameter.dtype if parameter is not None else x.dtype
         diagnostic_q_ref = q
@@ -953,7 +767,6 @@ class TransformerBlock(torch.nn.Module):
         attn_impl: AttentionImpl = "sdpa",
         attention_write_config: dict | None = None,
         post_position_qk_norm: bool = False,
-        qk_norm_per_head: bool = False,
         position_content_dim: int = 64,
         position_content_coupling: str = "separate",
         qk_norm_mode: str = "legacy_layernorm",
@@ -975,7 +788,6 @@ class TransformerBlock(torch.nn.Module):
             attention_write_config=attention_write_config,
             attn_impl=attn_impl,
             post_position_qk_norm=post_position_qk_norm,
-            qk_norm_per_head=qk_norm_per_head,
             position_content_dim=position_content_dim,
             position_content_coupling=position_content_coupling,
             qk_norm_mode=qk_norm_mode,
@@ -1013,7 +825,6 @@ class Transformer(torch.nn.Module):
         residual_stream_config: dict | None = None,
         attention_write_config: dict | None = None,
         post_position_qk_norm: bool = False,
-        qk_norm_per_head: bool = False,
         position_content_dim: int = 64,
         position_content_coupling: str = "separate",
         qk_norm_mode: str = "legacy_layernorm",
@@ -1092,7 +903,6 @@ class Transformer(torch.nn.Module):
                 attention_write_config=attention_write_config,
                 attn_impl=attn_impl,
                 post_position_qk_norm=post_position_qk_norm,
-                qk_norm_per_head=qk_norm_per_head,
                 position_content_dim=position_content_dim,
                 position_content_coupling=position_content_coupling,
                 qk_norm_mode=qk_norm_mode,
@@ -1221,7 +1031,6 @@ class Transformer(torch.nn.Module):
                 actual_qk_summary = block.attn.qk_position_summary_from_input(
                     normalized_diagnostic_x
                 )
-            curves = block.attn.logit_bias_curves()
             rope_metrics, rope_frequencies = (
                 block.attn.rope_frequency_diagnostics()
             )
@@ -1243,25 +1052,6 @@ class Transformer(torch.nn.Module):
                 profiles[f"rope_frequency_layer_{layer_idx:02d}"] = (
                     rope_frequencies.cpu()
                 )
-            if curves is not None:
-                curves_cpu = curves.cpu()
-                prefix = f"position/layer_{layer_idx:02d}"
-                metrics[f"{prefix}/bias_mean"] = curves_cpu.mean().item()
-                metrics[f"{prefix}/bias_std"] = curves_cpu.std().item()
-                metrics[f"{prefix}/bias_abs_max"] = curves_cpu.abs().max().item()
-                frequencies = (
-                    block.attn.logit_bias.pipeline.basis.frequencies()
-                    .detach()
-                    .float()
-                )
-                metrics[f"{prefix}/frequency_min"] = frequencies.min().item()
-                metrics[f"{prefix}/frequency_max"] = frequencies.max().item()
-                if layer_idx in selected_layers:
-                    profiles[f"layer_{layer_idx:02d}"] = curves_cpu
-                routing = block.attn.logit_bias.routing_summary()
-                for key, value in routing.items():
-                    metrics[f"{prefix}/{key}"] = value
-
             if block.attn.position_write is not None:
                 prefix = f"position/layer_{layer_idx:02d}/attention_write"
                 if block.attn.position_write.gate is not None:
@@ -1417,4 +1207,4 @@ def suggest_matched_baselines(
 
 
 # Public re-exports for tests and checkpoint helpers.
-from position.channels import LogitBiasChannel, QKPositionChannel  # noqa: E402,F401
+from position.channels import QKPositionChannel  # noqa: E402,F401

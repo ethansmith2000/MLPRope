@@ -38,8 +38,6 @@ class QKPositionOutput:
     k_scale: torch.Tensor | None = None
     q_gain: torch.Tensor | None = None
     k_gain: torch.Tensor | None = None
-    q_log_gain_delta: torch.Tensor | None = None
-    k_log_gain_delta: torch.Tensor | None = None
     q_amplitude_delta: torch.Tensor | None = None
     k_amplitude_delta: torch.Tensor | None = None
     q_hyper_phase_delta: torch.Tensor | None = None
@@ -52,15 +50,10 @@ class QKPositionOutput:
     k_cartesian_imag_delta: torch.Tensor | None = None
 
 
-# softplus(_SOFTPLUS_UNIT_BIAS) == 1.0 exactly.
-_SOFTPLUS_UNIT_BIAS = math.log(math.e - 1.0)
-
-
 @dataclass
 class CarrierDeltas:
     amplitude: torch.Tensor | None = None
     phase: torch.Tensor | None = None
-    log_gain: torch.Tensor | None = None
     frequency: torch.Tensor | None = None
     cartesian_real: torch.Tensor | None = None
     cartesian_imag: torch.Tensor | None = None
@@ -108,28 +101,6 @@ class GroupedLinearReadout(torch.nn.Module):
             return (output + self.bias[0]).unsqueeze(0)
         output = torch.einsum("grd,gdo->gro", features, self.weight)
         return output + self.bias[:, None, :]
-
-
-class ScalarCurveReadout(torch.nn.Module):
-    """Map ``[heads|1, extent, head_dim]`` features to ``[heads, extent]`` curves."""
-
-    def __init__(self, groups: int, head_dim: int):
-        super().__init__()
-        self.groups = groups
-        self.weight = torch.nn.Parameter(torch.zeros(groups, head_dim))
-        self.bias = torch.nn.Parameter(torch.zeros(groups))
-
-    def reset_parameters(self) -> None:
-        torch.nn.init.zeros_(self.weight)
-        torch.nn.init.zeros_(self.bias)
-
-    def forward(self, features: torch.Tensor, heads: int) -> torch.Tensor:
-        if self.groups == 1:
-            curve = torch.einsum("rd,d->r", features[0], self.weight[0])
-            curve = curve + self.bias[0]
-            return curve.unsqueeze(0).expand(heads, -1)
-        curves = torch.einsum("hrd,hd->hr", features, self.weight)
-        return curves + self.bias[:, None]
 
 
 class GroupedContentConditioner(torch.nn.Module):
@@ -555,7 +526,6 @@ class CarrierHypernetwork(PreserveFP32BuffersMixin, torch.nn.Module):
         )
         pairwise_components = {
             "phase": ("phase",),
-            "log_gain_phase": ("log_gain", "phase"),
             "amplitude": ("amplitude",),
             "amplitude_phase": ("amplitude", "phase"),
             "cartesian": ("cartesian_real", "cartesian_imag"),
@@ -814,20 +784,7 @@ class CarrierHypernetwork(PreserveFP32BuffersMixin, torch.nn.Module):
             # Phase proportional to omega is exactly a shift of effective
             # position, so the logit still depends only on the difference of
             # the two shifted positions.
-            offset = values["offset"]
-            if self.offset_parameterization == "raw":
-                # Unbounded and signed. Offsets live on integer token scales,
-                # which a bounded squashing function represents poorly.
-                shift = offset
-            elif self.offset_parameterization == "softplus":
-                # softplus(log(e-1)) == 1, so this is exactly zero at zero-init
-                # while staying positive-leaning and bounded below by -1.
-                shift = (
-                    torch.nn.functional.softplus(offset + _SOFTPLUS_UNIT_BIAS)
-                    - 1.0
-                )
-            else:
-                shift = self.offset_bound * torch.tanh(offset)
+            shift = self.offset_bound * torch.tanh(values["offset"])
             deltas["phase"] = shift * self.spectral_omega.to(dtype=raw.dtype)
         return CarrierDeltas(**deltas)
 
@@ -1049,12 +1006,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
         self.direct_phase = None
         self.q_direct_phase = None
         self.k_direct_phase = None
-        self.projected_phase_head = None
-        self.q_projected_phase_head = None
-        self.k_projected_phase_head = None
-        self.scale_head = None
-        self.q_scale_head = None
-        self.k_scale_head = None
         self.conditioner = None
         self.q_conditioner = None
         self.k_conditioner = None
@@ -1187,10 +1138,7 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                         readout_groups, head_dim, head_dim // 2, init="zeros"
                     )
                     self.k_phase_head = copy.deepcopy(self.q_phase_head)
-        elif self.application == "rotary" and self.geometry in {
-            "phase",
-            "scaled_phase",
-        }:
+        elif self.application == "rotary" and self.geometry == "phase":
             if not self.learn_phase:
                 pass
             elif self.qk_coupling == "shared":
@@ -1222,31 +1170,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                 )
                 # Identical initialization without shared storage.
                 self.k_phase_head = copy.deepcopy(self.q_phase_head)
-            if self.geometry == "scaled_phase":
-                if self.qk_coupling == "shared":
-                    self.scale_head = GroupedLinearReadout(
-                        readout_groups, head_dim, head_dim // 2, init="zeros"
-                    )
-                else:
-                    self.q_scale_head = GroupedLinearReadout(
-                        readout_groups, head_dim, head_dim // 2, init="zeros"
-                    )
-                    self.k_scale_head = copy.deepcopy(self.q_scale_head)
-        elif self.application == "rotary" and self.geometry in {
-            "projected_phase",
-            "unit_pair",
-        }:
-            if self.qk_coupling == "shared":
-                self.projected_phase_head = GroupedLinearReadout(
-                    readout_groups, head_dim, head_dim, init="zeros"
-                )
-            else:
-                self.q_projected_phase_head = GroupedLinearReadout(
-                    readout_groups, head_dim, head_dim, init="zeros"
-                )
-                self.k_projected_phase_head = copy.deepcopy(
-                    self.q_projected_phase_head
-                )
         else:
             raise ValueError(
                 f"Unsupported Q/K application/geometry: "
@@ -1392,40 +1315,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
         output = head(grouped)
         return _expand_shared_readout(output, self.head_coupling, self.heads)
 
-    def _project_to_phase(
-        self,
-        features: torch.Tensor,
-        head: GroupedLinearReadout,
-        sequence_length: int,
-    ) -> torch.Tensor:
-        projected = self._apply_phase_head(features, head)
-        half = projected.shape[-1] // 2
-        radial_x, radial_y = projected[..., :half], projected[..., half:]
-        sin = self.base_sin[:sequence_length].float()[None, :, :]
-        cos = self.base_cos[:sequence_length].float()[None, :, :]
-        phase = -sin * radial_x.float() + cos * radial_y.float()
-        return phase.to(dtype=projected.dtype)
-
-    def _unit_pair_to_phase(
-        self,
-        features: torch.Tensor,
-        head: GroupedLinearReadout,
-        sequence_length: int,
-    ) -> torch.Tensor:
-        projected = self._apply_phase_head(features, head)
-        half = projected.shape[-1] // 2
-        delta_x, delta_y = projected[..., :half], projected[..., half:]
-        base_sin = self.base_sin[:sequence_length].float()[None]
-        base_cos = self.base_cos[:sequence_length].float()[None]
-        pair_x = base_cos + delta_x.float()
-        pair_y = base_sin + delta_y.float()
-        inverse_norm = torch.rsqrt(pair_x.square() + pair_y.square() + 1e-6)
-        pair_x = pair_x * inverse_norm
-        pair_y = pair_y * inverse_norm
-        relative_sin = pair_y * base_cos - pair_x * base_sin
-        relative_cos = pair_x * base_cos + pair_y * base_sin
-        return torch.atan2(relative_sin, relative_cos).to(dtype=projected.dtype)
-
     def _amplitude(
         self,
         raw: torch.Tensor,
@@ -1460,17 +1349,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
             self.heads,
         )
         return expanded.to(dtype=dtype).expand(-1, sequence_length, -1)
-
-    def _scale(self, raw: torch.Tensor) -> torch.Tensor:
-        scale_init = self.output_config["scale_init"]
-        if self.output_config["scale_parameterization"] == "exp":
-            return exp_with_identity_grad(raw) * scale_init
-        if self.output_config["scale_parameterization"] == "bounded_log":
-            log_limit = math.log(self.output_config["scale_max"])
-            return (
-                exp_with_identity_grad(raw.tanh() * log_limit) * scale_init
-            )
-        return raw + scale_init
 
     def _normalize_additive_output(
         self,
@@ -1546,7 +1424,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
         content: torch.Tensor | None = None,
         amplitude_conditioner: GroupedContentConditioner | None = None,
         phase_conditioner: GroupedContentConditioner | None = None,
-        log_gain_delta: torch.Tensor | None = None,
         amplitude_delta: torch.Tensor | None = None,
         hyper_phase_delta: torch.Tensor | None = None,
         frequency_delta: torch.Tensor | None = None,
@@ -1612,8 +1489,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     "additive_phase conditioning requires dedicated content"
                 )
             phase = phase + self.content_actuator(content, branch)
-        if log_gain_delta is not None:
-            amplitude = amplitude * exp_with_identity_grad(log_gain_delta)
         if hyper_phase_delta is not None:
             phase = phase + hyper_phase_delta
         phase = phase * self.output_config["phase_scale"]
@@ -1695,8 +1570,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
             q_features = shared
             k_features = shared
 
-        q_log_gain_delta = None
-        k_log_gain_delta = None
         q_amplitude_delta = None
         k_amplitude_delta = None
         q_hyper_phase_delta = None
@@ -1717,8 +1590,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                 k_content=k_content,
                 position=position_features,
             )
-            q_log_gain_delta = q_deltas.log_gain
-            k_log_gain_delta = k_deltas.log_gain
             q_amplitude_delta = q_deltas.amplitude
             k_amplitude_delta = k_deltas.amplitude
             q_hyper_phase_delta = q_deltas.phase
@@ -1807,7 +1678,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     content=q_content,
                     amplitude_conditioner=self.amplitude_conditioner,
                     phase_conditioner=self.conditioner,
-                    log_gain_delta=q_log_gain_delta,
                     amplitude_delta=q_amplitude_delta,
                     hyper_phase_delta=q_hyper_phase_delta,
                     frequency_delta=q_frequency_delta,
@@ -1826,7 +1696,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     content=k_content,
                     amplitude_conditioner=self.amplitude_conditioner,
                     phase_conditioner=self.conditioner,
-                    log_gain_delta=k_log_gain_delta,
                     amplitude_delta=k_amplitude_delta,
                     hyper_phase_delta=k_hyper_phase_delta,
                     frequency_delta=k_frequency_delta,
@@ -1846,7 +1715,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     content=q_content,
                     amplitude_conditioner=self.q_amplitude_conditioner,
                     phase_conditioner=self.q_conditioner,
-                    log_gain_delta=q_log_gain_delta,
                     amplitude_delta=q_amplitude_delta,
                     hyper_phase_delta=q_hyper_phase_delta,
                     frequency_delta=q_frequency_delta,
@@ -1865,7 +1733,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     content=k_content,
                     amplitude_conditioner=self.k_amplitude_conditioner,
                     phase_conditioner=self.k_conditioner,
-                    log_gain_delta=k_log_gain_delta,
                     amplitude_delta=k_amplitude_delta,
                     hyper_phase_delta=k_hyper_phase_delta,
                     frequency_delta=k_frequency_delta,
@@ -1874,30 +1741,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     amplitude_raw_override=k_direct_amplitude,
                     phase_override=k_direct_phase,
                     branch="k",
-                )
-        elif self.geometry in {"projected_phase", "unit_pair"}:
-            phase_builder = (
-                self._unit_pair_to_phase
-                if self.geometry == "unit_pair"
-                else self._project_to_phase
-            )
-            if self.qk_coupling == "shared":
-                phase = phase_builder(
-                    q_features,
-                    self.projected_phase_head,
-                    sequence_length,
-                )
-                q_output, k_output = phase, phase
-            else:
-                q_output = phase_builder(
-                    q_features,
-                    self.q_projected_phase_head,
-                    sequence_length,
-                )
-                k_output = phase_builder(
-                    k_features,
-                    self.k_projected_phase_head,
-                    sequence_length,
                 )
         else:
             if not self.learn_phase:
@@ -1916,19 +1759,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                 k_output = self._apply_phase_head(
                     k_features, self.k_phase_head
                 )
-            if self.geometry == "scaled_phase":
-                if self.qk_coupling == "shared":
-                    scale = self._scale(
-                        self._apply_phase_head(q_features, self.scale_head)
-                    )
-                    q_scale, k_scale = scale, scale
-                else:
-                    q_scale = self._scale(
-                        self._apply_phase_head(q_features, self.q_scale_head)
-                    )
-                    k_scale = self._scale(
-                        self._apply_phase_head(k_features, self.k_scale_head)
-                    )
 
         if (
             self.application == "rotary"
@@ -1936,19 +1766,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
         ):
             q_output = q_output + q_hyper_phase_delta
             k_output = k_output + k_hyper_phase_delta
-            if self.conditioning_config["components"] == "log_gain_phase":
-                q_hyper_scale = exp_with_identity_grad(q_log_gain_delta)
-                k_hyper_scale = exp_with_identity_grad(k_log_gain_delta)
-                q_scale = (
-                    q_hyper_scale
-                    if q_scale is None
-                    else q_scale * q_hyper_scale
-                )
-                k_scale = (
-                    k_hyper_scale
-                    if k_scale is None
-                    else k_scale * k_hyper_scale
-                )
 
         q_output = q_output * self.output_config["phase_scale"] if (
             self.application == "rotary"
@@ -2014,8 +1831,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
             k_scale=k_scale,
             q_gain=q_gain,
             k_gain=k_gain,
-            q_log_gain_delta=q_log_gain_delta,
-            k_log_gain_delta=k_log_gain_delta,
             q_amplitude_delta=q_amplitude_delta,
             k_amplitude_delta=k_amplitude_delta,
             q_hyper_phase_delta=q_hyper_phase_delta,
@@ -2038,12 +1853,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
             self.amplitude_head,
             self.q_amplitude_head,
             self.k_amplitude_head,
-            self.projected_phase_head,
-            self.q_projected_phase_head,
-            self.k_projected_phase_head,
-            self.scale_head,
-            self.q_scale_head,
-            self.k_scale_head,
         ):
             if module is not None:
                 module.reset_parameters()
@@ -2234,19 +2043,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                 )
                 if gain is not None:
                     metrics[f"hyper_{name}_input_gain"] = gain.detach().item()
-        if self.conditioning_config["components"] == "log_gain_phase":
-            for branch, log_gain_delta in (
-                ("q", output.q_log_gain_delta),
-                ("k", output.k_log_gain_delta),
-            ):
-                if log_gain_delta is not None:
-                    _delta_stats(
-                        f"hyper_log_gain_delta_{branch}",
-                        log_gain_delta,
-                    )
-                    metrics[f"hyper_effective_gain_{branch}/max"] = (
-                        log_gain_delta.detach().float().exp().max().item()
-                    )
         diff = (output.q - output.k).detach().float()
         metrics["qk_diff_rms"] = diff.pow(2).mean().sqrt().item()
         if output.application == "rotary":
@@ -2324,414 +2120,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     .item()
                 )
         return metrics
-
-
-class InklingRouter(torch.nn.Module):
-    """Grouped query router over a bank of relative-distance profiles."""
-
-    def __init__(
-        self,
-        *,
-        groups: int,
-        head_dim: int,
-        hidden_dim: int,
-        num_profiles: int,
-    ):
-        super().__init__()
-        self.groups = groups
-        self.down = torch.nn.Parameter(
-            torch.empty(groups, head_dim, hidden_dim)
-        )
-        self.down_bias = torch.nn.Parameter(torch.zeros(groups, hidden_dim))
-        self.up = torch.nn.Parameter(
-            torch.empty(groups, hidden_dim, num_profiles)
-        )
-        self.up_bias = torch.nn.Parameter(torch.zeros(groups, num_profiles))
-        for weight in self.down:
-            torch.nn.init.xavier_normal_(weight)
-        for weight in self.up:
-            torch.nn.init.xavier_normal_(weight)
-
-    def forward(self, query: torch.Tensor) -> torch.Tensor:
-        if self.groups == 1:
-            hidden = torch.einsum("bhld,dk->bhlk", query, self.down[0])
-            hidden = hidden + self.down_bias[0]
-            hidden = torch.nn.functional.gelu(hidden)
-            logits = torch.einsum("bhlk,kp->bhlp", hidden, self.up[0])
-            return logits + self.up_bias[0]
-        hidden = torch.einsum("bhld,hdk->bhlk", query, self.down)
-        hidden = hidden + self.down_bias[None, :, None, :]
-        hidden = torch.nn.functional.gelu(hidden)
-        logits = torch.einsum("bhlk,hkp->bhlp", hidden, self.up)
-        return logits + self.up_bias[None, :, None, :]
-
-
-class InklingProfileBank(torch.nn.Module):
-    """Table or CosNet bank mixed per query by ``InklingRouter``."""
-
-    def __init__(
-        self,
-        *,
-        kind: Literal["inkling_table", "inkling_cosnet"],
-        groups: int,
-        heads: int,
-        content_dim: int,
-        extent: int,
-        config: dict,
-    ):
-        super().__init__()
-        self.kind = kind
-        self.groups = groups
-        self.heads = heads
-        self.extent = extent
-        self.num_profiles = config["num_profiles"]
-        self.router = InklingRouter(
-            groups=groups,
-            head_dim=content_dim,
-            hidden_dim=config["router_hidden_dim"],
-            num_profiles=self.num_profiles,
-        )
-        self.gate = torch.nn.Parameter(
-            torch.full((groups,), float(config["gate_init"]))
-        )
-        profile_std = config["profile_init_std"]
-        if kind == "inkling_table":
-            self.profile_table = torch.nn.Parameter(
-                torch.empty(groups, self.num_profiles, extent)
-            )
-            torch.nn.init.normal_(self.profile_table, std=profile_std)
-        else:
-            num_frequencies = config["num_frequencies"]
-            self.amplitude = torch.nn.Parameter(
-                torch.empty(groups, self.num_profiles, num_frequencies)
-            )
-            torch.nn.init.normal_(self.amplitude, std=profile_std)
-            initial = torch.linspace(
-                1.0 / max(extent, 1),
-                1.0,
-                num_frequencies,
-            ).log()
-            self.log_frequency = torch.nn.Parameter(
-                initial[None, None, :]
-                .expand(groups, self.num_profiles, -1)
-                .clone()
-            )
-            self.phase = torch.nn.Parameter(
-                torch.zeros(groups, self.num_profiles, num_frequencies)
-            )
-
-    def profiles(
-        self,
-        *,
-        dtype: torch.dtype,
-        device: torch.device,
-    ) -> torch.Tensor:
-        if self.kind == "inkling_table":
-            return self.profile_table.tanh().to(dtype=dtype)
-        distance = torch.arange(
-            self.extent,
-            device=device,
-            dtype=torch.float32,
-        )
-        frequency = exp_with_identity_grad(self.log_frequency.float())
-        angle = (
-            distance[None, None, :, None] * frequency[:, :, None, :]
-            + self.phase.float()[:, :, None, :]
-        )
-        profiles = (
-            self.amplitude.float()[:, :, None, :] * angle.cos()
-        ).sum(dim=-1) / math.sqrt(self.amplitude.shape[-1])
-        return profiles.tanh().to(dtype=dtype)
-
-    def forward(
-        self,
-        query: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        routing = self.router(query).softmax(dim=-1)
-        profiles = self.profiles(dtype=query.dtype, device=query.device)
-        if self.groups == 1:
-            mixture = torch.einsum(
-                "bhlp,pr->bhlr",
-                routing,
-                profiles[0],
-            )
-            gate = self.gate[0]
-        else:
-            mixture = torch.einsum(
-                "bhlp,hpr->bhlr",
-                routing,
-                profiles,
-            )
-            gate = self.gate[None, :, None, None]
-        return mixture * gate, routing
-
-
-class FactorizedPairwiseLogit(torch.nn.Module):
-    """Low-rank content/offset interaction with an exact zero-effect gate."""
-
-    def __init__(
-        self,
-        *,
-        groups: int,
-        heads: int,
-        content_dim: int,
-        position_dim: int,
-        rank: int,
-        position_mode: str,
-        gate_init: float,
-    ):
-        super().__init__()
-        self.groups = groups
-        self.heads = heads
-        self.rank = rank
-        self.position_mode = position_mode
-        self.query_content = torch.nn.Parameter(
-            torch.empty(groups, content_dim, rank)
-        )
-        self.key_content = torch.nn.Parameter(
-            torch.empty(groups, content_dim, rank)
-        )
-        self.relative_position = torch.nn.Parameter(
-            torch.empty(groups, position_dim, rank)
-        )
-        if position_mode in {"query_absolute", "full_absolute"}:
-            self.query_position = torch.nn.Parameter(
-                torch.empty(groups, position_dim, rank)
-            )
-        else:
-            self.register_parameter("query_position", None)
-        if position_mode == "full_absolute":
-            self.key_position = torch.nn.Parameter(
-                torch.empty(groups, position_dim, rank)
-            )
-        else:
-            self.register_parameter("key_position", None)
-        self.gate = torch.nn.Parameter(
-            torch.full((groups,), float(gate_init))
-        )
-        self.reset_parameters()
-
-    def reset_parameters(self) -> None:
-        for parameter in (
-            self.query_content,
-            self.key_content,
-            self.relative_position,
-            self.query_position,
-            self.key_position,
-        ):
-            if parameter is not None:
-                for weight in parameter:
-                    torch.nn.init.xavier_normal_(weight)
-
-    def _project_content(
-        self,
-        content: torch.Tensor,
-        weight: torch.Tensor,
-    ) -> torch.Tensor:
-        if self.groups == 1:
-            return torch.einsum("bhld,dr->bhlr", content, weight[0])
-        return torch.einsum("bhld,hdr->bhlr", content, weight)
-
-    def _project_position(
-        self,
-        position: torch.Tensor,
-        weight: torch.Tensor,
-    ) -> torch.Tensor:
-        if self.groups == 1:
-            return torch.einsum("hld,dr->hlr", position, weight[0])
-        return torch.einsum("hld,hdr->hlr", position, weight)
-
-    @staticmethod
-    def _unit_rms(value: torch.Tensor) -> torch.Tensor:
-        return value * torch.rsqrt(
-            value.float().square().mean(dim=-1, keepdim=True) + 1e-6
-        ).to(dtype=value.dtype)
-
-    def forward(
-        self,
-        query: torch.Tensor,
-        key: torch.Tensor,
-        position_features: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        query_length = query.shape[-2]
-        key_length = key.shape[-2]
-        if max(query_length, key_length) > position_features.shape[-2]:
-            raise ValueError(
-                "Pairwise logit sequence length exceeds position-feature extent."
-            )
-
-        query_factor = self._project_content(query, self.query_content)
-        key_factor = self._project_content(key, self.key_content)
-        if self.query_position is not None:
-            query_factor = query_factor + self._project_position(
-                position_features[:, :query_length],
-                self.query_position,
-            )[None]
-        if self.key_position is not None:
-            key_factor = key_factor + self._project_position(
-                position_features[:, :key_length],
-                self.key_position,
-            )[None]
-        distance_factor = self._project_position(
-            position_features,
-            self.relative_position,
-        )
-        gate = (
-            self.gate.expand(self.heads)
-            if self.groups == 1
-            else self.gate
-        )
-        return (
-            self._unit_rms(query_factor),
-            self._unit_rms(key_factor),
-            self._unit_rms(distance_factor),
-            gate,
-        )
-
-
-class LogitBiasChannel(PositionChannel):
-    """Relative-distance scalar logit curves with a fixed ``[heads, extent]`` contract."""
-
-    def __init__(
-        self,
-        config: dict,
-        *,
-        heads: int,
-        head_dim: int,
-        model_dim: int,
-        content_dim: int,
-        extent: int,
-        rope_theta: float,
-    ):
-        super().__init__()
-        self.config = copy.deepcopy(config)
-        self.heads = heads
-        self.head_dim = head_dim
-        self.extent = extent
-        self.head_coupling = config["head_coupling"]
-        self.pipeline = HeadCoupledFeaturePipeline(
-            heads=heads,
-            head_dim=head_dim,
-            model_dim=model_dim,
-            extent=extent,
-            rope_theta=rope_theta,
-            head_coupling=self.head_coupling,
-            mapper_cfg=config["mapper"],
-            input_cfg=config["input"],
-        )
-        self.scalar_head = ScalarCurveReadout(
-            _readout_groups(self.head_coupling, heads),
-            head_dim,
-        )
-        conditioning = config["conditioning"]
-        self.conditioning_kind = conditioning["kind"]
-        self.inkling = None
-        self.pairwise = None
-        self._last_routing_summary: dict[str, torch.Tensor] = {}
-        if self.conditioning_kind in {"inkling_table", "inkling_cosnet"}:
-            self.inkling = InklingProfileBank(
-                kind=self.conditioning_kind,
-                groups=_readout_groups(self.head_coupling, heads),
-                heads=heads,
-                content_dim=content_dim,
-                extent=extent,
-                config=conditioning,
-            )
-        elif self.conditioning_kind == "pairwise_low_rank":
-            self.pairwise = FactorizedPairwiseLogit(
-                groups=_readout_groups(self.head_coupling, heads),
-                heads=heads,
-                content_dim=content_dim,
-                position_dim=head_dim,
-                rank=conditioning["pair_rank"],
-                position_mode=conditioning["position_mode"],
-                gate_init=conditioning["gate_init"],
-            )
-
-    def prepare(
-        self,
-        *,
-        dtype: torch.dtype | None = None,
-        query: torch.Tensor | None = None,
-        key: torch.Tensor | None = None,
-    ) -> tuple[
-        torch.Tensor,
-        tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor] | None,
-    ]:
-        features = self.pipeline(dtype=dtype)
-        if self.head_coupling == "shared_head":
-            base = self.scalar_head(features[:1], self.heads)
-        else:
-            base = self.scalar_head(features, self.heads)
-        if self.inkling is not None:
-            if query is None:
-                raise ValueError(
-                    f"{self.conditioning_kind} logit bias requires normalized "
-                    "query content."
-                )
-            conditional, routing = self.inkling(query)
-            with torch.no_grad():
-                routing_f = routing.detach().float()
-                entropy = -(
-                    routing_f.clamp_min(1e-9).log() * routing_f
-                ).sum(-1)
-                self._last_routing_summary = {
-                    "routing_entropy_mean": entropy.mean(),
-                    "routing_max_probability": routing_f.max(
-                        dim=-1
-                    ).values.mean(),
-                    "inkling_gate_abs_mean": (
-                        self.inkling.gate.detach().float().abs().mean()
-                    ),
-                }
-            return base[None, :, None, :] + conditional, None
-        if self.pairwise is not None:
-            if query is None or key is None:
-                raise ValueError(
-                    "pairwise_low_rank logit bias requires normalized query "
-                    "and key content."
-                )
-            return base, self.pairwise(query, key, features)
-        return base, None
-
-    def forward(
-        self,
-        *,
-        dtype: torch.dtype | None = None,
-        query: torch.Tensor | None = None,
-        key: torch.Tensor | None = None,
-    ) -> torch.Tensor:
-        base, _ = self.prepare(dtype=dtype, query=query, key=key)
-        return base
-
-    def base_curves(
-        self,
-        *,
-        dtype: torch.dtype | None = None,
-    ) -> torch.Tensor:
-        features = self.pipeline(dtype=dtype)
-        if self.head_coupling == "shared_head":
-            return self.scalar_head(features[:1], self.heads)
-        return self.scalar_head(features, self.heads)
-
-    def reset_output_parameters(self) -> None:
-        self.scalar_head.reset_parameters()
-        if self.pairwise is not None:
-            with torch.no_grad():
-                self.pairwise.gate.fill_(
-                    float(self.config["conditioning"]["gate_init"])
-                )
-
-    def routing_summary(self) -> dict[str, float]:
-        summary = {
-            key: value.item()
-            for key, value in self._last_routing_summary.items()
-        }
-        if self.pairwise is not None:
-            gate = self.pairwise.gate.detach().float()
-            summary["pairwise_gate_mean"] = gate.mean().item()
-            summary["pairwise_gate_abs_max"] = gate.abs().max().item()
-        return summary
 
 
 class ResidualPositionChannel(PositionChannel):
@@ -3084,45 +2472,7 @@ def build_qk_position_channel(
         heads=heads,
         head_dim=head_dim,
         model_dim=model_dim,
-        content_dim=(
-            content_dim
-            if content_dim is not None
-            else (
-                model_dim
-                if resolved["conditioning"]["source"] == "residual"
-                else head_dim
-            )
-        ),
-        extent=extent,
-        rope_theta=rope_theta,
-    )
-
-
-def build_logit_bias_channel(
-    config: dict,
-    *,
-    heads: int,
-    head_dim: int,
-    model_dim: int,
-    content_dim: int | None = None,
-    extent: int,
-    rope_theta: float,
-) -> LogitBiasChannel | None:
-    resolved = ensure_channel_v2(
-        "logit_bias",
-        config,
-        model_dim=model_dim,
-        heads=heads,
-        rope_theta=rope_theta,
-    )
-    if not resolved["enabled"]:
-        return None
-    return LogitBiasChannel(
-        resolved,
-        heads=heads,
-        head_dim=head_dim,
-        model_dim=model_dim,
-        content_dim=content_dim or head_dim,
+        content_dim=content_dim if content_dim is not None else head_dim,
         extent=extent,
         rope_theta=rope_theta,
     )
@@ -3193,11 +2543,8 @@ def adapt_legacy_position_state_dict(
     def map_key(key: str) -> str:
         replacements = (
             (".qk_position.features.", ".qk_position.pipeline.mapper."),
-            (".logit_bias.features.", ".logit_bias.pipeline.mapper."),
             (".qk_position.output_weight", ".qk_position.phase_head.weight"),
             (".qk_position.output_bias", ".qk_position.phase_head.bias"),
-            (".logit_bias.readout_bias", ".logit_bias.scalar_head.bias"),
-            (".logit_bias.readout", ".logit_bias.scalar_head.weight"),
         )
         new_key = key
         for old, new in replacements:

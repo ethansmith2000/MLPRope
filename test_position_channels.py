@@ -14,7 +14,6 @@ import torch
 from position import (
     FrozenFourierBasis,
     apply_rotary,
-    build_logit_bias_channel,
     build_qk_position_channel,
     build_rope_cache,
     compose_phase,
@@ -73,29 +72,8 @@ def _v1_qk(feature_map, sharing, apply, *, rank=4, mlp_hidden=12, enabled=True):
     }
 
 
-def _v1_logit(feature_map, sharing, *, rank=4, mlp_hidden=12, enabled=True):
-    return {
-        "enabled": enabled,
-        "feature_map": feature_map,
-        "sharing": sharing,
-        "rank": rank,
-        "mlp_hidden": mlp_hidden,
-    }
-
-
 def _build_qk(v1_or_v2, *, heads=4, head_dim=8, extent=16, rope_theta=10_000.0):
     return build_qk_position_channel(
-        v1_or_v2,
-        heads=heads,
-        head_dim=head_dim,
-        model_dim=heads * head_dim,
-        extent=extent,
-        rope_theta=rope_theta,
-    )
-
-
-def _build_logit(v1_or_v2, *, heads=4, head_dim=8, extent=16, rope_theta=10_000.0):
-    return build_logit_bias_channel(
         v1_or_v2,
         heads=heads,
         head_dim=head_dim,
@@ -241,15 +219,6 @@ class BasisAndRotaryTest(unittest.TestCase):
 
 
 class PositionChannelTest(unittest.TestCase):
-    def test_logit_contract_and_zero_init(self):
-        for sharing in SHARING_MODES:
-            for feature_map in FEATURE_MAPS:
-                with self.subTest(sharing=sharing, feature_map=feature_map):
-                    channel = _build_logit(_v1_logit(feature_map, sharing))
-                    curves = channel()
-                    self.assertEqual(curves.shape, (4, 16))
-                    self.assertEqual(torch.count_nonzero(curves).item(), 0)
-
     def test_qk_phase_zero_init_and_add_sinusoid_init(self):
         for sharing in SHARING_MODES:
             for feature_map in FEATURE_MAPS:
@@ -322,14 +291,6 @@ class PositionChannelTest(unittest.TestCase):
                 residual = _build_qk(_v1_qk(feature_map, "per_head", "add"))
                 torch.testing.assert_close(identity(11).q, residual(11).q)
 
-    def test_low_rank_and_bottleneck_have_fixed_feature_shape(self):
-        low_rank = _build_logit(_v1_logit("low_rank", "per_head", rank=3))
-        bottleneck = _build_logit(_v1_logit("bottleneck_mlp", "per_head", rank=3))
-        self.assertEqual(low_rank.pipeline(dtype=None).shape, (4, 16, 8))
-        self.assertEqual(bottleneck.pipeline(dtype=None).shape, (4, 16, 8))
-        self.assertEqual(low_rank.pipeline.mapper.up.shape, (4, 3, 8))
-        self.assertEqual(bottleneck.pipeline.mapper.up.shape, (4, 3, 8))
-
     def test_tiny_parameter_count_fixtures(self):
         common = dict(
             dim=32,
@@ -348,24 +309,10 @@ class PositionChannelTest(unittest.TestCase):
                 qk_config=_v1_qk("mlp", "per_head", "phase_residual", rank=4, mlp_hidden=12),
             )
         )
-        logit = count_parameters(
-            Transformer(
-                dim=32,
-                depth=1,
-                heads=4,
-                ff_mult=2,
-                vocab_size=64,
-                max_seq_len=16,
-                attn_impl="flex",
-                qk_config={"enabled": False},
-                logit_bias_config=_v1_logit("linear", "per_head"),
-            )
-        )
         self.assertEqual(rope["total"], 15936)
         self.assertEqual(phase["qk_position_params"], 992)
         self.assertEqual(phase["total"], 16928)
-        self.assertEqual(logit["logit_bias_params"], 324)
-        self.assertEqual(logit["total"], 16260)
+        self.assertEqual(rope["logit_bias_params"], 0)
 
 
 class QKCouplingTest(unittest.TestCase):
@@ -476,16 +423,6 @@ class PositionConfigTest(unittest.TestCase):
             config_file.flush()
             return load_config(_cli(config_file.name))
 
-    def test_legacy_preset_expands_to_logit_channel(self):
-        config = self._load({"pos_variant": "low_rank", "pos_rank": 7})
-        self.assertFalse(config.qk["enabled"])
-        self.assertTrue(config.logit_bias["enabled"])
-        self.assertEqual(config.logit_bias["mapper"]["kind"], "low_rank")
-        self.assertEqual(config.logit_bias["mapper"]["rank"], 7)
-        self.assertEqual(config.attn_impl, "flex")
-        self.assertEqual(config.position_schema_version, 2)
-        self.assertEqual(config.position_source_schema, 1)
-
     def test_qk_only_keeps_sdpa(self):
         config = self._load(
             {
@@ -530,7 +467,7 @@ class PositionConfigTest(unittest.TestCase):
                 "source": "dedicated",
                 "input_mode": "content_position",
                 "network": "swiglu_mlp",
-                "components": "log_gain_phase",
+                "components": "phase",
                 "target": "both",
                 "coupling": "separate",
                 "head_coupling": "shared_head",
@@ -718,21 +655,6 @@ class PositionConfigTest(unittest.TestCase):
         )
         self.assertEqual(normalized_direct["output"]["parameter_source"], "direct")
 
-    def test_explicit_channels_can_enable_both(self):
-        config = self._load(
-            {
-                "qk": {"enabled": True, "feature_map": "linear"},
-                "logit_bias": {
-                    "enabled": True,
-                    "feature_map": "bottleneck_mlp",
-                },
-            }
-        )
-        self.assertTrue(config.qk["enabled"])
-        self.assertTrue(config.logit_bias["enabled"])
-        self.assertEqual(config.attn_impl, "flex")
-        self.assertIn("+", config.run_name)
-
     def test_addrope_run_tag(self):
         config = self._load(
             {
@@ -778,8 +700,8 @@ class PositionConfigTest(unittest.TestCase):
         }
         for sharing, head_coupling in mapping.items():
             upgraded = upgrade_legacy_position_config(
-                "logit_bias",
-                _v1_logit("linear", sharing),
+                "qk",
+                _v1_qk("linear", sharing, "phase_residual"),
                 model_dim=32,
                 heads=4,
                 rope_theta=10_000.0,
@@ -857,7 +779,7 @@ class PositionConfigTest(unittest.TestCase):
 
     def test_all_sweep_configs_load(self):
         paths = sorted(SWEEP_CONFIG_DIR.glob("*.json"))
-        self.assertEqual(len(paths), 14)
+        self.assertEqual(len(paths), 8)
         for path in paths:
             with self.subTest(config=path.name):
                 config = load_config(_cli(str(path)))
@@ -938,24 +860,6 @@ class CompatibilityTest(unittest.TestCase):
         optimizer.step()
         self.assertTrue(torch.isfinite(loss).item())
 
-    def test_logit_diagnostic_keys(self):
-        model = Transformer(
-            dim=32,
-            depth=2,
-            heads=4,
-            ff_mult=2,
-            vocab_size=64,
-            max_seq_len=16,
-            attn_impl="flex",
-            qk_config={"enabled": False},
-            logit_bias_config=_v1_logit("linear", "per_head"),
-        )
-        metrics, profiles = model.position_diagnostics(sequence_length=8)
-        self.assertIn("position/layer_00/bias_mean", metrics)
-        self.assertIn("position/layer_00/bias_std", metrics)
-        self.assertIn("position/layer_00/bias_abs_max", metrics)
-        self.assertIn("layer_00", profiles)
-
     def test_qk_diagnostic_keys(self):
         model = Transformer(
             dim=32,
@@ -986,7 +890,7 @@ class SpectralCarrierComponentsTest(unittest.TestCase):
         components,
         *,
         amplitude_init=1.0,
-        offset_parameterization="raw",
+        offset_parameterization="tanh",
         target="both",
     ):
         return {
@@ -1130,13 +1034,7 @@ class SpectralCarrierComponentsTest(unittest.TestCase):
     def test_position_offset_is_a_pure_position_shift(self):
         """phase = omega * m must equal evaluating the carrier at p + m."""
         shift = 3.0
-        for parameterization, raw_value in (
-            ("raw", shift),
-            ("softplus", math.log(math.expm1(1.0 + shift)) - math.log(math.e - 1.0)),
-            ("tanh", math.atanh(shift / 8.0)),
-        ):
-            with self.subTest(parameterization=parameterization):
-                self._check_shift(parameterization, raw_value, shift)
+        self._check_shift("tanh", math.atanh(shift / 8.0), shift)
 
     def _check_shift(self, parameterization, raw_value, shift):
         channel = self._channel(

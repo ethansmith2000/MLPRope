@@ -37,6 +37,7 @@ from position import (
     deep_merge,
     legacy_position_run_tag,
     normalize_attention_write_config,
+    normalize_logit_bias_config,
     normalize_position_content_config,
     normalize_rope_frequency_config,
     legacy_rope_frequency_mode,
@@ -198,21 +199,19 @@ DEFAULT_CONFIG = {
     },
     "qk_norm": True,
     "post_position_qk_norm": False,
-    "qk_norm_per_head": False,
     "exclude_position_from_decay": False,
     "qk_norm_mode": "legacy_layernorm",
     "position_content_dim": 64,
     "position_content_coupling": "separate",
-    # Legacy convenience preset. Nested qk/logit_bias configs are source of truth.
-    # Phase 1: rope | add_rope | linear | low_rank | bottleneck_mlp | mlp_rope.
-    # Content-routed presets: inkling_table | inkling_cosnet.
+    # Legacy convenience preset. The nested qk config is the source of truth.
     "pos_variant": None,
     "rel_extent": None,  # None follows block_size.
     "pos_rank": 32,
     "pos_mlp_hidden": 128,
     # Raw defaults remain v1-shaped for override merging; load_config upgrades to v2.
     "qk": copy.deepcopy(V1_CHANNEL_DEFAULTS["qk"]),
-    "logit_bias": copy.deepcopy(V1_CHANNEL_DEFAULTS["logit_bias"]),
+    # Removed channel: only the disabled archived form remains valid.
+    "logit_bias": {"enabled": False},
     "residual_stream": copy.deepcopy(RESIDUAL_STREAM_DEFAULTS),
     "attention_write": copy.deepcopy(ATTENTION_WRITE_DEFAULTS),
     "position_schema_version": POSITION_SCHEMA_VERSION,
@@ -236,16 +235,7 @@ def parse_args():
     parser.add_argument("--override_json", type=str, default=None)
     parser.add_argument(
         "--pos_variant",
-        choices=(
-            "rope",
-            "add_rope",
-            "linear",
-            "low_rank",
-            "bottleneck_mlp",
-            "mlp_rope",
-            "inkling_table",
-            "inkling_cosnet",
-        ),
+        choices=("rope",),
         default=None,
     )
     parser.add_argument(
@@ -287,7 +277,7 @@ def position_run_tag(cfg: dict) -> str:
     if source == 1:
         base = legacy_position_run_tag(
             qk_v1=v2_to_legacy_tag_fields("qk", cfg["qk"]),
-            logit_v1=v2_to_legacy_tag_fields("logit_bias", cfg["logit_bias"]),
+            logit_v1=cfg["logit_bias"],
             attn_impl=cfg["attn_impl"],
         )
     else:
@@ -319,7 +309,6 @@ def position_run_tag(cfg: dict) -> str:
                 "n_head": cfg["n_head"],
                 "use_rope": cfg["use_rope"],
                 "post_position_qk_norm": cfg["post_position_qk_norm"],
-                "qk_norm_per_head": cfg["qk_norm_per_head"],
                 "qk_norm_mode": cfg["qk_norm_mode"],
                 "position_content_dim": cfg["position_content_dim"],
                 "position_content_coupling": cfg[
@@ -369,24 +358,14 @@ def load_config(cli_args):
     preset_config = POSITION_PRESETS.get(preset, {}) if preset is not None else {}
     # Legacy width knobs remain aliases for preset-generated configs.
     qk_override = copy.deepcopy(overrides.get("qk", {}))
-    logit_override = copy.deepcopy(overrides.get("logit_bias", {}))
-    if preset is not None and preset not in {"inkling_table", "inkling_cosnet"}:
-        if "qk" not in overrides:
-            qk_override = deep_merge(
-                qk_override,
-                {
-                    "rank": int(cfg["pos_rank"]),
-                    "mlp_hidden": int(cfg["pos_mlp_hidden"]),
-                },
-            )
-        if "logit_bias" not in overrides:
-            logit_override = deep_merge(
-                logit_override,
-                {
-                    "rank": int(cfg["pos_rank"]),
-                    "mlp_hidden": int(cfg["pos_mlp_hidden"]),
-                },
-            )
+    if preset is not None and "qk" not in overrides:
+        qk_override = deep_merge(
+            qk_override,
+            {
+                "rank": int(cfg["pos_rank"]),
+                "mlp_hidden": int(cfg["pos_mlp_hidden"]),
+            },
+        )
 
     training_length = int(cfg["training_length"] or cfg["block_size"])
     if training_length < 2:
@@ -528,8 +507,6 @@ def load_config(cli_args):
         raise ValueError("learned RoPE frequencies require use_rope=true")
     if not isinstance(cfg["post_position_qk_norm"], bool):
         raise TypeError("post_position_qk_norm must be a boolean")
-    if not isinstance(cfg["qk_norm_per_head"], bool):
-        raise TypeError("qk_norm_per_head must be a boolean")
     if not isinstance(cfg["exclude_position_from_decay"], bool):
         raise TypeError("exclude_position_from_decay must be a boolean")
     if cfg["qk_norm_mode"] not in {
@@ -560,32 +537,20 @@ def load_config(cli_args):
         heads=heads,
         rope_theta=rope_theta,
     )
-    logit_config, logit_source = resolve_channel_config(
-        "logit_bias",
-        preset_fragment=preset_config.get("logit_bias"),
-        override=logit_override,
-        model_dim=model_dim,
-        heads=heads,
-        rope_theta=rope_theta,
-    )
+    logit_config = normalize_logit_bias_config(cfg["logit_bias"])
     # If a preset set rank aliases onto a v1 fragment, they are already applied
     # above via overrides. For presets with only feature_map, rank aliases need
     # to land on the upgraded mapper — handle when preset set and no channel override.
-    if preset is not None:
-        if "qk" not in overrides and qk_config["enabled"]:
-            qk_config["mapper"]["rank"] = int(cfg["pos_rank"])
-            qk_config["mapper"]["hidden_dim"] = int(cfg["pos_mlp_hidden"])
-        if "logit_bias" not in overrides and logit_config["enabled"]:
-            logit_config["mapper"]["rank"] = int(cfg["pos_rank"])
-            logit_config["mapper"]["hidden_dim"] = int(cfg["pos_mlp_hidden"])
+    if preset is not None and "qk" not in overrides and qk_config["enabled"]:
+        qk_config["mapper"]["rank"] = int(cfg["pos_rank"])
+        qk_config["mapper"]["hidden_dim"] = int(cfg["pos_mlp_hidden"])
 
     cfg["qk"] = qk_config
     cfg["logit_bias"] = logit_config
-    for channel_config in (qk_config, logit_config):
-        if channel_config["enabled"] and channel_config["input"]["scalars"]:
-            channel_config["input"][
-                "normalization_extent"
-            ] = scalar_normalization_extent
+    if qk_config["enabled"] and qk_config["input"]["scalars"]:
+        qk_config["input"][
+            "normalization_extent"
+        ] = scalar_normalization_extent
     cfg["residual_stream"] = normalize_residual_stream_config(
         overrides.get("residual_stream", cfg["residual_stream"]),
         model_dim=model_dim,
@@ -602,8 +567,6 @@ def load_config(cli_args):
     enabled_sources = []
     if qk_config["enabled"]:
         enabled_sources.append(qk_source)
-    if logit_config["enabled"]:
-        enabled_sources.append(logit_source)
     if cfg["residual_stream"]["enabled"] or cfg["attention_write"]["enabled"]:
         enabled_sources.append(2)
     if not cfg["use_rope"]:
@@ -617,16 +580,12 @@ def load_config(cli_args):
         ("rope" if cfg["use_rope"] else "none")
         if (
             not qk_config["enabled"]
-            and not logit_config["enabled"]
             and not cfg["residual_stream"]["enabled"]
             and not cfg["attention_write"]["enabled"]
         )
         else "custom"
     )
 
-    # Only learned logit biases require FlexAttention.
-    if logit_config["enabled"] and cfg["attn_impl"] != "flex":
-        cfg["attn_impl"] = "flex"
     if (
         cfg["attn_impl"] == "flex"
         and cfg["compile"]
@@ -651,7 +610,6 @@ def load_config(cli_args):
     variant_tag = position_run_tag(cfg)
     if (
         qk_config["enabled"]
-        or logit_config["enabled"]
         or cfg["residual_stream"]["enabled"]
         or cfg["attention_write"]["enabled"]
     ):
@@ -776,7 +734,6 @@ def make_model(args, vocab_size):
         rope_frequency_config=args.rope_frequency,
         qk_norm=args.qk_norm,
         post_position_qk_norm=args.post_position_qk_norm,
-        qk_norm_per_head=args.qk_norm_per_head,
         qk_norm_mode=args.qk_norm_mode,
         position_content_dim=args.position_content_dim,
         position_content_coupling=args.position_content_coupling,
@@ -1277,7 +1234,6 @@ def main():
             "rope_frequency_mode": args.rope_frequency_mode,
             "rope_frequency": args.rope_frequency,
             "post_position_qk_norm": args.post_position_qk_norm,
-            "qk_norm_per_head": args.qk_norm_per_head,
             "exclude_position_from_decay": args.exclude_position_from_decay,
             "qk_norm_mode": args.qk_norm_mode,
             "position_content_dim": args.position_content_dim,

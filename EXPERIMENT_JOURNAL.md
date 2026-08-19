@@ -2897,3 +2897,29 @@ mapped AddRoPE is cheaper than the hypernetwork and may beat it iso-wallclock;
 content-increment revision and the mapped-carrier simplification as first-class
 results; (3) sync final weights off-box before trusting them (git holds the
 small artifacts as of this entry).
+
+## 2026-08-19 — Post-confirmation design-space prune
+
+With phase-19 settled, the playground was pruned to the surviving hypotheses
+(244 insertions, 7,591 deletions incl. 155 archived configs; git history
+retains everything). Removed: conditioning sources `qk` and `residual`
+(content now comes only from the dedicated norm_x projection — full-rank
+input, no back-to-back linears, no coupling into W_q/W_k); the relative
+logit-bias channel and Inkling variants (closed on SDPA cost; `logit_bias:
+{enabled: false}` remains parseable, `enabled: true` errors pointing to
+CONCAT_QK_POSITION.md); rotary geometries `projected_phase`/`unit_pair`/
+`scaled_phase` (plain `rotary/phase` kept as the one RoPE-modification
+control — modifications inside the rotation never paid); learned-frequency
+input kinds (closed by phases 20-22); `log_gain_phase`, `pairwise_low_rank`,
+per-head QKNorm, and `offset_parameterization` raw/softplus (tanh only).
+`attn_impl=flex` survives as a raw backend. Phase-19 locked configs verified
+byte-identical; suite now 105 tests + 1 skip (17 tests covered removed
+features). Note: the deleted phase12/13 archive included four per-head-QKNorm
+controls; recover from git history if ever needed.
+
+Design principle recorded from this round of discussion: interventions sort
+by whether they preserve RoPE's shared sequence-wide phase frame. Shared-frame
+(static spectra, position-only profiles) is safe; per-token frame-breaking is
+null-to-catastrophic; the cumulative clock (monotone shared time-warp) is the
+only known content-dependent form that preserves cross-sequence alignment —
+next content-conditioned screens should be cumulative-first.

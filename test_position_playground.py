@@ -44,7 +44,7 @@ def qk_config(
     qk_coupling: str = "shared",
     head_coupling: str = "per_head_independent",
     conditioning: str = "none",
-    conditioning_source: str = "qk",
+    conditioning_source: str = "dedicated",
     conditioning_target: str = "both",
     conditioning_coupling: str = "shared_trunk_separate_readouts",
     conditioning_static_complement: bool = False,
@@ -120,48 +120,6 @@ def qk_config(
     )
 
 
-def logit_config(
-    kind: str,
-    *,
-    position_mode: str = "relative_only",
-    pair_rank: int = 16,
-) -> dict:
-    return normalize_position_config_v2(
-        "logit_bias",
-        {
-            "enabled": True,
-            "application": "logit_bias",
-            "geometry": "scalar_curve",
-            "input": {
-                "kind": "frozen_fourier",
-                "basis_dim": 8,
-                "theta": None,
-                "scalars": [],
-            },
-            "mapper": {
-                "kind": "identity",
-                "residual": False,
-                "rank": 4,
-                "hidden_dim": 12,
-            },
-            "conditioning": {
-                "kind": kind,
-                "source": "qk",
-                "num_profiles": 4,
-                "router_hidden_dim": 8,
-                "num_frequencies": 3,
-                "gate_init": 0.0,
-                "pair_rank": pair_rank,
-                "position_mode": position_mode,
-            },
-            "head_coupling": "per_head_independent",
-        },
-        model_dim=32,
-        heads=4,
-        rope_theta=10_000.0,
-    )
-
-
 class PositionBasisTest(unittest.TestCase):
     def test_exp_parameterization_uses_exp_forward_identity_backward(self):
         value = torch.tensor([-3.0, 0.0, 3.0], requires_grad=True)
@@ -169,24 +127,6 @@ class PositionBasisTest(unittest.TestCase):
         torch.testing.assert_close(output, value.detach().exp())
         output.sum().backward()
         torch.testing.assert_close(value.grad, torch.ones_like(value))
-
-    def test_learned_bases_match_frozen_at_initialization(self):
-        expected = interleaved_fourier_basis(16, 8, 10_000.0)
-        for kind in (
-            "learned_temperature_fourier",
-            "learned_frequency_fourier",
-        ):
-            with self.subTest(kind=kind):
-                basis = build_position_basis(
-                    kind=kind,
-                    extent=16,
-                    basis_dim=8,
-                    theta=10_000.0,
-                )
-                torch.testing.assert_close(basis(16), expected)
-                basis(16).sum().backward()
-                parameter = next(basis.parameters())
-                self.assertIsNotNone(parameter.grad)
 
     def test_scalar_features_extend_mapper_input(self):
         basis = build_position_basis(
@@ -273,52 +213,7 @@ class GeometryAndContentTest(unittest.TestCase):
             rope_theta=10_000.0,
         )
 
-    def test_carrier_hypernetwork_preserves_addrope_anchor_and_gets_gradient(self):
-        config = qk_config(
-            "additive",
-            "amplitude_phase",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_coupling="shared_trunk_separate_readouts",
-            conditioning_input_mode="content_position",
-            conditioning_network="silu_mlp",
-            conditioning_components="log_gain_phase",
-            learn_amplitude=False,
-            learn_phase=False,
-            amplitude_init=0.2,
-        )
-        channel = self._channel(config)
-        self.assertIsNone(channel.pipeline)
-        content = torch.randn(2, 4, 9, 8)
-        output = channel(9, q_content=content, k_content=content)
-        expected = (
-            0.2
-            * torch.cat(
-                (channel.base_cos[:9], channel.base_sin[:9]),
-                dim=-1,
-            )[None]
-            .expand(4, -1, -1)
-        )
-        torch.testing.assert_close(output.q, expected[None].expand(2, -1, -1, -1))
-        torch.testing.assert_close(output.k, output.q)
-        self.assertEqual(torch.count_nonzero(output.q_log_gain_delta).item(), 0)
-        self.assertEqual(torch.count_nonzero(output.q_hyper_phase_delta).item(), 0)
-        summary = channel.summarize(
-            9,
-            q_content=content,
-            k_content=content,
-        )
-        self.assertEqual(summary["hyper_log_gain_delta_q/rms"], 0.0)
-        self.assertEqual(summary["hyper_phase_delta_k/p95_abs"], 0.0)
-        self.assertEqual(summary["hyper_effective_gain_q/max"], 1.0)
-
-        (output.q.sum() + output.k.sum()).backward()
-        q_readout = channel.carrier_hypernetwork.q_readout
-        k_readout = channel.carrier_hypernetwork.k_readout
-        self.assertGreater(q_readout.weight.grad.abs().sum().item(), 0)
-        self.assertGreater(k_readout.weight.grad.abs().sum().item(), 0)
-
-    def test_carrier_hypernetwork_rotary_phase_and_gain_are_exact_nulls(self):
+    def test_carrier_hypernetwork_rotary_phase_is_an_exact_null(self):
         config = qk_config(
             "rotary",
             "phase",
@@ -327,7 +222,7 @@ class GeometryAndContentTest(unittest.TestCase):
             conditioning_coupling="shared",
             conditioning_input_mode="content",
             conditioning_network="linear",
-            conditioning_components="log_gain_phase",
+            conditioning_components="phase",
             conditioning_head_coupling="shared_head",
             learn_phase=False,
         )
@@ -337,8 +232,7 @@ class GeometryAndContentTest(unittest.TestCase):
         output = channel(9, q_content=content, k_content=content)
         torch.testing.assert_close(output.q, torch.zeros_like(output.q))
         torch.testing.assert_close(output.k, output.q)
-        torch.testing.assert_close(output.q_scale, torch.ones_like(output.q_scale))
-        torch.testing.assert_close(output.k_scale, output.q_scale)
+        self.assertIsNone(output.q_scale)
         self.assertEqual(output.q.shape, (2, 4, 9, 4))
 
     def test_carrier_hypernetwork_axes_and_asymmetric_targets(self):
@@ -974,7 +868,6 @@ class GeometryAndContentTest(unittest.TestCase):
         )[None, None].expand(2, 4, -1, -1)
         torch.testing.assert_close(output.q, expected)
         torch.testing.assert_close(output.k, expected)
-        self.assertIsNone(output.q_log_gain_delta)
         torch.testing.assert_close(
             output.q_amplitude_delta,
             torch.zeros_like(output.q_amplitude_delta),
@@ -1367,11 +1260,11 @@ class GeometryAndContentTest(unittest.TestCase):
             mapper_kind="linear",
             qk_coupling="shared_trunk_separate_readouts",
             conditioning="phase_rotation",
-            conditioning_source="residual",
+            conditioning_source="dedicated",
             amplitude_init=0.3,
         )
         channel = self._channel(config)
-        content = torch.randn(2, 4, 9, 32)
+        content = torch.randn(2, 4, 9, 8)
         output = channel(9, q_content=content, k_content=content)
         raw = channel.pipeline(9)
         expected_q = channel._normalize_additive_pairs(
@@ -1396,7 +1289,7 @@ class GeometryAndContentTest(unittest.TestCase):
             mapper_kind="linear",
             qk_coupling="shared_trunk_separate_readouts",
             conditioning="phase_rotation",
-            conditioning_source="residual",
+            conditioning_source="dedicated",
             conditioning_target="both",
             conditioning_coupling="shared_trunk_separate_readouts",
             phase_bound=0.25,
@@ -1407,7 +1300,7 @@ class GeometryAndContentTest(unittest.TestCase):
         with torch.no_grad():
             conditioner.q_up.normal_(std=0.2)
             conditioner.k_up.normal_(std=0.2)
-        content = torch.randn(2, 4, 9, 32)
+        content = torch.randn(2, 4, 9, 8)
         output = channel(9, q_content=content, k_content=content)
         for branch, values in (("q", output.q), ("k", output.k)):
             phase = conditioner.phase(content, branch)
@@ -1429,12 +1322,12 @@ class GeometryAndContentTest(unittest.TestCase):
             mapper_kind="linear",
             qk_coupling="shared_trunk_separate_readouts",
             conditioning="phase_rotation",
-            conditioning_source="residual",
+            conditioning_source="dedicated",
             conditioning_target="q",
             amplitude_init=0.3,
         )
         channel = self._channel(config)
-        content = torch.randn(2, 4, 9, 32)
+        content = torch.randn(2, 4, 9, 8)
         output = channel(9, q_content=content, k_content=content)
         probe = torch.randn_like(output.q)
         (output.q * probe).sum().backward()
@@ -1499,6 +1392,7 @@ class GeometryAndContentTest(unittest.TestCase):
         torch.testing.assert_close(gain.k_gain, torch.ones_like(gain.k_gain))
 
     def test_dedicated_position_content_is_low_rank_and_configurable(self):
+        torch.manual_seed(0)
         config = qk_config(
             "rotary",
             "phase",
@@ -1582,31 +1476,6 @@ class GeometryAndContentTest(unittest.TestCase):
             torch.testing.assert_close(output.q, fixed(9).q)
             torch.testing.assert_close(output.q, output.k)
 
-    def test_projected_phase_and_scaled_phase_init(self):
-        projected = self._channel(
-            qk_config("rotary", "projected_phase")
-        )(9)
-        self.assertEqual(projected.q.shape, (4, 9, 4))
-        self.assertEqual(torch.count_nonzero(projected.q).item(), 0)
-
-        unit_pair = self._channel(qk_config("rotary", "unit_pair"))(9)
-        self.assertEqual(unit_pair.q.shape, (4, 9, 4))
-        torch.testing.assert_close(
-            unit_pair.q,
-            torch.zeros_like(unit_pair.q),
-            atol=1e-6,
-            rtol=0,
-        )
-
-        scaled = self._channel(
-            qk_config("rotary", "scaled_phase", scale_init=1.0)
-        )(9)
-        self.assertEqual(torch.count_nonzero(scaled.q).item(), 0)
-        torch.testing.assert_close(
-            scaled.q_scale,
-            torch.ones_like(scaled.q_scale),
-        )
-
     def test_bounded_amplitude_and_additive_gain_control_branch_rms(self):
         config = qk_config(
             "additive",
@@ -1635,18 +1504,6 @@ class GeometryAndContentTest(unittest.TestCase):
             rtol=2e-5,
         )
         self.assertLessEqual(output.k.abs().max().item(), 0.2)
-
-    def test_bounded_rotary_scale_limits_pair_anisotropy(self):
-        config = qk_config("rotary", "scaled_phase")
-        config["output"].update(
-            {"scale_parameterization": "bounded_log", "scale_max": 2.0}
-        )
-        channel = self._channel(config)
-        with torch.no_grad():
-            channel.scale_head.bias.fill_(1000.0)
-        output = channel(8)
-        self.assertLessEqual(output.q_scale.max().item(), 2.0)
-        self.assertGreaterEqual(output.k_scale.min().item(), 0.5)
 
     def test_local_conditioners_are_initially_controlled(self):
         base_config = qk_config(
@@ -1740,27 +1597,6 @@ class GeometryAndContentTest(unittest.TestCase):
             conditioner.gate_bias.fill_(1000.0)
         self.assertLessEqual(conditioner(base, content).max().item(), 2.0)
 
-    def test_residual_content_source_uses_dedicated_conditioners(self):
-        config = qk_config(
-            "additive",
-            "amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="content_gate",
-        )
-        config["conditioning"].update(
-            {
-                "source": "residual",
-                "activation": "scaled_sigmoid",
-                "gate_init": 1.0,
-            }
-        )
-        channel = self._channel(config)
-        self.assertEqual(channel.q_conditioner.content_dim, 32)
-        self.assertIsNot(channel.q_conditioner, channel.k_conditioner)
-        residual = torch.randn(2, 4, 8, 32)
-        output = channel(8, q_content=residual, k_content=residual)
-        self.assertEqual(output.q.shape, (2, 4, 8, 8))
-
     def test_amplitude_phase_conditioning_preserves_latent_synthesis(self):
         config = qk_config(
             "additive",
@@ -1781,27 +1617,6 @@ class GeometryAndContentTest(unittest.TestCase):
         # synthesized x/y coordinates.
         self.assertIsNotNone(channel.q_amplitude_conditioner)
         self.assertEqual(channel.q_conditioner.output_dim, 4)
-
-    def test_full_model_scaled_rotary_matches_rope_at_init(self):
-        common = dict(
-            dim=32,
-            depth=1,
-            heads=4,
-            ff_mult=2,
-            vocab_size=64,
-            max_seq_len=16,
-            logit_bias_config={"enabled": False},
-        )
-        torch.manual_seed(7)
-        baseline = Transformer(**common, qk_config={"enabled": False}).eval()
-        torch.manual_seed(7)
-        scaled = Transformer(
-            **common,
-            qk_config=qk_config("rotary", "scaled_phase"),
-        ).eval()
-        scaled.load_state_dict(baseline.state_dict(), strict=False)
-        ids = torch.randint(0, 64, (2, 8))
-        torch.testing.assert_close(baseline(ids), scaled(ids))
 
     def test_content_conditioned_full_model_keeps_four_dimensions(self):
         config = qk_config(
@@ -2205,188 +2020,6 @@ class InklingAndConfigTest(unittest.TestCase):
                 )
             )
 
-    def test_inkling_banks_are_zero_effect_with_live_routing(self):
-        for kind in ("inkling_table", "inkling_cosnet"):
-            with self.subTest(kind=kind):
-                model = Transformer(
-                    dim=32,
-                    depth=1,
-                    heads=4,
-                    ff_mult=2,
-                    vocab_size=64,
-                    max_seq_len=16,
-                    qk_config={"enabled": False},
-                    logit_bias_config=logit_config(kind),
-                    attn_impl="flex",
-                )
-                channel = model.blocks[0].attn.logit_bias
-                query = torch.randn(2, 4, 8, 8)
-                bias = channel(query=query)
-                self.assertEqual(bias.shape, (2, 4, 8, 16))
-                self.assertEqual(torch.count_nonzero(bias).item(), 0)
-                summary = channel.routing_summary()
-                self.assertIn("routing_entropy_mean", summary)
-                self.assertGreater(summary["routing_entropy_mean"], 0)
-
-    def test_pairwise_low_rank_modes_have_exact_zero_effect_gate(self):
-        for mode in (
-            "relative_only",
-            "query_absolute",
-            "full_absolute",
-        ):
-            with self.subTest(mode=mode):
-                model = Transformer(
-                    dim=32,
-                    depth=1,
-                    heads=4,
-                    ff_mult=2,
-                    vocab_size=64,
-                    max_seq_len=16,
-                    qk_config={"enabled": False},
-                    logit_bias_config=logit_config(
-                        "pairwise_low_rank",
-                        position_mode=mode,
-                        pair_rank=4,
-                    ),
-                    attn_impl="flex",
-                )
-                channel = model.blocks[0].attn.logit_bias
-                query = torch.randn(2, 4, 8, 8)
-                key = torch.randn(2, 4, 8, 8)
-                base, factors = channel.prepare(query=query, key=key)
-                self.assertEqual(torch.count_nonzero(base).item(), 0)
-                query_factor, key_factor, distance_factor, gate = factors
-                self.assertEqual(query_factor.shape, (2, 4, 8, 4))
-                self.assertEqual(key_factor.shape, (2, 4, 8, 4))
-                self.assertEqual(distance_factor.shape, (4, 16, 4))
-                self.assertEqual(torch.count_nonzero(gate).item(), 0)
-                for factor in (
-                    query_factor,
-                    key_factor,
-                    distance_factor,
-                ):
-                    torch.testing.assert_close(
-                        factor.float().square().mean(dim=-1),
-                        torch.ones_like(factor[..., 0].float()),
-                        atol=2e-4,
-                        rtol=2e-4,
-                    )
-
-    def test_pairwise_relative_mode_is_translation_invariant(self):
-        channels = {}
-        for mode in ("relative_only", "query_absolute"):
-            model = Transformer(
-                dim=32,
-                depth=1,
-                heads=4,
-                ff_mult=2,
-                vocab_size=64,
-                max_seq_len=16,
-                qk_config={"enabled": False},
-                logit_bias_config=logit_config(
-                    "pairwise_low_rank",
-                    position_mode=mode,
-                    pair_rank=4,
-                ),
-                attn_impl="flex",
-            )
-            channels[mode] = model.blocks[0].attn.logit_bias
-
-        content = torch.ones(1, 4, 8, 8)
-        relative_factors = channels["relative_only"].prepare(
-            query=content,
-            key=content,
-        )[1]
-        absolute_factors = channels["query_absolute"].prepare(
-            query=content,
-            key=content,
-        )[1]
-
-        def interaction(factors, query_idx, key_idx):
-            query_factor, key_factor, distance_factor, _ = factors
-            distance = query_idx - key_idx
-            return (
-                query_factor[0, :, query_idx]
-                * key_factor[0, :, key_idx]
-                * distance_factor[:, distance]
-            ).sum(dim=-1)
-
-        torch.testing.assert_close(
-            interaction(relative_factors, 2, 1),
-            interaction(relative_factors, 3, 2),
-        )
-        self.assertFalse(
-            torch.allclose(
-                interaction(absolute_factors, 2, 1),
-                interaction(absolute_factors, 3, 2),
-            )
-        )
-
-    def test_pairwise_gate_receives_gradient_at_zero_initialization(self):
-        model = Transformer(
-            dim=32,
-            depth=1,
-            heads=4,
-            ff_mult=2,
-            vocab_size=64,
-            max_seq_len=16,
-            qk_config={"enabled": False},
-            logit_bias_config=logit_config(
-                "pairwise_low_rank",
-                pair_rank=4,
-            ),
-            attn_impl="flex",
-        )
-        channel = model.blocks[0].attn.logit_bias
-        query = torch.randn(2, 4, 8, 8)
-        key = torch.randn(2, 4, 8, 8)
-        _, factors = channel.prepare(query=query, key=key)
-        query_factor, key_factor, distance_factor, gate = factors
-        raw = (
-            query_factor[:, :, :, None, :]
-            * key_factor[:, :, None, :, :]
-            * distance_factor[
-                :,
-                (
-                    torch.arange(8)[:, None]
-                    - torch.arange(8)[None, :]
-                ).clamp_min(0),
-            ][None]
-        ).sum(dim=-1)
-        (gate[None, :, None, None] * raw.detach().square()).sum().backward()
-        self.assertGreater(
-            channel.pairwise.gate.grad.abs().sum().item(),
-            0.0,
-        )
-
-    def test_inkling_presets_resolve_and_force_flex(self):
-        for preset in ("inkling_table", "inkling_cosnet"):
-            args = Namespace(
-                override_json=None,
-                pos_variant=preset,
-                attn_impl=None,
-                max_train_steps=None,
-                dry_run=False,
-                print_model=False,
-            )
-            config = load_config(args)
-            self.assertEqual(
-                config.logit_bias["conditioning"]["kind"],
-                preset,
-            )
-            self.assertEqual(config.attn_impl, "flex")
-            self.assertEqual(config.position_source_schema, 2)
-
-    def test_enabled_only_override_can_disable_v2_preset(self):
-        config = self._load_payload(
-            {
-                "pos_variant": "inkling_table",
-                "logit_bias": {"enabled": False},
-            }
-        )
-        self.assertFalse(config.logit_bias["enabled"])
-        self.assertEqual(config.attn_impl, "sdpa")
-
     def test_no_explicit_position_config_disables_rope(self):
         config = self._load_payload({"use_rope": False})
         self.assertFalse(config.use_rope)
@@ -2635,7 +2268,7 @@ class InklingAndConfigTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "compile_fullgraph"):
             self._load_payload(
                 {
-                    "pos_variant": "inkling_table",
+                    "attn_impl": "flex",
                     "compile": True,
                     "compile_fullgraph": True,
                 }

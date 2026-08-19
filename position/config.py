@@ -7,22 +7,14 @@ from typing import Any, Literal
 
 POSITION_SCHEMA_VERSION = 2
 
-Application = Literal["additive", "rotary", "logit_bias"]
+Application = Literal["additive", "rotary"]
 Geometry = Literal[
     "free",
     "pair_normalized",
     "amplitude_phase",
     "phase",
-    "projected_phase",
-    "unit_pair",
-    "scaled_phase",
-    "scalar_curve",
 ]
-InputKind = Literal[
-    "frozen_fourier",
-    "learned_temperature_fourier",
-    "learned_frequency_fourier",
-]
+InputKind = Literal["frozen_fourier"]
 MapperKind = Literal[
     "identity",
     "euclidean_affine",
@@ -53,13 +45,6 @@ V1_QK_KEYS = {
     "rank",
     "mlp_hidden",
 }
-V1_LOGIT_KEYS = {
-    "enabled",
-    "feature_map",
-    "sharing",
-    "rank",
-    "mlp_hidden",
-}
 V2_COMMON_KEYS = {
     "enabled",
     "application",
@@ -71,7 +56,6 @@ V2_COMMON_KEYS = {
     "head_coupling",
 }
 V2_QK_KEYS = V2_COMMON_KEYS | {"qk_coupling"}
-V2_LOGIT_KEYS = V2_COMMON_KEYS
 V2_INPUT_KEYS = {
     "kind",
     "basis_dim",
@@ -148,49 +132,10 @@ V2_ONLY_KEYS = {
     "head_coupling",
 }
 
-POSITION_ONLY_VARIANTS = {
-    "add_rope",
-    "linear",
-    "low_rank",
-    "bottleneck_mlp",
-    "mlp_rope",
-}
-CONTENT_CONDITIONED_VARIANTS = {"inkling_table", "inkling_cosnet"}
-POSITION_VARIANTS = {"rope"} | POSITION_ONLY_VARIANTS | CONTENT_CONDITIONED_VARIANTS
+POSITION_VARIANTS = {"rope"}
 
 POSITION_PRESETS = {
     "rope": {},
-    "add_rope": {
-        "logit_bias": {"enabled": True, "feature_map": "add_rope"},
-    },
-    "linear": {
-        "logit_bias": {"enabled": True, "feature_map": "linear"},
-    },
-    "low_rank": {
-        "logit_bias": {"enabled": True, "feature_map": "low_rank"},
-    },
-    "bottleneck_mlp": {
-        "logit_bias": {"enabled": True, "feature_map": "bottleneck_mlp"},
-    },
-    "mlp_rope": {
-        "logit_bias": {"enabled": True, "feature_map": "mlp"},
-    },
-    "inkling_table": {
-        "logit_bias": {
-            "enabled": True,
-            "application": "logit_bias",
-            "geometry": "scalar_curve",
-            "conditioning": {"kind": "inkling_table"},
-        },
-    },
-    "inkling_cosnet": {
-        "logit_bias": {
-            "enabled": True,
-            "application": "logit_bias",
-            "geometry": "scalar_curve",
-            "conditioning": {"kind": "inkling_cosnet"},
-        },
-    },
 }
 
 V1_CHANNEL_DEFAULTS = {
@@ -199,13 +144,6 @@ V1_CHANNEL_DEFAULTS = {
         "feature_map": "identity",
         "sharing": "per_head",
         "apply": "phase_residual",
-        "rank": 32,
-        "mlp_hidden": 128,
-    },
-    "logit_bias": {
-        "enabled": False,
-        "feature_map": "identity",
-        "sharing": "per_head",
         "rank": 32,
         "mlp_hidden": 128,
     },
@@ -247,7 +185,7 @@ V2_CHANNEL_DEFAULTS = {
         },
         "conditioning": {
             "kind": "none",
-            "source": "qk",
+            "source": "dedicated",
             "activation": "tanh",
             "hidden_dim": 64,
             "input_mode": "content",
@@ -260,7 +198,7 @@ V2_CHANNEL_DEFAULTS = {
             "static_complement": False,
             "phase_bound": 0.25,
             "offset_bound": 8.0,
-            "offset_parameterization": "raw",
+            "offset_parameterization": "tanh",
             "readout_head_mixing": "none",
             "readout_mix_rank": 32,
             "readout_mix_alpha": 16.0,
@@ -272,67 +210,6 @@ V2_CHANNEL_DEFAULTS = {
             "num_frequencies": 16,
         },
         "qk_coupling": "shared",
-        "head_coupling": "per_head_independent",
-    },
-    "logit_bias": {
-        "enabled": False,
-        "application": "logit_bias",
-        "geometry": "scalar_curve",
-        "input": {
-            "kind": "frozen_fourier",
-            "basis_dim": None,
-            "theta": None,
-            "scalars": [],
-            "normalization_extent": None,
-        },
-        "mapper": {
-            "kind": "identity",
-            "residual": False,
-            "rank": 32,
-            "hidden_dim": 128,
-        },
-        "output": {
-            "parameter_source": "mapped",
-            "amplitude_init": 0.1,
-            "amplitude_max": 1.0,
-            "amplitude_parameterization": "signed",
-            "learn_amplitude": True,
-            "learn_phase": True,
-            "phase_scale": 1.0,
-            "additive_normalization": "none",
-            "additive_gain_init": 0.1,
-            "additive_gain_max": 1.0,
-            "learn_additive_gain": True,
-            "scale_init": 1.0,
-            "scale_max": 4.0,
-            "scale_parameterization": "exp",
-        },
-        "conditioning": {
-            "kind": "none",
-            "source": "qk",
-            "activation": "tanh",
-            "hidden_dim": 64,
-            "input_mode": "content",
-            "network": "linear",
-            "components": "phase",
-            "head_coupling": "per_head_independent",
-            "gate_init": 0.0,
-            "target": "both",
-            "coupling": "shared_trunk_separate_readouts",
-            "static_complement": False,
-            "phase_bound": 0.25,
-            "offset_bound": 8.0,
-            "offset_parameterization": "raw",
-            "readout_head_mixing": "none",
-            "readout_mix_rank": 32,
-            "readout_mix_alpha": 16.0,
-            "pair_rank": 16,
-            "position_mode": "relative_only",
-            "num_profiles": 8,
-            "router_hidden_dim": 64,
-            "profile_init_std": 0.02,
-            "num_frequencies": 16,
-        },
         "head_coupling": "per_head_independent",
     },
 }
@@ -420,6 +297,25 @@ _MAPPER_TO_FEATURE_MAP = {
 }
 
 
+LOGIT_BIAS_REMOVED_MESSAGE = (
+    "The relative logit-bias channel was removed; logit_bias accepts only "
+    "{'enabled': false}. See CONCAT_QK_POSITION.md for the closure rationale."
+)
+
+
+def normalize_logit_bias_config(raw_config: dict | None) -> dict:
+    """Accept only the disabled archived form ``{"enabled": false}``."""
+    raw = dict(raw_config or {})
+    unknown = sorted(set(raw) - {"enabled"})
+    if unknown:
+        raise ValueError(
+            f"{LOGIT_BIAS_REMOVED_MESSAGE} (unsupported keys: {unknown})"
+        )
+    if raw.get("enabled", False):
+        raise ValueError(LOGIT_BIAS_REMOVED_MESSAGE)
+    return {"enabled": False}
+
+
 def deep_merge(base: dict, updates: dict) -> dict:
     """Recursively merge nested config dictionaries without aliasing defaults."""
     merged = copy.deepcopy(base)
@@ -505,7 +401,7 @@ def upgrade_legacy_position_config(
             f"upgrade_legacy_position_config expects a v1 {channel_name} config."
         )
 
-    allowed = V1_QK_KEYS if channel_name == "qk" else V1_LOGIT_KEYS
+    allowed = V1_QK_KEYS
     unknown = set(raw_config) - allowed
     if unknown:
         raise ValueError(
@@ -526,7 +422,7 @@ def upgrade_legacy_position_config(
             f"{channel_name}.sharing must be one of {sorted(V1_SHARING_MODES)}, "
             f"got {normalized['sharing']!r}"
         )
-    if channel_name == "qk" and normalized["apply"] not in V1_QK_APPLY_MODES:
+    if normalized["apply"] not in V1_QK_APPLY_MODES:
         raise ValueError(
             "qk.apply must be 'add' or 'phase_residual', "
             f"got {normalized['apply']!r}"
@@ -544,49 +440,29 @@ def upgrade_legacy_position_config(
         heads=heads,
     )
 
-    if channel_name == "qk":
-        if normalized["apply"] == "add":
-            application, geometry = "additive", "free"
-        else:
-            application, geometry = "rotary", "phase"
-        upgraded = {
-            "enabled": normalized["enabled"],
-            "application": application,
-            "geometry": geometry,
-            "input": {
-                "kind": "frozen_fourier",
-                "basis_dim": basis_dim,
-                "theta": None,
-                "scalars": [],
-            },
-            "mapper": {
-                "kind": mapper_kind,
-                "residual": residual,
-                "rank": normalized["rank"],
-                "hidden_dim": normalized["mlp_hidden"],
-            },
-            "qk_coupling": "shared",
-            "head_coupling": head_coupling,
-        }
+    if normalized["apply"] == "add":
+        application, geometry = "additive", "free"
     else:
-        upgraded = {
-            "enabled": normalized["enabled"],
-            "application": "logit_bias",
-            "geometry": "scalar_curve",
-            "input": {
-                "kind": "frozen_fourier",
-                "basis_dim": basis_dim,
-                "theta": None,
-                "scalars": [],
-            },
-            "mapper": {
-                "kind": mapper_kind,
-                "residual": residual,
-                "rank": normalized["rank"],
-                "hidden_dim": normalized["mlp_hidden"],
-            },
-            "head_coupling": head_coupling,
-        }
+        application, geometry = "rotary", "phase"
+    upgraded = {
+        "enabled": normalized["enabled"],
+        "application": application,
+        "geometry": geometry,
+        "input": {
+            "kind": "frozen_fourier",
+            "basis_dim": basis_dim,
+            "theta": None,
+            "scalars": [],
+        },
+        "mapper": {
+            "kind": mapper_kind,
+            "residual": residual,
+            "rank": normalized["rank"],
+            "hidden_dim": normalized["mlp_hidden"],
+        },
+        "qk_coupling": "shared",
+        "head_coupling": head_coupling,
+    }
 
     # Validate through the v2 normalizer (also fills any nested defaults).
     return normalize_position_config_v2(
@@ -607,7 +483,9 @@ def normalize_position_config_v2(
     rope_theta: float,
 ) -> dict:
     """Validate and resolve a v2 channel config to a JSON-safe canonical dict."""
-    if channel_name not in {"qk", "logit_bias"}:
+    if channel_name == "logit_bias":
+        raise ValueError(LOGIT_BIAS_REMOVED_MESSAGE)
+    if channel_name != "qk":
         raise ValueError(f"Unknown channel name: {channel_name!r}")
     raw_config = _require_dict(channel_name, raw_config)
     schema = detect_channel_schema(channel_name, raw_config)
@@ -618,12 +496,10 @@ def normalize_position_config_v2(
             f"normalize_position_config_v2 expects a v2 {channel_name} config."
         )
 
-    allowed = V2_QK_KEYS if channel_name == "qk" else V2_LOGIT_KEYS
+    allowed = V2_QK_KEYS
     unknown = set(raw_config) - allowed
     if unknown:
         raise ValueError(f"Unknown {channel_name} config keys: {sorted(unknown)}")
-    if channel_name == "logit_bias" and "qk_coupling" in raw_config:
-        raise ValueError("qk_coupling is invalid on the logit_bias channel.")
 
     normalized = deep_merge(V2_CHANNEL_DEFAULTS[channel_name], raw_config)
     if not isinstance(normalized["enabled"], bool):
@@ -631,29 +507,18 @@ def normalize_position_config_v2(
 
     application = normalized["application"]
     geometry = normalized["geometry"]
-    if channel_name == "qk":
-        allowed_pairs = {
-            ("additive", "free"),
-            ("additive", "pair_normalized"),
-            ("additive", "amplitude_phase"),
-            ("rotary", "phase"),
-            ("rotary", "projected_phase"),
-            ("rotary", "unit_pair"),
-            ("rotary", "scaled_phase"),
-        }
-        if (application, geometry) not in allowed_pairs:
-            raise ValueError(
-                f"Unsupported qk application/geometry pair "
-                f"application={application!r}, geometry={geometry!r}. "
-                f"Allowed pairs are {sorted(allowed_pairs)}."
-            )
-    else:
-        if application != "logit_bias" or geometry != "scalar_curve":
-            raise ValueError(
-                f"Unsupported logit_bias application/geometry pair "
-                f"application={application!r}, geometry={geometry!r}. "
-                "This refactor ships only (logit_bias, scalar_curve)."
-            )
+    allowed_pairs = {
+        ("additive", "free"),
+        ("additive", "pair_normalized"),
+        ("additive", "amplitude_phase"),
+        ("rotary", "phase"),
+    }
+    if (application, geometry) not in allowed_pairs:
+        raise ValueError(
+            f"Unsupported qk application/geometry pair "
+            f"application={application!r}, geometry={geometry!r}. "
+            f"Allowed pairs are {sorted(allowed_pairs)}."
+        )
 
     head_coupling = normalized["head_coupling"]
     if head_coupling not in _HEAD_COUPLING_TO_SHARING:
@@ -662,18 +527,17 @@ def normalize_position_config_v2(
             f"{sorted(_HEAD_COUPLING_TO_SHARING)}, got {head_coupling!r}"
         )
 
-    if channel_name == "qk":
-        qk_coupling = normalized["qk_coupling"]
-        allowed_coupling = {
-            "shared",
-            "shared_trunk_separate_readouts",
-            "separate",
-        }
-        if qk_coupling not in allowed_coupling:
-            raise ValueError(
-                f"qk.qk_coupling must be one of {sorted(allowed_coupling)}, "
-                f"got {qk_coupling!r}"
-            )
+    qk_coupling = normalized["qk_coupling"]
+    allowed_coupling = {
+        "shared",
+        "shared_trunk_separate_readouts",
+        "separate",
+    }
+    if qk_coupling not in allowed_coupling:
+        raise ValueError(
+            f"qk.qk_coupling must be one of {sorted(allowed_coupling)}, "
+            f"got {qk_coupling!r}"
+        )
 
     input_cfg = _require_dict(f"{channel_name}.input", normalized["input"])
     unknown_input = set(input_cfg) - V2_INPUT_KEYS
@@ -682,15 +546,11 @@ def normalize_position_config_v2(
             f"Unknown {channel_name}.input keys: {sorted(unknown_input)}"
         )
     input_kind = input_cfg.get("kind", "frozen_fourier")
-    allowed_input_kinds = {
-        "frozen_fourier",
-        "learned_temperature_fourier",
-        "learned_frequency_fourier",
-    }
-    if input_kind not in allowed_input_kinds:
+    if input_kind != "frozen_fourier":
         raise ValueError(
-            f"{channel_name}.input.kind={input_kind!r} is unsupported; "
-            f"expected one of {sorted(allowed_input_kinds)}."
+            f"{channel_name}.input.kind={input_kind!r} is unsupported; the "
+            "learned-frequency input kinds were removed and only "
+            "'frozen_fourier' remains."
         )
     scalars = input_cfg.get("scalars", [])
     if scalars is None:
@@ -941,31 +801,16 @@ def normalize_position_config_v2(
             f"{sorted(unknown_conditioning)}"
         )
     conditioning_kind = conditioning_cfg.get("kind", "none")
-    raw_conditioning = raw_config.get("conditioning", {})
-    default_content_source = (
-        "dedicated"
-        if conditioning_kind in {
-            "adaptive_gain",
-            "additive_phase",
-            "rope_phase",
-            "carrier_hypernetwork",
-        }
-        else "qk"
-    )
-    allowed_conditioning = (
-        {
-            "none",
-            "local_residual",
-            "content_gate",
-            "phase_rotation",
-            "adaptive_gain",
-            "additive_phase",
-            "rope_phase",
-            "carrier_hypernetwork",
-        }
-        if channel_name == "qk"
-        else {"none", "inkling_table", "inkling_cosnet", "pairwise_low_rank"}
-    )
+    allowed_conditioning = {
+        "none",
+        "local_residual",
+        "content_gate",
+        "phase_rotation",
+        "adaptive_gain",
+        "additive_phase",
+        "rope_phase",
+        "carrier_hypernetwork",
+    }
     if conditioning_kind not in allowed_conditioning:
         raise ValueError(
             f"{channel_name}.conditioning.kind={conditioning_kind!r} is "
@@ -973,7 +818,7 @@ def normalize_position_config_v2(
         )
     conditioning = {
         "kind": conditioning_kind,
-        "source": raw_conditioning.get("source", default_content_source),
+        "source": conditioning_cfg.get("source", "dedicated"),
         "activation": conditioning_cfg.get("activation", "tanh"),
         "hidden_dim": int(conditioning_cfg.get("hidden_dim", 64)),
         "input_mode": conditioning_cfg.get("input_mode", "content"),
@@ -997,7 +842,7 @@ def normalize_position_config_v2(
         "phase_bound": float(conditioning_cfg.get("phase_bound", 0.25)),
         "offset_bound": float(conditioning_cfg.get("offset_bound", 8.0)),
         "offset_parameterization": conditioning_cfg.get(
-            "offset_parameterization", "raw"
+            "offset_parameterization", "tanh"
         ),
         "readout_head_mixing": _normalize_head_mixing(
             conditioning_cfg.get("readout_head_mixing", "none")
@@ -1019,15 +864,11 @@ def normalize_position_config_v2(
         ),
         "num_frequencies": int(conditioning_cfg.get("num_frequencies", 16)),
     }
-    if conditioning["source"] not in {"dedicated", "qk", "residual"}:
+    if conditioning["source"] != "dedicated":
         raise ValueError(
-            f"{channel_name}.conditioning.source must be 'dedicated'; "
-            "'qk' and 'residual' are accepted only for legacy configs"
-        )
-    if channel_name != "qk" and conditioning["source"] == "residual":
-        raise ValueError(
-            f"{channel_name}.conditioning.source='residual' is only supported "
-            "for the Q/K channel"
+            f"{channel_name}.conditioning.source must be 'dedicated'; the "
+            "'qk' and 'residual' sources were removed (content must come from "
+            "the dedicated norm_x projection)"
         )
     if conditioning["target"] not in {"q", "k", "both"}:
         raise ValueError(
@@ -1095,7 +936,6 @@ def normalize_position_config_v2(
         )
     if conditioning["components"] not in {
         "phase",
-        "log_gain_phase",
         "amplitude",
         "amplitude_phase",
         "cartesian",
@@ -1120,14 +960,10 @@ def normalize_position_config_v2(
         raise ValueError(
             f"{channel_name}.conditioning.phase_bound must be positive"
         )
-    if conditioning["offset_parameterization"] not in {
-        "raw",
-        "softplus",
-        "tanh",
-    }:
+    if conditioning["offset_parameterization"] != "tanh":
         raise ValueError(
             f"{channel_name}.conditioning.offset_parameterization must be "
-            "'raw', 'softplus', or 'tanh'"
+            "'tanh'; 'raw' and 'softplus' were removed"
         )
     if conditioning["readout_head_mixing"] not in {"none", "dense", "lowrank"}:
         raise ValueError(
@@ -1196,19 +1032,12 @@ def normalize_position_config_v2(
     if conditioning_kind == "carrier_hypernetwork":
         valid_carrier = channel_name == "qk" and (
             (application == "additive" and geometry == "amplitude_phase")
-            or (
-                application == "rotary"
-                and geometry in {"phase", "scaled_phase"}
-            )
+            or (application == "rotary" and geometry == "phase")
         )
         if not valid_carrier:
             raise ValueError(
                 "carrier_hypernetwork requires additive amplitude_phase or "
-                "rotary phase/scaled_phase Q/K"
-            )
-        if conditioning["source"] != "dedicated":
-            raise ValueError(
-                "carrier_hypernetwork uses the dedicated normalized content stream"
+                "rotary phase Q/K"
             )
         additive_components = {
             "amplitude",
@@ -1282,12 +1111,9 @@ def normalize_position_config_v2(
                     "parameter_source='direct', target='q' or 'k', and "
                     "non-shared Q/K coupling"
                 )
-        elif application == "rotary" and conditioning["components"] not in {
-            "phase",
-            "log_gain_phase",
-        }:
+        elif application == "rotary" and conditioning["components"] != "phase":
             raise ValueError(
-                "rotary carrier_hypernetwork supports phase or log_gain_phase"
+                "rotary carrier_hypernetwork supports only components='phase'"
             )
         elif conditioning["static_complement"]:
             raise ValueError(
@@ -1385,6 +1211,9 @@ def resolve_channel_config(
 
     Returns ``(canonical_v2, source_schema)``.
     """
+    if channel_name == "logit_bias":
+        merged = deep_merge(dict(preset_fragment or {}), dict(override or {}))
+        return normalize_logit_bias_config(merged), 1
     override = dict(override or {})
     preset_fragment = dict(preset_fragment or {})
     if not override and not preset_fragment:
@@ -1517,8 +1346,6 @@ def v2_position_run_tag(
             continue
         parts = [channel_name, channel["application"], channel["geometry"]]
         input_cfg = channel["input"]
-        if input_cfg["kind"] != "frozen_fourier":
-            parts.append(input_cfg["kind"].replace("_fourier", ""))
         if input_cfg["scalars"]:
             parts.append("scalars-" + "_".join(input_cfg["scalars"]))
         parts.append(channel["mapper"]["kind"])
@@ -1565,6 +1392,8 @@ def ensure_channel_v2(
     rope_theta: float,
 ) -> dict:
     """Accept v1 or v2 channel dicts and return canonical v2."""
+    if channel_name == "logit_bias":
+        return normalize_logit_bias_config(channel)
     channel = dict(channel or {})
     if not channel or detect_channel_schema(channel_name, channel) == 1:
         return upgrade_legacy_position_config(

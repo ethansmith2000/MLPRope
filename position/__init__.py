@@ -3,21 +3,17 @@
 from position.autograd import exp_with_identity_grad
 from position.basis import (
     FrozenFourierBasis,
-    LearnedFrequencyFourierBasis,
-    LearnedTemperatureFourierBasis,
     build_position_basis,
     interleaved_fourier_basis,
 )
 from position.channels import (
     AttentionPositionWriteChannel,
-    LogitBiasChannel,
     PositionChannel,
     QKPositionChannel,
     QKPositionOutput,
     ResidualPositionChannel,
     adapt_legacy_position_state_dict,
     build_attention_position_write_channel,
-    build_logit_bias_channel,
     build_qk_position_channel,
     build_residual_position_channel,
     count_position_parameters,
@@ -35,6 +31,7 @@ from position.config import (
     deep_merge,
     ensure_channel_v2,
     legacy_position_run_tag,
+    normalize_logit_bias_config,
     normalize_position_config_v2,
     normalize_position_content_config,
     normalize_attention_write_config,
@@ -63,10 +60,7 @@ from position.rotary import (
 
 __all__ = [
     "FrozenFourierBasis",
-    "LearnedFrequencyFourierBasis",
-    "LearnedTemperatureFourierBasis",
     "FeatureMapper",
-    "LogitBiasChannel",
     "AttentionPositionWriteChannel",
     "ResidualPositionChannel",
     "POSITION_PRESETS",
@@ -85,7 +79,6 @@ __all__ = [
     "RopeFrequencyController",
     "adapt_legacy_position_state_dict",
     "apply_rotary",
-    "build_logit_bias_channel",
     "build_attention_position_write_channel",
     "build_mapper",
     "build_qk_position_channel",
@@ -103,6 +96,7 @@ __all__ = [
     "legacy_position_run_tag",
     "legacy_rope_frequency_mode",
     "load_position_compatible_state_dict",
+    "normalize_logit_bias_config",
     "normalize_position_config_v2",
     "normalize_position_content_config",
     "normalize_attention_write_config",

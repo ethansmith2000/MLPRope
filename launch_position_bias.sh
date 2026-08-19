@@ -329,9 +329,9 @@ emit_v2_playground_seed_variant() {
 
 # Extended Q/K helper. Geometry:
 #   additive/free | additive/pair_normalized | additive/amplitude_phase
-#   rotary/phase | rotary/projected_phase | rotary/scaled_phase
+#   rotary/phase
 # Input kind:
-#   frozen_fourier | learned_temperature_fourier | learned_frequency_fourier
+#   frozen_fourier
 # Conditioning:
 #   none | local_residual | content_gate
 v2_qk_playground_json() {
@@ -402,7 +402,7 @@ v2_carrier_hyper_qk_json() {
   local application="$1" # additive | rotary
   local input_mode="$2" # content | position | content_position
   local network="$3" # linear | silu_mlp | swiglu_mlp
-  local components="$4" # phase | log_gain_phase
+  local components="$4" # phase
   local conditioner_coupling="${5:-shared_trunk_separate_readouts}"
   local target="${6:-both}"
   local geometry="phase"
@@ -458,7 +458,7 @@ v2_unit_hyper_qk_json() {
   local input_normalization="${11:-none}"
   local learnable_input_gains="${12:-false}"
   local learn_static_amplitude="${13:-false}"
-  local offset_parameterization="${14:-raw}"
+  local offset_parameterization="${14:-tanh}"
   local readout_head_mixing="${15:-none}"
   local readout_mix_rank="${16:-32}"
   local learn_amplitude=true
@@ -492,15 +492,8 @@ v2_promoted_qk_json() {
 JSON
 }
 
-v2_pairwise_logit_json() {
-  local position_mode="$1" # relative_only | query_absolute | full_absolute
-  local pair_rank="${2:-8}"
-  local head_coupling="${3:-per_head_independent}"
-  local content_source="${4:-qk}"
-  cat <<JSON
-{"enabled": true, "application": "logit_bias", "geometry": "scalar_curve", "input": {"kind": "frozen_fourier", "basis_dim": null, "theta": null, "scalars": []}, "mapper": {"kind": "linear", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "conditioning": {"kind": "pairwise_low_rank", "source": "${content_source}", "pair_rank": ${pair_rank}, "position_mode": "${position_mode}", "gate_init": 0.0}, "head_coupling": "${head_coupling}"}
-JSON
-}
+# v2_pairwise_logit_json was removed with the relative logit-bias channel
+# (see CONCAT_QK_POSITION.md); its archived sweeps live in git history.
 
 want_family() {
   local family="$1"
@@ -563,14 +556,8 @@ v2_qk_json() {
 JSON
 }
 
-v2_logit_json() {
-  local mapper_kind="$1"
-  local residual="$2"
-  local head_coupling="${3:-per_head_independent}"
-  cat <<JSON
-{"enabled": true, "application": "logit_bias", "geometry": "scalar_curve", "input": {"kind": "frozen_fourier", "basis_dim": null, "theta": null, "scalars": []}, "mapper": {"kind": "${mapper_kind}", "residual": ${residual}, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "head_coupling": "${head_coupling}"}
-JSON
-}
+# v2_logit_json was removed with the relative logit-bias channel
+# (see CONCAT_QK_POSITION.md).
 
 coupling_tag() {
   case "$1" in
@@ -586,21 +573,11 @@ echo "family=${EXPERIMENT_FAMILY} model='${MODEL_CONFIG}' submit=${SUBMIT_JOBS} 
 echo "gpu-claim=${GPU_CLAIM_BIN} selector=${GPU_SELECTOR} config_dir=${CONFIG_DIR}"
 "${GPU_CLAIM_BIN}" status || true
 
-# Direction 1 / Phase 1 expressiveness sweep.
+# Direction 1 / Phase 1 expressiveness sweep. The logit-bias preset families
+# (add_rope/linear/low_rank/mlp_rope) were removed with the relative logit-bias
+# channel; see CONCAT_QK_POSITION.md.
 if want_family "rope"; then
   emit_variant "rope" "sdpa" "rope-h${HIDDEN_SIZE}d${DEPTH}"
-fi
-if want_family "add_rope"; then
-  emit_variant "add_rope" "flex" "add_rope-h${HIDDEN_SIZE}d${DEPTH}"
-fi
-if want_family "linear"; then
-  emit_variant "linear" "flex" "linear-h${HIDDEN_SIZE}d${DEPTH}"
-fi
-if want_family "low_rank"; then
-  emit_variant "low_rank" "flex" "low_rank-r${POS_RANK}-h${HIDDEN_SIZE}d${DEPTH}"
-fi
-if want_family "mlp_rope"; then
-  emit_variant "mlp_rope" "flex" "mlp_rope-m${POS_MLP_HIDDEN}-h${HIDDEN_SIZE}d${DEPTH}"
 fi
 
 # Direction 1b. Existing completed RoPE and linear-logit runs are the anchors;
@@ -656,8 +633,8 @@ fi
 
 # (1) De-confounded per-head Q/K norm: phase12 compared PerHeadRMSNorm against a
 #     legacy_layernorm baseline, mixing per-head gains with a LayerNorm ->
-#     RMSNorm change. LayerNorm centers, which is not a typical Q/K choice, so
-#     both cells here use RMSNorm and differ only in shared vs per-head gains.
+#     RMSNorm change. The per-head QK-norm option was removed on 2026-08-19
+#     (lost at every tested scale), so only the shared-gain cells remain here.
 # (2) Compression decomposition: phase11 narrowed the amplitude readout (48->2)
 #     and the angular readout (48->1) simultaneously, so its 0.0112 gap could
 #     not be attributed. Each mixed arm narrows exactly one branch. Offsets use
@@ -671,19 +648,16 @@ if want_phase13_decomp_qknorm_family "decomp_qknorm_5k_story"; then
   slope_phase_qk="$(v2_unit_hyper_qk_json "${hyper_args[@]}" slope_phase none false false tanh)"
 
   for spec in \
-    "rope-shared-rmsnorm|false|${disabled_channel}" \
-    "rope-perhead-rmsnorm|true|${disabled_channel}" \
-    "freeamp-plus-offset|false|${amplitude_offset_qk}" \
-    "slope-plus-freephase|false|${slope_phase_qk}"
+    "rope-shared-rmsnorm|${disabled_channel}" \
+    "freeamp-plus-offset|${amplitude_offset_qk}" \
+    "slope-plus-freephase|${slope_phase_qk}"
   do
     label="${spec%%|*}"
-    remainder="${spec#*|}"
-    per_head_qk_norm="${remainder%%|*}"
-    qk_json="${remainder#*|}"
+    qk_json="${spec#*|}"
     job_name="phase13-${label}-seed${seed}-s5000-h${HIDDEN_SIZE}d${DEPTH}"
     cfg_file="${CONFIG_DIR}/${job_name}.json"
     write_common_config "${cfg_file}" \
-      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"qk_norm_per_head\": ${per_head_qk_norm}, \"position_content_dim\": 128, \"position_content_coupling\": \"shared\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
+      "\"seed\": ${seed}, \"per_device_eval_batch_size\": 1, \"training_length\": 1024, \"model_position_extent\": 1024, \"evaluation_lengths\": [1024], \"scalar_normalization_extent\": 1024, \"qk_norm_mode\": \"method_aware_rms\", \"post_position_qk_norm\": false, \"position_content_dim\": 128, \"position_content_coupling\": \"shared\", \"pos_variant\": null, \"position_schema_version\": 2, \"qk\": ${qk_json}, \"logit_bias\": ${disabled_channel}, \"residual_stream\": ${disabled_channel}, \"attention_write\": ${disabled_channel}, \"attn_impl\": \"sdpa\", \"run_name\": \"${job_name}\"" \
       5000 1000
     run_job "${job_name}" "${cfg_file}"
   done

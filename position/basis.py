@@ -10,11 +10,7 @@ from position.autograd import exp_with_identity_grad
 from position.precision import PreserveFP32BuffersMixin
 
 
-BasisKind = Literal[
-    "frozen_fourier",
-    "learned_temperature_fourier",
-    "learned_frequency_fourier",
-]
+BasisKind = Literal["frozen_fourier"]
 ScalarFeature = Literal["position", "normalized_position", "log_position"]
 SCALAR_FEATURES = {"position", "normalized_position", "log_position"}
 
@@ -102,130 +98,6 @@ class FrozenFourierBasis(PreserveFP32BuffersMixin, torch.nn.Module):
         return frequencies if dtype is None else frequencies.to(dtype=dtype)
 
 
-class LearnedTemperatureFourierBasis(torch.nn.Module):
-    """RoPE-frequency basis with one learned positive global temperature.
-
-    ``log_temperature=0`` exactly reproduces the frozen basis. A positive value
-    increases every angular frequency by the same multiplicative factor.
-    """
-
-    kind: BasisKind = "learned_temperature_fourier"
-
-    def __init__(
-        self,
-        extent: int,
-        basis_dim: int,
-        theta: float,
-        scalars: list[str] | tuple[str, ...] = (),
-        normalization_extent: int | None = None,
-    ):
-        super().__init__()
-        _validate_basis_args(extent, basis_dim, theta, scalars)
-        self.extent = int(extent)
-        self.basis_dim = int(basis_dim)
-        self.theta = float(theta)
-        self.scalars = tuple(scalars)
-        self.normalization_extent = int(normalization_extent or extent)
-        self.output_dim = self.basis_dim + len(self.scalars)
-        self.log_temperature = torch.nn.Parameter(torch.zeros(()))
-
-    def frequencies(self, *, dtype: torch.dtype | None = None) -> torch.Tensor:
-        half = self.basis_dim // 2
-        index = torch.arange(
-            half,
-            device=self.log_temperature.device,
-            dtype=torch.float32,
-        )
-        base = 1.0 / (self.theta ** (index / half))
-        frequencies = base * exp_with_identity_grad(
-            self.log_temperature.float()
-        )
-        return frequencies if dtype is None else frequencies.to(dtype=dtype)
-
-    def forward(
-        self,
-        length: int,
-        *,
-        dtype: torch.dtype | None = None,
-    ) -> torch.Tensor:
-        _validate_length(length, self.extent)
-        positions = torch.arange(
-            length,
-            device=self.log_temperature.device,
-            dtype=torch.float32,
-        )
-        angles = torch.outer(positions, self.frequencies())
-        features = torch.stack((angles.cos(), angles.sin()), dim=-1).flatten(-2)
-        features = _append_scalar_features(
-            features,
-            length=length,
-            normalization_extent=self.normalization_extent,
-            scalars=self.scalars,
-        )
-        return features if dtype is None else features.to(dtype=dtype)
-
-
-class LearnedFrequencyFourierBasis(torch.nn.Module):
-    """Independently learned positive frequencies, initialized to RoPE."""
-
-    kind: BasisKind = "learned_frequency_fourier"
-
-    def __init__(
-        self,
-        extent: int,
-        basis_dim: int,
-        theta: float,
-        scalars: list[str] | tuple[str, ...] = (),
-        normalization_extent: int | None = None,
-    ):
-        super().__init__()
-        _validate_basis_args(extent, basis_dim, theta, scalars)
-        self.extent = int(extent)
-        self.basis_dim = int(basis_dim)
-        self.theta = float(theta)
-        self.scalars = tuple(scalars)
-        self.normalization_extent = int(normalization_extent or extent)
-        self.output_dim = self.basis_dim + len(self.scalars)
-        self.log_frequency_residual = torch.nn.Parameter(
-            torch.zeros(self.basis_dim // 2)
-        )
-
-    def frequencies(self, *, dtype: torch.dtype | None = None) -> torch.Tensor:
-        half = self.basis_dim // 2
-        index = torch.arange(
-            half,
-            device=self.log_frequency_residual.device,
-            dtype=torch.float32,
-        )
-        base = 1.0 / (self.theta ** (index / half))
-        frequencies = base * exp_with_identity_grad(
-            self.log_frequency_residual.float()
-        )
-        return frequencies if dtype is None else frequencies.to(dtype=dtype)
-
-    def forward(
-        self,
-        length: int,
-        *,
-        dtype: torch.dtype | None = None,
-    ) -> torch.Tensor:
-        _validate_length(length, self.extent)
-        positions = torch.arange(
-            length,
-            device=self.log_frequency_residual.device,
-            dtype=torch.float32,
-        )
-        angles = torch.outer(positions, self.frequencies())
-        features = torch.stack((angles.cos(), angles.sin()), dim=-1).flatten(-2)
-        features = _append_scalar_features(
-            features,
-            length=length,
-            normalization_extent=self.normalization_extent,
-            scalars=self.scalars,
-        )
-        return features if dtype is None else features.to(dtype=dtype)
-
-
 def _validate_length(length: int, extent: int) -> None:
     if length <= 0:
         raise ValueError("length must be positive.")
@@ -297,8 +169,6 @@ def build_position_basis(
 ) -> torch.nn.Module:
     basis_types = {
         "frozen_fourier": FrozenFourierBasis,
-        "learned_temperature_fourier": LearnedTemperatureFourierBasis,
-        "learned_frequency_fourier": LearnedFrequencyFourierBasis,
     }
     try:
         basis_type = basis_types[kind]

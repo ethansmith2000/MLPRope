@@ -4,14 +4,17 @@ MLPRope resolves every position configuration to JSON-safe schema v2 before
 constructing the model. Legacy Phase 1/1b/1c dictionaries still upgrade
 strictly and retain their historical tags and parameter counts.
 
-The playground separates six independent sectors:
+The playground separates five independent sectors:
 
 1. position input basis;
 2. Q/K application and output geometry;
 3. Q/K and head coupling;
 4. local content conditioning;
-5. residual-stream and attention-output writes;
-6. static or content-conditioned relative-logit bias.
+5. residual-stream and attention-output writes.
+
+The relative logit-bias channel (sector six of earlier revisions) was removed;
+`logit_bias` remains a config key that accepts only `{enabled: false}` so
+archived configs still load. See `CONCAT_QK_POSITION.md`.
 
 Defaults preserve the post-refactor RoPE baseline. New residual/write and
 content-conditioned paths are zero-gated where possible.
@@ -23,7 +26,7 @@ content-conditioned paths are zero-gated where possible.
 | `position/config.py` | defaults, strict validation, v1 upgrade, tags |
 | `position/basis.py` | frozen/learned Fourier bases and scalar features |
 | `position/mappers.py` | grouped identity, affine, linear, low-rank, MLP maps |
-| `position/channels.py` | Q/K, logit, residual-stream, attended-position channels |
+| `position/channels.py` | Q/K, residual-stream, attended-position channels |
 | `position/rotary.py` | split-half RoPE, phase composition, radial scaling |
 
 `transformer.Attention` retains projections and SDPA/Flex dispatch.
@@ -39,7 +42,7 @@ position_content_dim: 64
 position_content_coupling: separate  # shared | separate
 
 qk: { ... }
-logit_bias: { ... }
+logit_bias: {enabled: false}   # removed channel; only this form is accepted
 residual_stream: { ... }
 attention_write: { ... }
 ```
@@ -109,10 +112,7 @@ qk:
 | `additive` | `free` | free `[H,L,D]` addend; multiplicative RoPE is skipped |
 | `additive` | `pair_normalized` | free split-half pair coordinates projected to radius `amplitude_init` |
 | `additive` | `amplitude_phase` | canonical `a·cis(ωp+δ)` addend |
-| `rotary` | `phase` | strict `R(θ+δ)` |
-| `rotary` | `projected_phase` | predict a free pair-vector, project onto the RoPE tangent |
-| `rotary` | `unit_pair` | add a zero-init Cartesian pair residual, normalize to a unit pair, then rotate |
-| `rotary` | `scaled_phase` | `s·R(θ+δ)`, with positive/exact-one initialization |
+| `rotary` | `phase` | strict `R(θ+δ)`; the single RoPE-modification control |
 
 Invalid application/geometry pairs fail during config loading.
 
@@ -167,31 +167,18 @@ before the optional top-level post-position Q/K RMS normalization.
 This is distinct from historical v1 `feature_map=add_rope`, which upgrades to
 `euclidean_affine` over Fourier coordinates.
 
-### Projected and scaled rotary
+### Projected and scaled rotary (removed)
 
-`projected_phase` predicts `[dx,dy]` and keeps only the tangent component:
-
-```text
-δ = <-sin(θ), cos(θ)> · [dx,dy]
-```
-
-The zero output remains exact RoPE. `scaled_phase` predicts phase plus pairwise
-radial scale. `scale_parameterization=exp` uses `scale_init*exp(raw)`;
-`linear` uses `scale_init+raw`. `bounded_log` uses
-`scale_init*exp(tanh(raw)*log(scale_max))`, restricting pair scales to
-`[scale_init/scale_max, scale_init*scale_max]`.
+The `projected_phase`, `unit_pair`, and `scaled_phase` rotary geometries were
+removed (see the Removed table below); `rotary/phase` is the only RoPE
+modification that remains. `output.scale_init` / `scale_max` /
+`scale_parameterization` stay accepted for archived configs but no longer
+drive any mechanism.
 
 Learned exponential parameterizations use the exact exponential in the forward
 pass and a straight-through identity derivative in the backward pass. This
-applies to rotary scales, adaptive gains, learned Fourier temperatures and
-frequencies, and Inkling CosNet frequencies. It avoids multiplying gradients
-by the current exponential value; `bounded_log` still retains the derivative
-of its `tanh` bound.
-
-`unit_pair` constructs and normalizes
-`[cos(θ)+dx, sin(θ)+dy]`, then converts the valid unit pair back to a relative
-phase for the shared rotary kernel. Zero-initialized `[dx,dy]` is exact RoPE;
-the nonzero base carrier avoids zero-vector normalization.
+applies to adaptive gains; it avoids multiplying gradients by the current
+exponential value.
 
 ## Position inputs
 
@@ -205,11 +192,8 @@ input:
 
 Kinds:
 
-- `frozen_fourier`: cached RoPE schedule;
-- `learned_temperature_fourier`: one learned positive global frequency scale;
-- `learned_frequency_fourier`: independent positive log-frequency residuals.
-
-Both learned kinds initialize exactly to frozen Fourier values.
+- `frozen_fourier`: cached RoPE schedule (the only kind; the learned-frequency
+  input kinds were removed — see the Removed table).
 
 Fourier layout is interleaved:
 
@@ -277,9 +261,9 @@ c_k = RMS(P_k(norm_x))
 ```
 
 The default width is `64`. `position_content_coupling=shared` reuses one
-projection; `separate` gives Q and K independent projections. New configs do
-not derive conditioning content from attention Q/K. Legacy `source=qk` and
-`source=residual` values remain loadable only to reproduce historical runs.
+projection; `separate` gives Q and K independent projections. Conditioning
+content comes only from this dedicated projection: the `qk` and `residual`
+source values were removed (see the Removed table).
 
 ```yaml
 conditioning:
@@ -327,8 +311,7 @@ cosine/sine synthesis; it never perturbs pair coordinates independently.
 ### Anchor-relative carrier hypernetwork
 
 `carrier_hypernetwork` modulates either additive `amplitude_phase` AddRoPE or
-rotary `phase`/`scaled_phase` while remaining on the Q/K path used by fused
-SDPA. It consumes normalized dedicated content, the raw configured
+rotary `phase` while remaining on the Q/K path used by fused SDPA. It consumes normalized dedicated content, the raw configured
 Fourier/scalar position basis, or their concatenation. `linear`, `silu_mlp`,
 and `swiglu_mlp` networks are available. With
 `input_normalization=modality_rms`, content and position are independently
@@ -341,14 +324,6 @@ RMSNorm on the predicted deltas, because normalization would magnify a tiny
 departure and defeat the exact null. Additive channels retain method-aware
 RMSNorm after carrier addition; rotary channels retain Q/K RMSNorm before
 rotation.
-
-The legacy additive modulation mode uses `components=log_gain_phase` on an
-established additive anchor `(a, phi)`:
-
-```text
-a'   = a * exp_ste(delta_log_gain)
-phi' = phi + delta_phase
-```
 
 The gauge-free dynamic replacement uses `components=amplitude_phase`,
 `learn_amplitude=false`, and `learn_phase=false`. It supports two amplitude
@@ -416,11 +391,8 @@ canonical AddRoPE amplitude and phase. The dynamic branch has no static
 amplitude/phase parameters, and the static branch has no hypernetwork readout,
 so each branch retains exactly one parameter source and no gauge is introduced.
 
-For rotary channels, `components=phase` predicts only `delta_phase`.
-`components=log_gain_phase` additionally applies pairwise radial scale
-`exp_ste(delta_log_gain)`, intentionally making the operation scaled rotary
-rather than strictly norm-preserving RoPE. `exp_ste` is exponential in the
-forward pass and has identity derivative in the backward pass.
+For rotary channels, `components=phase` predicts only `delta_phase`
+(`log_gain_phase` was removed — see the Removed table).
 
 `target=q|k` leaves the other branch exactly on its static anchor.
 `coupling=shared` reuses one complete network and, for `target=both`, requires
@@ -467,71 +439,15 @@ python position_results.py model-output \
   --every 1000 --metric 'position/*/qk/additive_gain_*' --format csv
 ```
 
-## Relative logit channel and Inkling
+## Relative logit channel and Inkling (removed)
 
-Static logit config uses the same input/mapper/head-coupling fields:
-
-```yaml
-logit_bias:
-  enabled: true
-  application: logit_bias
-  geometry: scalar_curve
-  input: {kind: frozen_fourier, basis_dim: null, theta: null, scalars: []}
-  mapper: {kind: linear, residual: false, rank: 32, hidden_dim: 128}
-  conditioning:
-    kind: none
-    pair_rank: 16
-    position_mode: relative_only
-    num_profiles: 8
-    router_hidden_dim: 64
-    profile_init_std: 0.02
-    num_frequencies: 16
-    gate_init: 0.0
-  head_coupling: per_head_independent
-```
-
-Conditioning values:
-
-- `none`: existing position-only `[H,R]` curve;
-- `inkling_table`: query-routed bank of bounded learned table profiles;
-- `inkling_cosnet`: query-routed bank of bounded learned cosine functions;
-- `pairwise_low_rank`: factorized query-content, key-content, and relative-offset
-  interaction, optionally enriched with absolute Fourier position.
-
-Inkling returns `[B,H,Q,R]`; Flex score modification indexes the active query
-and distance without materializing `[B,H,Q,K]`. The profile gate initializes to
-zero while profiles initialize with small symmetry-breaking values. This keeps
-the baseline exact and gives the gate an immediate gradient. Diagnostics report
-routing entropy, maximum routing probability, and gate magnitude.
-
-Convenience presets `inkling_table` and `inkling_cosnet` now work and force
-FlexAttention.
-
-Pairwise low-rank conditioning computes
-
-```text
-b(i,j) = b_static(i-j)
-       + g_h / sqrt(r) · Σ_m Q_m(q_i, φ(i)) K_m(k_j, φ(j)) D_m(φ(i-j))
-```
-
-`Q`, `K`, and `D` are independently projected and RMS-normalized factor
-vectors. The per-head outer gate `g_h` is unconstrained and initializes to zero:
-the static linear-logit anchor is therefore exact, while the gate immediately
-receives a gradient. No `tanh` is applied to the factors.
-The content factors consume the dedicated `c_q` and `c_k` projections rather
-than the attention Q/K vectors.
-
-`position_mode` controls which absolute terms are available:
-
-- `relative_only`: content plus `φ(i-j)` only; shifting the same content pattern
-  preserves the interaction;
-- `query_absolute`: additionally adds `φ(i)` to the query factor;
-- `full_absolute`: additionally adds both `φ(i)` and `φ(j)`.
-
-Here Fourier features are not inherently relative or absolute: `φ(i-j)` is a
-translation-invariant relative representation, while `φ(i)` and `φ(j)` encode
-absolute indices. The factorization is evaluated directly inside FlexAttention
-without materializing a dense `[B,H,Q,K]` bias tensor.
+The entire relative logit-bias channel — the static `[H,R]` curves, the
+`inkling_table` / `inkling_cosnet` query-routed profile banks, and the
+`pairwise_low_rank` factorized interaction — was removed together with its
+FlexAttention score-mod dispatch. The closure rationale (SDPA cost) is
+documented in `CONCAT_QK_POSITION.md`. `logit_bias: {enabled: false}` remains
+the only accepted form so archived configs load; anything richer is a
+validation error.
 
 ## Residual-stream position
 
@@ -654,12 +570,11 @@ the caller's responsibility.
 
 ## Flex and compilation invariants
 
-- Any logit channel forces Flex.
-- Q/K, residual-stream, and attention-write-only runs may use SDPA.
+- `attn_impl=flex` survives as a raw attention backend only; nothing forces it
+  and it carries no score modifier since the logit-bias removal.
+- Q/K, residual-stream, and attention-write runs may use SDPA.
 - Flex remains behind `@torch.compiler.disable`.
 - `attn_impl=flex` with `compile_fullgraph=true` is rejected by the trainer.
-- The score-mod closure stays stable and reads a mutable static `[H,R]`,
-  Inkling `[B,H,Q,R]`, or factorized pairwise bias representation.
 - Pinned kernel options and outer `fullgraph=false` behavior remain unchanged.
 
 ## Experiment helpers
@@ -667,12 +582,13 @@ the caller's responsibility.
 `launch_position_bias.sh` retains historical emitters and adds:
 
 - `emit_v2_playground_variant`;
-- `v2_qk_playground_json`;
-- `v2_inkling_json`;
-- `v2_pairwise_logit_json`.
+- `v2_qk_playground_json`.
 
 They do not emit a sweep unless called by a future family. Existing completed
-JSON and output artifacts are not rewritten.
+JSON and output artifacts are not rewritten. The logit-bias emitters
+(`v2_logit_json`, `v2_pairwise_logit_json`) were removed with the channel, and
+several remaining historical family blocks reference deleted presets or
+configs; they are kept for provenance and will fail fast if invoked.
 
 
 ## Status of conditioning axes (updated 2026-08-02)
@@ -687,15 +603,18 @@ predicts it worsens with scale; the rest lost at this scale and horizon only.
 | --- | --- | --- |
 | `frequency_phase`, `amplitude_phase_frequency` | `4.5369` / `4.7788` vs `4.2840` | Phase error grows as `m*p`; worse at longer context, not better |
 | `slope_phase_lowrank`, `conditioning.angular_rank` | sweep unreadable | Rank-dependent init scale; superseded by `_MixedReadout`, and the SVD showed the angular branch needs ~rank 30 of 48 |
+| `conditioning.source` `qk` / `residual` (2026-08-19) | superseded by `dedicated` | Conditioning content should come only from the dedicated `norm_x` projection: the low-rank projection controls conditioning rank explicitly, and reusing attention Q/K or the raw residual couples the conditioner to representations the attention loss is already shaping |
+| `learned_temperature_fourier`, `learned_frequency_fourier` (2026-08-19) | never beat frozen | The static learned-frequency line is closed by phases 20–22 (static/per-head/parameterization screens all lost or tied at 30k) |
+| `projected_phase`, `unit_pair`, `scaled_phase` (2026-08-19) | never ahead of `phase` | Modifications inside the rotation never paid; `rotary/phase` remains the single RoPE-modification control |
+| relative logit bias: static curves, `inkling_table`, `inkling_cosnet`, `pairwise_low_rank`, `log_gain_phase` (2026-08-19) | superseded | Closed for SDPA cost — the channel forces FlexAttention while every surviving mechanism stays on fused SDPA; see `CONCAT_QK_POSITION.md`. `logit_bias: {enabled: false}` still loads |
+| `qk_norm_per_head` (2026-08-19) | `+0.0032` / `+0.0025` (~2x floor) | Lost at every tested scale; the standard `method_aware_rms` path is kept intact |
+| `offset_parameterization` `raw` / `softplus` (2026-08-19) | `+0.004` to `+0.0065` vs `tanh` | `tanh` is now the only value; the key remains for archived configs |
 
 ### Deprecated — kept, default off, lost only at this scale
 
 | Axis | Result |
 | --- | --- |
-| `qk_norm_per_head` | `+0.0032` on RoPE, `+0.0025` on the free carrier (~2x floor); the gradient-averaging explanation predicts it improves with longer training |
-| `offset_parameterization` `raw` / `softplus` | `+0.004` to `+0.0065` versus `tanh`; saturation effects accumulate, so 5k is where they are least visible |
 | `amplitude_slope`, `position_offset`, `slope_offset` | on the efficiency frontier, never ahead on quality; their case is parameter cost at scale, which h768/d8 at L=1024 cannot test |
-| `log_gain_phase`, `inkling_table`, `inkling_cosnet`, `pairwise_low_rank` | superseded; retained to load archived configs |
 
 ### Live
 

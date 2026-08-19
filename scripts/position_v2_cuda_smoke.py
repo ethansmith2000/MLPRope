@@ -26,7 +26,7 @@ def _qk(
     geometry: str | None = None,
     basis_kind: str = "frozen_fourier",
     conditioning: str = "none",
-    conditioning_source: str = "qk",
+    conditioning_source: str = "dedicated",
     conditioning_target: str = "both",
     conditioning_coupling: str = "shared_trunk_separate_readouts",
     conditioning_static_complement: bool = False,
@@ -100,47 +100,6 @@ def _qk(
     )
 
 
-def _logit(
-    conditioning: str = "none",
-    *,
-    source: str = "qk",
-    position_mode: str = "relative_only",
-) -> dict:
-    return normalize_position_config_v2(
-        "logit_bias",
-        {
-            "enabled": True,
-            "application": "logit_bias",
-            "geometry": "scalar_curve",
-            "input": {
-                "kind": "frozen_fourier",
-                "basis_dim": None,
-                "theta": None,
-                "scalars": [],
-            },
-            "mapper": {
-                "kind": "linear",
-                "residual": False,
-                "rank": 4,
-                "hidden_dim": 12,
-            },
-            "head_coupling": "per_head_independent",
-            "conditioning": {
-                "kind": conditioning,
-                "source": source,
-                "num_profiles": 4,
-                "router_hidden_dim": 8,
-                "num_frequencies": 4,
-                "gate_init": 0.0,
-                "position_mode": position_mode,
-            },
-        },
-        model_dim=64,
-        heads=4,
-        rope_theta=10_000.0,
-    )
-
-
 CASES = [
     ("rope_baseline", {"enabled": False}, {"enabled": False}, "sdpa"),
     ("additive_shared", _qk(application="additive", qk_coupling="shared"), {"enabled": False}, "sdpa"),
@@ -182,7 +141,7 @@ CASES = [
             qk_coupling="shared_trunk_separate_readouts",
             mapper_kind="linear",
             conditioning="phase_rotation",
-            conditioning_source="residual",
+            conditioning_source="dedicated",
             amplitude_init=0.3,
         ),
         {"enabled": False},
@@ -206,11 +165,11 @@ CASES = [
         {"enabled": False},
         "sdpa",
     ),
-    ("logit_flex", {"enabled": False}, _logit(), "flex"),
+    ("rope_flex", {"enabled": False}, {"enabled": False}, "flex"),
     (
-        "combined_flex",
+        "qk_rotary_flex",
         _qk(application="rotary", qk_coupling="shared", mapper_kind="linear"),
-        _logit(),
+        {"enabled": False},
         "flex",
     ),
 ]
@@ -235,32 +194,6 @@ NEW_CASES = [
             geometry="amplitude_phase",
             qk_coupling="shared_trunk_separate_readouts",
             conditioning="local_residual",
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "projected_learned_frequency",
-        _qk(
-            application="rotary",
-            geometry="projected_phase",
-            basis_kind="learned_frequency_fourier",
-            qk_coupling="shared_trunk_separate_readouts",
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "scaled_rotary",
-        _qk(
-            application="rotary",
-            geometry="scaled_phase",
-            basis_kind="learned_temperature_fourier",
-            qk_coupling="shared",
         ),
         {"enabled": False},
         "sdpa",
@@ -330,26 +263,6 @@ NEW_CASES = [
         },
     ),
     (
-        "inkling_table",
-        {"enabled": False},
-        _logit("inkling_table"),
-        "flex",
-        None,
-        None,
-    ),
-    (
-        "inkling_cosnet_combined",
-        _qk(
-            application="additive",
-            qk_coupling="shared_trunk_separate_readouts",
-            mapper_kind="linear",
-        ),
-        _logit("inkling_cosnet"),
-        "flex",
-        None,
-        None,
-    ),
-    (
         "all_channels_flex",
         _qk(
             application="additive",
@@ -357,7 +270,7 @@ NEW_CASES = [
             mapper_kind="linear",
             conditioning="content_gate",
         ),
-        _logit("inkling_table"),
+        {"enabled": False},
         "flex",
         {
             "enabled": True,
@@ -615,46 +528,6 @@ NULL_CONDITIONING_CASES = [
         None,
     ),
     (
-        "addrope_content_position_hyper",
-        _qk(
-            application="additive",
-            geometry="amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_coupling="shared_trunk_separate_readouts",
-            conditioning_input_mode="content_position",
-            conditioning_network="silu_mlp",
-            conditioning_components="log_gain_phase",
-            amplitude_init=0.3,
-            learn_amplitude=False,
-            learn_phase=False,
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "scaled_rope_content_hyper",
-        _qk(
-            application="rotary",
-            geometry="phase",
-            qk_coupling="shared",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_coupling="shared_trunk_separate_readouts",
-            conditioning_input_mode="content",
-            conditioning_network="linear",
-            conditioning_components="log_gain_phase",
-            learn_phase=False,
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
         "adaptive_qk_gain",
         _qk(
             application="rotary",
@@ -694,18 +567,6 @@ NULL_CONDITIONING_CASES = [
         ),
         {"enabled": False},
         "sdpa",
-        None,
-        None,
-    ),
-    (
-        "dedicated_pairwise_logit",
-        {"enabled": False},
-        _logit(
-            "pairwise_low_rank",
-            source="dedicated",
-            position_mode="query_absolute",
-        ),
-        "flex",
         None,
         None,
     ),
