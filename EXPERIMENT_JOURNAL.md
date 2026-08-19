@@ -2828,3 +2828,72 @@ closest neighbors to the carrier are Goat (arXiv:2601.15380) and, for the
 backlog clock, Selective RoPE (arXiv:2511.17388). The novelty framing, the
 must-cite list, the LeRoPE reconciliation obligation, and seven ranked
 experiment candidates are in that file.
+
+## 2026-08-19 — Phase-19 confirmation complete: headline confirmed, hypernetwork unnecessary, content increment revised upward
+
+All 15 locked runs completed on the third box (8x RTX 5090). Fourteen ran
+clean; `mapped-addrope-a03/seed456` failed at step 20,000 when a checkpoint
+write hit a full disk (the suite's own checkpoints had flooded it), and was
+resumed from `step_15000` under the 2026-08-17 protocol revision — the first
+practical payoff of resumable checkpoints. Checkpoints were pruned after
+completion (~295 GB reclaimed); final weights, per-example evaluations, and
+`confirmation_analysis.json` are snapshotted under `results/phase19_confirmation/`
+in git.
+
+Locked analysis on the disjoint 1,024-example holdout (candidate minus
+reference; negative favors candidate):
+
+| Contrast | Seed 123 | Seed 456 | Seed 789 | Mean | All seeds? |
+| --- | ---: | ---: | ---: | ---: | --- |
+| position-only vs standard RoPE | -0.046123 | -0.060674 | -0.046192 | **-0.050997** | yes |
+| position-only vs mapped AddRoPE | -0.004087 | -0.004372 | +0.001532 | -0.002309 | no |
+| position-only vs matched-FFN RoPE | -0.044198 | -0.054200 | -0.051717 | -0.050038 | yes |
+| content+position vs position-only | -0.011832 | -0.011798 | -0.008806 | -0.010812 | yes |
+
+Reading against the locked decision rules:
+
+1. **The headline is confirmed.** Position-only beats standard RoPE in all
+   three paired seeds with mean `-0.051` on the holdout, five times the `0.01`
+   gate. The confirmed effect is *larger* than the phase-18 development-window
+   screen (`0.0421`), on new hardware, a new torch build, and a rebuilt
+   dataset.
+2. **The hypernetwork-specific mechanism is not supported.** Position-only vs
+   mapped AddRoPE is `-0.0023` with mixed signs — inside the unresolved band.
+   The simple mapped additive carrier (amplitude anchor 0.3) captures
+   essentially the entire gain. The durable object is therefore even simpler
+   than "learned per-head positional profile via hypernetwork": **a mapped
+   additive Q/K carrier suffices.** The hypernetwork apparatus is not the
+   recommended default going forward; it is a capacity elaboration that buys
+   nothing resolvable at this scale.
+3. **The gain is positional, not generic capacity.** Matched-FFN RoPE tracks
+   standard RoPE (position-only beats it by `-0.050`), closing the capacity
+   confound.
+4. **The content-conditioning story reverses.** The screening narrative said
+   content adds `~0.004` and shrinking, near the replication floor. On the
+   disjoint holdout with paired seeds it adds `-0.0108` mean, favorable in all
+   three seeds, with per-seed paired-example CI95s excluding zero (e.g. seed
+   123: `[-0.0132, -0.0105]`; seed-level std `0.0017`). Two seeds clear the
+   `0.01` materiality line, one sits at `-0.0088`. By the letter of the locked
+   rule (mean at least `0.01`, favorable signs, decisive intervals) this is a
+   material increment. The 25-batch development window systematically
+   understated it. HANDOFF's "content conditioning contributes almost nothing"
+   must not be quoted without this correction.
+
+Combined holdout ladder: RoPE ≈ matched-FFN < mapped AddRoPE ≈ position-only
+< content+position, with gaps of ~0.049 / ~0.002 / ~0.011.
+
+Environment notes for provenance: runs executed via the box-shared `gpu-claim`
+(python reimplementation) on GPUs 0-5 with six other active projects; the
+2026-08-19 disk crisis (90%) was resolved by checkpoint pruning and the OWT
+cache consolidation (all four OWT projects now read
+`/workspace/data/tokenized/openwebtext_gpt2_bs1024`; ngpt's fat cache and the
+redundant 512 cache were deleted after read-path verification; raw HF cache
+deleted — re-tokenization requires re-download).
+
+Next, in order: (1) work package B steady-state throughput benchmark on this
+hardware — the mapped-AddRoPE equivalence makes this more interesting, since
+mapped AddRoPE is cheaper than the hypernetwork and may beat it iso-wallclock;
+(2) journal-driven write-up per the consolidated plan's section 11, with the
+content-increment revision and the mapped-carrier simplification as first-class
+results; (3) sync final weights off-box before trusting them (git holds the
+small artifacts as of this entry).

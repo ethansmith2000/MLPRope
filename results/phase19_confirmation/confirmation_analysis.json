@@ -1,0 +1,240 @@
+{
+  "contrasts": {
+    "content-position_vs_position-only": {
+      "candidate": "content-position",
+      "candidate_wins_all_seeds": true,
+      "mean_delta_across_seeds": -0.010811982753997048,
+      "negative_favors_candidate": true,
+      "reference": "position-only",
+      "seed_delta_std": 0.001737741587592724,
+      "seed_results": [
+        {
+          "candidate_loss": 3.419485345715657,
+          "delta_candidate_minus_reference": -0.011832478921860456,
+          "num_examples": 1024,
+          "paired_example_ci95": [
+            -0.013192829553008874,
+            -0.010472128290712038
+          ],
+          "paired_example_std": 0.0222098062228313,
+          "reference_loss": 3.4313178246375173,
+          "seed": 123
+        },
+        {
+          "candidate_loss": 3.416821332881227,
+          "delta_candidate_minus_reference": -0.011797958752140403,
+          "num_examples": 1024,
+          "paired_example_ci95": [
+            -0.013137591794247819,
+            -0.010458325710032986
+          ],
+          "paired_example_std": 0.021871559871141484,
+          "reference_loss": 3.4286192916333675,
+          "seed": 456
+        },
+        {
+          "candidate_loss": 3.4243739296216518,
+          "delta_candidate_minus_reference": -0.008805510587990284,
+          "num_examples": 1024,
+          "paired_example_ci95": [
+            -0.010198536525700581,
+            -0.007412484650279986
+          ],
+          "paired_example_std": 0.022743280615678336,
+          "reference_loss": 3.433179440209642,
+          "seed": 789
+        }
+      ]
+    },
+    "position-only_vs_mapped-addrope-a03": {
+      "candidate": "position-only",
+      "candidate_wins_all_seeds": false,
+      "mean_delta_across_seeds": -0.002308764262124896,
+      "negative_favors_candidate": true,
+      "reference": "mapped-addrope-a03",
+      "seed_delta_std": 0.003329200249380939,
+      "seed_results": [
+        {
+          "candidate_loss": 3.4313178246375173,
+          "delta_candidate_minus_reference": -0.004086542641744018,
+          "num_examples": 1024,
+          "paired_example_ci95": [
+            -0.005434795011025787,
+            -0.002738290272462248
+          ],
+          "paired_example_std": 0.02201228358011052,
+          "reference_loss": 3.4354043672792614,
+          "seed": 123
+        },
+        {
+          "candidate_loss": 3.4286192916333675,
+          "delta_candidate_minus_reference": -0.0043716884683817625,
+          "num_examples": 1024,
+          "paired_example_ci95": [
+            -0.005755847999172375,
+            -0.00298752893759115
+          ],
+          "paired_example_std": 0.02259852295168347,
+          "reference_loss": 3.4329909801017493,
+          "seed": 456
+        },
+        {
+          "candidate_loss": 3.433179440209642,
+          "delta_candidate_minus_reference": 0.001531938323751092,
+          "num_examples": 1024,
+          "paired_example_ci95": [
+            0.00020178977813142904,
+            0.002862086869370755
+          ],
+          "paired_example_std": 0.021716710948892458,
+          "reference_loss": 3.431647501885891,
+          "seed": 789
+        }
+      ]
+    },
+    "position-only_vs_rope-matched-ffn": {
+      "candidate": "position-only",
+      "candidate_wins_all_seeds": true,
+      "mean_delta_across_seeds": -0.050038351056476436,
+      "negative_favors_candidate": true,
+      "reference": "rope-matched-ffn",
+      "seed_delta_std": 0.0052079857559340775,
+      "seed_results": [
+        {
+          "candidate_loss": 3.4313178246375173,
+          "delta_candidate_minus_reference": -0.044197981944307685,
+          "num_examples": 1024,
+          "paired_example_ci95": [
+            -0.04581233419557064,
+            -0.04258362969304473
+          ],
+          "paired_example_std": 0.026356771449191067,
+          "reference_loss": 3.475515806581825,
+          "seed": 123
+        },
+        {
+          "candidate_loss": 3.4286192916333675,
+          "delta_candidate_minus_reference": -0.05419977777637541,
+          "num_examples": 1024,
+          "paired_example_ci95": [
+            -0.055845204798010986,
+            -0.05255435075473984
+          ],
+          "paired_example_std": 0.026864114638948094,
+          "reference_loss": 3.482819069409743,
+          "seed": 456
+        },
+        {
+          "candidate_loss": 3.433179440209642,
+          "delta_candidate_minus_reference": -0.051717293448746204,
+          "num_examples": 1024,
+          "paired_example_ci95": [
+            -0.053436053233034596,
+            -0.04999853366445781
+          ],
+          "paired_example_std": 0.02806138423327988,
+          "reference_loss": 3.4848967336583883,
+          "seed": 789
+        }
+      ]
+    },
+    "position-only_vs_standard-rope": {
+      "candidate": "position-only",
+      "candidate_wins_all_seeds": true,
+      "mean_delta_across_seeds": -0.050996500455463924,
+      "negative_favors_candidate": true,
+      "reference": "standard-rope",
+      "seed_delta_std": 0.008381453918083644,
+      "seed_results": [
+        {
+          "candidate_loss": 3.4313178246375173,
+          "delta_candidate_minus_reference": -0.046123258071020246,
+          "num_examples": 1024,
+          "paired_example_ci95": [
+            -0.047745069973048095,
+            -0.044501446168992397
+          ],
+          "paired_example_std": 0.026478561665760847,
+          "reference_loss": 3.4774410827085376,
+          "seed": 123
+        },
+        {
+          "candidate_loss": 3.4286192916333675,
+          "delta_candidate_minus_reference": -0.0606744890101254,
+          "num_examples": 1024,
+          "paired_example_ci95": [
+            -0.06236299528649249,
+            -0.05898598273375831
+          ],
+          "paired_example_std": 0.027567449410074926,
+          "reference_loss": 3.489293780643493,
+          "seed": 456
+        },
+        {
+          "candidate_loss": 3.433179440209642,
+          "delta_candidate_minus_reference": -0.046191754285246134,
+          "num_examples": 1024,
+          "paired_example_ci95": [
+            -0.047789428846233925,
+            -0.04459407972425834
+          ],
+          "paired_example_std": 0.026084482628372145,
+          "reference_loss": 3.479371194494888,
+          "seed": 789
+        }
+      ]
+    }
+  },
+  "throughput": {
+    "content-position": {
+      "mean_target_tokens_per_second": 73039.33373481197,
+      "measurement": "wall_clock_after_initial_optimizer_steps",
+      "std_target_tokens_per_second": 8181.699489500036,
+      "target_tokens_per_second_by_seed": [
+        78140.59333133216,
+        63602.26295203975,
+        77375.14492106397
+      ]
+    },
+    "mapped-addrope-a03": {
+      "mean_target_tokens_per_second": 73515.04665069262,
+      "measurement": "wall_clock_after_initial_optimizer_steps",
+      "std_target_tokens_per_second": 9448.483745191486,
+      "target_tokens_per_second_by_seed": [
+        77505.83297446804,
+        80313.34801793333,
+        62725.95895967649
+      ]
+    },
+    "position-only": {
+      "mean_target_tokens_per_second": 86605.58725449203,
+      "measurement": "wall_clock_after_initial_optimizer_steps",
+      "std_target_tokens_per_second": 2565.9259213464184,
+      "target_tokens_per_second_by_seed": [
+        86146.28604567431,
+        84300.3300433144,
+        89370.14567448736
+      ]
+    },
+    "rope-matched-ffn": {
+      "mean_target_tokens_per_second": 91034.1277020083,
+      "measurement": "wall_clock_after_initial_optimizer_steps",
+      "std_target_tokens_per_second": 1616.824189164357,
+      "target_tokens_per_second_by_seed": [
+        89182.22378246921,
+        91755.23981393618,
+        92164.91950961952
+      ]
+    },
+    "standard-rope": {
+      "mean_target_tokens_per_second": 82002.96306940308,
+      "measurement": "wall_clock_after_initial_optimizer_steps",
+      "std_target_tokens_per_second": 11199.591902195703,
+      "target_tokens_per_second_by_seed": [
+        84366.3287026338,
+        91832.26276746258,
+        69810.29773811286
+      ]
+    }
+  }
+}

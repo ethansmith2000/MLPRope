@@ -1,0 +1,15 @@
+{
+  "elapsed_seconds": 3170.9965810119756,
+  "includes_periodic_evaluation": true,
+  "includes_tracking": false,
+  "measurement": "wall_clock_after_initial_optimizer_steps",
+  "nominal_tokens": 245596160,
+  "optimizer_steps": 29980,
+  "peak_allocated_mib": 11005.50244140625,
+  "peak_reserved_mib": 11088.0,
+  "profile_every_n_steps": 0,
+  "target_tokens": 245356320,
+  "target_tokens_per_second": 77375.14492106397,
+  "tokens_per_second": 77450.78044884605,
+  "warmup_steps_excluded": 20
+}
