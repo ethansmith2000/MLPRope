@@ -2923,3 +2923,75 @@ by whether they preserve RoPE's shared sequence-wide phase frame. Shared-frame
 null-to-catastrophic; the cumulative clock (monotone shared time-warp) is the
 only known content-dependent form that preserves cross-sequence alignment —
 next content-conditioned screens should be cumulative-first.
+
+## 2026-08-20 — Content-mechanism probe on the confirmed content+position models
+
+Inference-only ablations of the dedicated content path on the three confirmed
+phase-19 `content-position` models, evaluated on the locked disjoint holdout.
+Correctness gate: `native` reproduces the recorded holdout losses to within
+`1.8e-5` on all three seeds, so the reconstruction path is faithful.
+
+All modes read content only from positions `<= t`. An earlier draft used a
+within-sequence permutation and a whole-sequence mean; both let content from
+*future* tokens reach `q_t`/`k_t`, and since `q_t` predicts token `t+1` that
+leaks the target into its own prediction, with the leak and the intended
+damage pushing loss in opposite directions. They were replaced by causal
+equivalents and the script now refuses any mode that fails a preflight
+causality check.
+
+| Mode | Seed 123 | Seed 456 | Seed 789 | Mean |
+| --- | ---: | ---: | ---: | ---: |
+| zero | +1.405959 | +1.066780 | +1.258394 | **+1.243711** |
+| prefix_mean | +0.365693 | +0.240327 | +0.294711 | +0.300243 |
+| lag1 | +0.422861 | +0.414384 | +0.290954 | +0.376067 |
+| lag4 | +0.713237 | +0.585823 | +0.647702 | +0.648921 |
+| lag16 | +0.710643 | +0.605254 | +0.647472 | +0.654456 |
+| lag64 | +0.726364 | +0.650143 | +0.655766 | +0.677424 |
+
+Findings:
+
+1. **Endpoint reliance is enormous and is not the same quantity as
+   contribution.** Zeroing content costs `+1.24`, about 115x the `-0.011` that
+   content conditioning actually buys over position-only in the paired
+   confirmation. The trained network has woven the content path deep into its
+   computation, but a model trained without it lands within `0.011`. Ablation
+   cost measures coadaptation at the endpoint, not what the mechanism
+   contributed during training; this is a clean quantitative example of that
+   gap and belongs in the write-up as a methodological point.
+
+2. **The lag curve saturates by 4 tokens.** Cost rises `+0.376` (lag1) ->
+   `+0.649` (lag4) and is then flat through lag16 (`+0.654`) and lag64
+   (`+0.677`). Content from four tokens ago is already as useless as content
+   from sixty-four. The useful signal is local, with no long-range component.
+
+3. **A causal running mean is cheaper than a sharply misaligned token.**
+   `prefix_mean` (`+0.300`) costs less than `lag1` (`+0.376`), and less than
+   every lag. Per-seed differences are `-0.057`, `-0.174`, `+0.004`: favorable
+   in two seeds and effectively tied in the third, so this is directionally
+   consistent but does not meet the project's all-seeds standard and is
+   reported as suggestive only. It does argue against a purely token-identity
+   reading: if the carrier needed *this* token specifically, a prefix mean
+   dominated by distant history should hurt more than one adjacent token, not
+   less. A smooth causal summary preserves more of what the carrier wants than
+   a precise but wrong token does.
+
+Taken together the content path behaves like a locally-varying contextual
+modulation rather than a token-identity lookup. This does not close the
+cumulative-clock direction; if anything (3) is mildly encouraging for
+cumulative formulations, while (2) says any such mechanism should have a short
+effective horizon. It also does not raise the value of content conditioning:
+the honest end-to-end number remains `-0.011`.
+
+Artifacts: `results/content_mechanism_probe.json`, produced by
+`scripts/content_mechanism_probe.py`.
+
+Reproducibility note discovered here: saved `training_config.json` files have
+**never** been round-trippable. `load_config` derives `pos_variant="custom"`
+and writes it, but has never accepted it as input; saved configs also store
+fully normalized channel blocks (so inactive channels carry now-removed
+defaults) and the run pads the vocabulary to a multiple of 64. The probe
+reconstructs these explicitly and requires an exact state-dict match rather
+than relaxing `load_config`'s unknown-key rejection, which is a safety
+property that previously caught the `angular_rank` bug. Worth fixing properly
+at the source later: write a schema version alongside each saved config, and
+record the derived variant tag in a separate field from `pos_variant`.
