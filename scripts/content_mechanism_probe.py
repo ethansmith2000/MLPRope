@@ -43,7 +43,7 @@ from pathlib import Path
 import torch
 from accelerate import Accelerator, DataLoaderConfiguration
 from torch.utils.data import DataLoader
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, default_data_collator
 
 REPO_DIR = Path(__file__).resolve().parents[1]
 if str(REPO_DIR) not in sys.path:
@@ -165,7 +165,9 @@ def assert_modes_are_causal(modes: tuple[str, ...], length: int = 24) -> None:
     print(f"causality check passed for modes: {', '.join(modes)}", flush=True)
 
 
-def probe_run(run_dir: Path, modes: tuple[str, ...]) -> dict:
+def probe_run(
+    run_dir: Path, modes: tuple[str, ...], limit_batches: int | None = None
+) -> dict:
     config_path = run_dir / "training_config.json"
     if not config_path.is_file():
         raise SystemExit(f"missing {config_path}")
@@ -287,10 +289,22 @@ def probe_run(run_dir: Path, modes: tuple[str, ...]) -> dict:
     evaluation_datasets = build_evaluation_datasets(
         datasets["validation"], args.evaluation_lengths
     )
+    # Must mirror main()'s dataloader construction exactly; without the
+    # collator the dataset yields raw lists rather than batched tensors.
     loader_kwargs = {
+        "collate_fn": default_data_collator,
         "num_workers": args.num_workers,
-        "pin_memory": True,
+        "pin_memory": torch.cuda.is_available(),
     }
+    if args.num_workers > 0:
+        loader_kwargs["persistent_workers"] = bool(args.persistent_workers)
+        if args.prefetch_factor is not None:
+            loader_kwargs["prefetch_factor"] = max(1, int(args.prefetch_factor))
+    if limit_batches is not None:
+        args.num_final_validation_batches = int(limit_batches)
+        loader_kwargs["num_workers"] = 0
+        loader_kwargs.pop("persistent_workers", None)
+        loader_kwargs.pop("prefetch_factor", None)
     eval_dataloaders = {
         length: DataLoader(
             dataset,
@@ -356,6 +370,12 @@ def main() -> int:
     parser.add_argument(
         "--out", default=str(REPO_DIR / "results" / "content_mechanism_probe.json")
     )
+    parser.add_argument(
+        "--limit-batches",
+        type=int,
+        default=None,
+        help="smoke mode: evaluate only N holdout examples (not a valid result)",
+    )
     args = parser.parse_args()
 
     modes = tuple(m.strip() for m in args.modes.split(",") if m.strip())
@@ -385,7 +405,7 @@ def main() -> int:
         if run_dir is None:
             raise SystemExit(f"no run directory for arm={args.arm} seed={seed}")
         print(f"probing {run_dir.name}", flush=True)
-        payload["runs"][seed] = probe_run(run_dir, modes)
+        payload["runs"][seed] = probe_run(run_dir, modes, args.limit_batches)
 
     if "native" in modes:
         deltas: dict[str, dict[str, float]] = {}
