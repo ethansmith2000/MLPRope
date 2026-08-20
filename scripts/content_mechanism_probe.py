@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -49,6 +50,7 @@ if str(REPO_DIR) not in sys.path:
     sys.path.insert(0, str(REPO_DIR))
 
 from train_gpt import (  # noqa: E402
+    DEFAULT_CONFIG,
     build_evaluation_datasets,
     evaluate,
     load_config,
@@ -57,6 +59,11 @@ from train_gpt import (  # noqa: E402
     parse_args,
 )
 from transformer import PositionContentProjection  # noqa: E402
+
+# Keys removed by the 2026-08-19 prune, mapped to the value that reproduces the
+# surviving code path. Archived run configs carrying these values are loadable;
+# any other value means the checkpoint's architecture may differ from current code.
+REMOVED_KEY_INERT_VALUES = {"qk_norm_per_head": False}
 
 BASE_MODES = ("native", "zero", "prefix_mean")
 DEFAULT_LAGS = (1, 4, 16, 64)
@@ -166,7 +173,92 @@ def probe_run(run_dir: Path, modes: tuple[str, ...]) -> dict:
     if not weights_path.is_file():
         raise SystemExit(f"missing {weights_path}")
 
-    sys.argv = [sys.argv[0], "--override_json", str(config_path)]
+    # A run's saved training_config.json records the schema that existed when it
+    # trained. The 2026-08-19 prune removed keys, so these archived configs no
+    # longer load. load_config's rejection of unknown keys is a safety property
+    # (it caught the angular_rank bug), so it is not weakened here: instead each
+    # removed key must appear below with the value that reproduces the surviving
+    # code path, and any other value is refused. The strict state-dict load
+    # further down is the architectural backstop.
+    saved_config = json.loads(config_path.read_text())
+    dropped = {
+        key: saved_config.pop(key)
+        for key in list(saved_config)
+        if key in REMOVED_KEY_INERT_VALUES
+    }
+    for key, value in dropped.items():
+        if value != REMOVED_KEY_INERT_VALUES[key]:
+            raise SystemExit(
+                f"{run_dir.name}: removed key {key!r}={value!r} is not inert "
+                f"(expected {REMOVED_KEY_INERT_VALUES[key]!r}); this checkpoint "
+                "may not match what current code builds"
+            )
+    if dropped:
+        print(
+            f"  dropped removed-but-inert keys: {sorted(dropped)}",
+            flush=True,
+        )
+    # `pos_variant` is *derived* by load_config and written into the saved
+    # config: "custom" records that an explicit qk block was used rather than a
+    # named preset. It was never a valid input preset (not before the prune
+    # either), so saved run configs have never round-tripped. Mapping it back to
+    # None is exact: load_config only consults a preset when "qk" is absent from
+    # the overrides, and the saved config always carries a full qk block.
+    if saved_config.get("pos_variant") == "custom":
+        if "qk" not in saved_config:
+            raise SystemExit(
+                f"{run_dir.name}: pos_variant='custom' without an explicit qk "
+                "block; cannot reconstruct the position configuration"
+            )
+        saved_config["pos_variant"] = None
+
+    # Saved configs store the *normalized* logit-bias block, so a disabled
+    # channel still carries its sub-keys. The pruned schema accepts only the
+    # bare {"enabled": false}. Collapsing a disabled block is lossless; an
+    # enabled one belongs to the removed channel and cannot be reconstructed.
+    logit_bias = saved_config.get("logit_bias")
+    if isinstance(logit_bias, dict) and set(logit_bias) != {"enabled"}:
+        if logit_bias.get("enabled"):
+            raise SystemExit(
+                f"{run_dir.name}: run used the removed relative logit-bias "
+                "channel; see CONCAT_QK_POSITION.md"
+            )
+        saved_config["logit_bias"] = {"enabled": False}
+
+    # A saved config also records defaults for channels that build nothing. Some
+    # of those defaults were removed by the prune (conditioning.source "qk",
+    # offset_parameterization "raw"), so an inactive block can reject an
+    # otherwise valid run. Sanitizing is lossless only where nothing is built:
+    # a disabled qk channel, or an enabled one whose conditioning kind is
+    # "none". The strict state-dict load below is the backstop.
+    qk_config = saved_config.get("qk")
+    if isinstance(qk_config, dict):
+        if not qk_config.get("enabled", False):
+            saved_config["qk"] = {"enabled": False}
+        else:
+            conditioning = qk_config.get("conditioning")
+            if (
+                isinstance(conditioning, dict)
+                and conditioning.get("kind", "none") == "none"
+            ):
+                for key, inert in (
+                    ("source", "dedicated"),
+                    ("offset_parameterization", "tanh"),
+                ):
+                    if key in conditioning:
+                        conditioning[key] = inert
+
+    still_unknown = [k for k in saved_config if k not in DEFAULT_CONFIG]
+    if still_unknown:
+        raise SystemExit(
+            f"{run_dir.name}: saved config has unrecognized keys "
+            f"{sorted(still_unknown)}; refusing to guess their effect"
+        )
+    shim_path = REPO_DIR / "results" / "probe_scratch" / f"{run_dir.name}.config.json"
+    shim_path.parent.mkdir(parents=True, exist_ok=True)
+    shim_path.write_text(json.dumps(saved_config, indent=2, sort_keys=True) + "\n")
+
+    sys.argv = [sys.argv[0], "--override_json", str(shim_path)]
     args = load_config(parse_args())
     args.with_tracking = False
     # evaluate() writes evaluation details and position profiles into
@@ -211,7 +303,10 @@ def probe_run(run_dir: Path, modes: tuple[str, ...]) -> dict:
     results: dict[str, float] = {}
     for mode in modes:
         # Rebuild the model per mode so no patched state leaks between modes.
-        model = make_model(args, len(tokenizer))
+        # Training padded the vocabulary to a multiple of 64; reproduce it or
+        # the embedding shapes will not match the checkpoint.
+        vocab_size = math.ceil(len(tokenizer) / 64) * 64
+        model = make_model(args, vocab_size)
         state = torch.load(weights_path, map_location="cpu", weights_only=True)
         missing, unexpected = model.load_state_dict(state, strict=False)
         if missing or unexpected:
