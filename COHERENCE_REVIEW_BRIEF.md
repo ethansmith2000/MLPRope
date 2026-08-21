@@ -194,3 +194,99 @@ site keeps winning.
 - Effect sizes below 0.01 nats are not material at our scale; do not propose
   mechanisms whose expected gain is smaller unless the mechanistic insight is
   the point.
+
+---
+
+## 8. Review outcome (2026-08-21) — corrections to this brief
+
+An external review returned. Recording the corrections here rather than editing
+the claims above, so the error and its refutation both stay visible.
+
+### Claim 2 is refuted. "Pairwise coherence" is vacuous.
+
+For *any* per-position orthogonal `U_p` applied to both q and k, the positional
+bilinear operator `B_mn = U_m^T U_n` automatically satisfies
+
+```
+B_mn B_nk = U_m^T U_n U_n^T U_k = U_m^T U_k = B_mk
+```
+
+and `B_nm = B_mn^T`. Cycle consistency is a property of the *architecture*, not
+of any restriction on the phase schedule. Verified numerically: with arbitrary
+per-position, per-pair phase junk (the brief's "incoherent" class), cycle
+consistency holds to `1.8e-7` and inverse symmetry to `0`, while
+translation-relativity is violated by `~2.0` radians. The brief's hierarchy
+therefore did not separate what it claimed to separate.
+
+The corrected hierarchy, from the review:
+
+1. **integrable / cycle-consistent** — automatic here, discriminates nothing;
+2. **translation-relative** — `B_{m+a,n+a} = B_mn`; forces a fixed generator;
+3. **scalar-clock / spectrally locked** — `U_p = exp(A tau(p))`, so every
+   frequency plane shares *one* scalar coordinate;
+4. **order-preserving, bounded-distortion** — strict monotonicity plus bounds
+   on local speed, `0 < lambda <= tau(p+1) - tau(p) <= Lambda`.
+
+The real content of the shared-warp idea is (3)+(4): **spectral locking**, not
+coherence. Monotonicity alone is too weak — a monotone staircase can produce
+near-collisions followed by large phase jumps.
+
+### Claim 1 survives, with qualifications
+
+Tight, but: affine **mod 2pi** (a `2*pi*k_p` term is free); per-pair slopes are
+permitted, which are exactly per-pair frequency changes; cross-pair
+cancellation cannot rescue a non-affine schedule, since choosing q,k supported
+on a single plane forces matrix equality. More generally
+`U_m^T U_n = F(n-m)` iff `U_p = U_0 A^p` for fixed orthogonal `A`, so a learned
+basis plus learned spectrum is still a fixed representation of the translation
+group after a change of basis.
+
+Crucially, **this does not close the in-rotation direction**: fixed-context
+language modelling is not translation-stationary (document packing, truncated
+early context, position-dependent token statistics), so a deliberately
+nonstationary operator may still be useful.
+
+### The catastrophic result has a simpler explanation than ours
+
+For `theta_p = omega * p * exp(g_p)`, `d theta_p / d g_p = omega * p * exp(g_p)`:
+sensitivity grows with position, so a `0.01` change in `g` moves late-position
+high-frequency planes by many radians. That is gradient amplification and
+aliasing, not manifold departure. Since the *bounded* offset experiment removed
+the amplification and went null, the evidence supports "phase is not a useful
+channel at this scale" at least as strongly as it supports "phase needs a
+coherent clock." Our hypothesis overpredicts the warp; expect weakly.
+
+### Amplitude is not temperature (Claim 3 partially wrong)
+
+With `c_p = a_p u_p`, the expansion
+`q_m.k_n + a_n q_m.u_n + a_m u_m.k_n + a_m a_n u_m.u_n` shows amplitude
+controls a query-to-positional-key term, a positional-query-to-key term, and a
+carrier Gram kernel — not a scalar bias and not a temperature. For a
+multiplicative gain, the *query* factor sets row temperature while the *key*
+factor sets token salience; scaling both is not pure temperature. The additive
+carrier's real advantage is that it is **residual**: it adds structured feature
+terms while leaving the original `q.k` path intact, rather than perturbing the
+content-content operator itself.
+
+### Verified locally: our packing has no BOS and no position-aligned boundaries
+
+`train_gpt.py` concatenates documents with no separator token and chunks at
+fixed 1024 offsets, so document starts are uncorrelated with position and there
+is no BOS artifact at position 0. But every block begins mid-document, so early
+positions systematically carry truncated context. A position-indexed profile
+can exploit that, which is a genuine in-distribution gain but changes the
+interpretation from "positional geometry" to "position-conditional attention
+allocation."
+
+### Reprioritized next experiment
+
+The review's highest-value proposal, adopted: separate positional structure
+from attention scale and salience with three exact-null, fused-SDPA controls
+driven by the same position network as the carrier's amplitude branch —
+query-only gain `exp(rho*tanh(g_m)) q_m`, key-only gain
+`exp(rho*tanh(g_n)) k_n`, and both. If these recover much of the confirmed
+`-0.051`, the dominant mechanism is adaptive attention allocation rather than
+positional geometry. FFN widening does not test this, so our capacity control
+never addressed it. Note that the 2026-08-19 prune removed the `scaled_phase`
+geometry, which is the natural basis for this control; it is recoverable from
+git history.

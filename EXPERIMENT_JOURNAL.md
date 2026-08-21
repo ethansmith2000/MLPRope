@@ -2995,3 +2995,40 @@ than relaxing `load_config`'s unknown-key rejection, which is a safety
 property that previously caught the `angular_rank` bug. Worth fixing properly
 at the source later: write a schema version alongside each saved config, and
 record the derived variant tag in a separate field from `pos_variant`.
+
+## 2026-08-21 — External review of the coherence framing; Claim 2 refuted
+
+An external reviewer assessed `COHERENCE_REVIEW_BRIEF.md`. Corrections are
+recorded in that file's section 8. Summary of what changed:
+
+- **The "pairwise coherence" formalization was wrong.** `B_mn = U_m^T U_n` is
+  cycle-consistent for *any* per-position orthogonal transform applied to both
+  q and k, so the property is automatic and separates nothing. Verified
+  numerically here (cycle consistency to `1.8e-7` for deliberately arbitrary
+  per-pair phases). The meaningful restriction in a shared warp is **spectral
+  locking** — all frequency planes advancing on one scalar coordinate — plus
+  order preservation with bounded local speed.
+- **Claim 1 stands** (relativity-preserving phase edits are affine, mod 2pi,
+  per-pair slopes allowed, no cross-pair rescue) but does **not** close the
+  in-rotation direction, because fixed-context LM is not translation-stationary.
+- **The catastrophic content-frequency result is better explained by gradient
+  amplification** (`d theta / d g = omega * p * exp(g)`) than by manifold
+  departure. Combined with the bounded-offset null, this reads as evidence that
+  phase is simply not a useful channel at this scale. The monotone warp is
+  worth one decisive run for mechanistic value, at a weak prior.
+- **Amplitude is not temperature.** It controls two content-to-carrier cross
+  terms and a carrier Gram kernel. For multiplicative gains, query factor =
+  row temperature, key factor = token salience.
+
+Verified locally in response: our pipeline concatenates documents with no
+separator and chunks at fixed offsets, so there is no BOS artifact and document
+boundaries are uncorrelated with position — but every block starts mid-document,
+so early positions carry systematically truncated context and a position-only
+profile can exploit that.
+
+**Reprioritized.** The next experiment is no longer the warp but the
+gain/salience decomposition: query-only, key-only, and both, driven by the same
+position network as the carrier amplitude, exact-null at init, fused SDPA. This
+asks whether the confirmed `-0.051` is positional geometry or adaptive
+attention allocation. The matched-FFN control did not test this. Phase-24
+(RoPE-embed basis) continues in the background; 3 of 12 runs complete.
