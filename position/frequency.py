@@ -211,7 +211,12 @@ def parameterize_rope_frequencies(
 
 
 class RopeFrequencyController(torch.nn.Module):
-    """Token-local controller producing a phase residual per rotary pair."""
+    """Historical token-local phase controller retained for config provenance.
+
+    Phase-23 closed this local, independently-per-pair family as a material
+    result. New dynamic work belongs in :mod:`position.clock`, where one
+    bounded positive coordinate is shared across the fixed frequency planes.
+    """
 
     def __init__(
         self,

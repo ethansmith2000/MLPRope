@@ -2602,6 +2602,8 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
 
     qk_total = 0
     rope_frequency_total = 0
+    rotary_clock_total = 0
+    qk_preprojection_total = 0
     logit_total = 0
     content_total = 0
     attention_write_total = 0
@@ -2618,11 +2620,17 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
             if attn is None:
                 continue
             qk_total += _unique_numel(getattr(attn, "qk_position", None))
+            qk_preprojection_total += _unique_numel(
+                getattr(attn, "qk_preprojection", None)
+            )
             rope_parameter = getattr(attn, "rope_log_frequency_delta", None)
             if rope_parameter is not None:
                 rope_frequency_total += rope_parameter.numel()
             rope_frequency_total += _unique_numel(
                 getattr(attn, "rope_frequency_controller", None)
+            )
+            rotary_clock_total += _unique_numel(
+                getattr(attn, "rotary_clock", None)
             )
             logit_total += _unique_numel(getattr(attn, "logit_bias", None))
             content_total += _unique_numel(
@@ -2633,7 +2641,9 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
             )
     position_total = (
         qk_total
+        + qk_preprojection_total
         + rope_frequency_total
+        + rotary_clock_total
         + logit_total
         + content_total
         + attention_write_total
@@ -2641,7 +2651,9 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
     )
     return {
         "qk_position_params": qk_total,
+        "qk_preprojection_params": qk_preprojection_total,
         "rope_frequency_params": rope_frequency_total,
+        "rotary_clock_params": rotary_clock_total,
         "logit_bias_params": logit_total,
         "position_content_params": content_total,
         "attention_write_params": attention_write_total,

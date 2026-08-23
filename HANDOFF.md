@@ -1,5 +1,10 @@
 # MLPRope Handoff Brief
 
+> Historical handoff. For the post-phase-24 evidence, pruning decisions, and
+> newly supported Q/K-preprojection and causal-clock mechanisms, use
+> [`CURRENT_STATUS.md`](CURRENT_STATUS.md). Its sequencing supersedes this
+> document.
+
 _Last updated: 2026-08-05. Written for an incoming agent who has not seen this
 codebase. Read the "Audit brief" section before trusting anything else here._
 

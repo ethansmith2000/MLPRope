@@ -32,14 +32,18 @@ from position import (
     POSITION_PRESETS,
     POSITION_SCHEMA_VERSION,
     ATTENTION_WRITE_DEFAULTS,
+    QK_PREPROJECTION_DEFAULTS,
     RESIDUAL_STREAM_DEFAULTS,
+    ROTARY_CLOCK_DEFAULTS,
     V1_CHANNEL_DEFAULTS,
     deep_merge,
     legacy_position_run_tag,
     normalize_attention_write_config,
     normalize_logit_bias_config,
     normalize_position_content_config,
+    normalize_qk_preprojection_config,
     normalize_rope_frequency_config,
+    normalize_rotary_clock_config,
     legacy_rope_frequency_mode,
     normalize_residual_stream_config,
     resolve_channel_config,
@@ -197,6 +201,10 @@ DEFAULT_CONFIG = {
         "phase_bound": 1.0,
         "reference_length": 1024,
     },
+    # Add a full-width sinusoidal basis only to the normalized inputs of W_q/W_k.
+    "qk_preprojection": copy.deepcopy(QK_PREPROJECTION_DEFAULTS),
+    # Positive content-dependent clock shared by Q/K and spectrally locked per head.
+    "rotary_clock": copy.deepcopy(ROTARY_CLOCK_DEFAULTS),
     "qk_norm": True,
     "post_position_qk_norm": False,
     "exclude_position_from_decay": False,
@@ -216,7 +224,8 @@ DEFAULT_CONFIG = {
     "attention_write": copy.deepcopy(ATTENTION_WRITE_DEFAULTS),
     "position_schema_version": POSITION_SCHEMA_VERSION,
     "position_source_schema": 1,
-    # Only the learned logit-bias channel requires flex.
+    # Flex survives as an optional raw backend; all live position mechanisms
+    # are compatible with fused SDPA.
     "attn_impl": "sdpa",
     "gradient_checkpointing": False,
     "compile": True,
@@ -297,6 +306,14 @@ def position_run_tag(cfg: dict) -> str:
         extras.append(
             f"write-{write['mode']}-{write['head_coupling']}"
         )
+    preprojection = cfg.get("qk_preprojection", {})
+    if preprojection.get("enabled", False):
+        extras.append("qkpre-fourier")
+    clock = cfg.get("rotary_clock", {})
+    if clock.get("enabled", False):
+        extras.append(
+            f"clock-{clock['head_coupling']}-{clock['temporal']}"
+        )
     tag = base if not extras else "+".join((base, *extras))
     if source == 2:
         canonical = {
@@ -304,6 +321,8 @@ def position_run_tag(cfg: dict) -> str:
             "logit_bias": cfg["logit_bias"],
             "residual_stream": cfg.get("residual_stream", {}),
             "attention_write": cfg.get("attention_write", {}),
+            "qk_preprojection": cfg.get("qk_preprojection", {}),
+            "rotary_clock": cfg.get("rotary_clock", {}),
             "model_context": {
                 "hidden_size": cfg["hidden_size"],
                 "n_head": cfg["n_head"],
@@ -351,7 +370,10 @@ def load_config(cli_args):
     if cli_args.print_model:
         cfg["print_model"] = True
 
-    preset = cfg["pos_variant"]
+    # ``custom`` is a derived label written into completed training configs,
+    # not a construction preset. Accepting it here makes current saved configs
+    # round-trip without weakening unknown-key validation.
+    preset = None if cfg["pos_variant"] == "custom" else cfg["pos_variant"]
     if preset is not None and preset not in POSITION_PRESETS:
         raise ValueError(f"Unknown position preset: {preset!r}")
 
@@ -529,6 +551,14 @@ def load_config(cli_args):
     )
     cfg["position_content_dim"] = content_cfg["dim"]
     cfg["position_content_coupling"] = content_cfg["coupling"]
+    cfg["qk_preprojection"] = normalize_qk_preprojection_config(
+        overrides.get("qk_preprojection", cfg["qk_preprojection"]),
+        model_dim=model_dim,
+        rope_theta=rope_theta,
+    )
+    cfg["rotary_clock"] = normalize_rotary_clock_config(
+        overrides.get("rotary_clock", cfg["rotary_clock"])
+    )
     qk_config, qk_source = resolve_channel_config(
         "qk",
         preset_fragment=preset_config.get("qk"),
@@ -547,6 +577,24 @@ def load_config(cli_args):
 
     cfg["qk"] = qk_config
     cfg["logit_bias"] = logit_config
+    if cfg["qk_preprojection"]["enabled"] and qk_config["enabled"]:
+        raise ValueError(
+            "qk_preprojection cannot be combined with an active qk position channel"
+        )
+    if cfg["rotary_clock"]["enabled"]:
+        if not cfg["use_rope"]:
+            raise ValueError("rotary_clock requires use_rope=true")
+        if cfg["rope_frequency"]["mode"] != "fixed":
+            raise ValueError("rotary_clock requires fixed base RoPE frequencies")
+        if qk_config["enabled"]:
+            raise ValueError(
+                "rotary_clock cannot be combined with another qk position channel"
+            )
+        if cfg["qk_preprojection"]["enabled"]:
+            raise ValueError(
+                "rotary_clock and qk_preprojection are separate first-stage "
+                "interventions and cannot be combined"
+            )
     if qk_config["enabled"] and qk_config["input"]["scalars"]:
         qk_config["input"][
             "normalization_extent"
@@ -569,6 +617,8 @@ def load_config(cli_args):
         enabled_sources.append(qk_source)
     if cfg["residual_stream"]["enabled"] or cfg["attention_write"]["enabled"]:
         enabled_sources.append(2)
+    if cfg["qk_preprojection"]["enabled"] or cfg["rotary_clock"]["enabled"]:
+        enabled_sources.append(2)
     if not cfg["use_rope"]:
         enabled_sources.append(2)
     # Baseline and wholly legacy active channels retain historical tags.
@@ -582,6 +632,8 @@ def load_config(cli_args):
             not qk_config["enabled"]
             and not cfg["residual_stream"]["enabled"]
             and not cfg["attention_write"]["enabled"]
+            and not cfg["qk_preprojection"]["enabled"]
+            and not cfg["rotary_clock"]["enabled"]
         )
         else "custom"
     )
@@ -612,6 +664,8 @@ def load_config(cli_args):
         qk_config["enabled"]
         or cfg["residual_stream"]["enabled"]
         or cfg["attention_write"]["enabled"]
+        or cfg["qk_preprojection"]["enabled"]
+        or cfg["rotary_clock"]["enabled"]
     ):
         rel_extent = cfg["rel_extent"] or cfg["model_position_extent"]
         variant_tag = f"{variant_tag}-e{rel_extent}"
@@ -732,6 +786,8 @@ def make_model(args, vocab_size):
         rope_theta=args.rope_theta,
         rope_frequency_mode=args.rope_frequency_mode,
         rope_frequency_config=args.rope_frequency,
+        qk_preprojection_config=args.qk_preprojection,
+        rotary_clock_config=args.rotary_clock,
         qk_norm=args.qk_norm,
         post_position_qk_norm=args.post_position_qk_norm,
         qk_norm_mode=args.qk_norm_mode,
@@ -758,6 +814,8 @@ POSITION_DECAY_EXEMPT = (
     "position_content",
     "carrier_hypernetwork",
     "rope_frequency_controller",
+    "rotary_clock",
+    "qk_preprojection",
     "rope_log_frequency_delta",
 )
 
@@ -1233,6 +1291,8 @@ def main():
             "use_rope": args.use_rope,
             "rope_frequency_mode": args.rope_frequency_mode,
             "rope_frequency": args.rope_frequency,
+            "qk_preprojection": args.qk_preprojection,
+            "rotary_clock": args.rotary_clock,
             "post_position_qk_norm": args.post_position_qk_norm,
             "exclude_position_from_decay": args.exclude_position_from_decay,
             "qk_norm_mode": args.qk_norm_mode,

@@ -4,13 +4,14 @@ MLPRope resolves every position configuration to JSON-safe schema v2 before
 constructing the model. Legacy Phase 1/1b/1c dictionaries still upgrade
 strictly and retain their historical tags and parameter counts.
 
-The playground separates five independent sectors:
+The playground separates six independent sectors:
 
 1. position input basis;
-2. Q/K application and output geometry;
+2. injection site plus Q/K application and output geometry;
 3. Q/K and head coupling;
 4. local content conditioning;
-5. residual-stream and attention-output writes.
+5. fixed spectra versus causal clocking;
+6. residual-stream and attention-output writes.
 
 The relative logit-bias channel (sector six of earlier revisions) was removed;
 `logit_bias` remains a config key that accepts only `{enabled: false}` so
@@ -28,6 +29,9 @@ content-conditioned paths are zero-gated where possible.
 | `position/mappers.py` | grouped identity, affine, linear, low-rank, MLP maps |
 | `position/channels.py` | Q/K, residual-stream, attended-position channels |
 | `position/rotary.py` | split-half RoPE, phase composition, radial scaling |
+| `position/preprojection.py` | tied sinusoidal injection before W_q/W_k |
+| `position/temporal.py` | pointwise and short causal controller maps |
+| `position/clock.py` | bounded monotone, spectrally locked rotary clock |
 
 `transformer.Attention` retains projections and SDPA/Flex dispatch.
 
@@ -40,6 +44,9 @@ post_position_qk_norm: false
 qk_norm_mode: legacy_layernorm   # legacy_layernorm | method_aware_rms
 position_content_dim: 64
 position_content_coupling: separate  # shared | separate
+rope_frequency: {mode: fixed, ...}    # historical static/local frequency family
+qk_preprojection: {enabled: false, ...}
+rotary_clock: {enabled: false, ...}
 
 qk: { ... }
 logit_bias: {enabled: false}   # removed channel; only this form is accepted
@@ -62,6 +69,78 @@ mean-subtracting LayerNorm.
 
 `position_source_schema` is written by the trainer. It is `1` only when all
 active channels came from legacy v1; otherwise it is `2`.
+
+## Attention-local Q/K preprojection
+
+```yaml
+qk_preprojection:
+  enabled: false
+  basis_dim: null       # resolves to model_dim; other widths are rejected
+  theta: null           # resolves to rope_theta
+  gate_init: 1.0
+  learnable_gate: true
+```
+
+For the normalized block input `x_t` and frozen full-width Fourier vector
+`z_t`, this path computes
+
+```text
+q_t = W_q(x_t + alpha z_t)
+k_t = W_k(x_t + alpha z_t)
+v_t = W_v x_t
+```
+
+Linearity gives `W_q x_t + alpha W_q z_t` and the analogous K expression.
+The positional projection is therefore tied to the existing Q/K weights and
+receives a full linear transform, while V and the residual stream are not
+polluted. Requiring `basis_dim=model_dim` preserves this exact identity instead
+of quietly introducing another learned mapper.
+
+This mechanism cannot be combined with the ordinary `qk` position channel in
+the first implementation. `use_rope=false` makes it the sole explicit PE;
+`use_rope=true` applies ordinary RoPE after the tied additive term. These are
+distinct experimental cells.
+
+## Spectrally locked causal rotary clock
+
+```yaml
+rotary_clock:
+  enabled: false
+  source: normalized_residual
+  head_coupling: per_head  # shared | per_head
+  mapper: low_rank_silu    # linear | low_rank_silu
+  rank: 32
+  temporal: pointwise      # pointwise | causal_conv
+  kernel_size: 1           # canonicalized to 1 for pointwise; >=2 for causal_conv
+  speed_bound: 0.25        # strictly between 0 and 1
+```
+
+The controller emits one scalar per token/group, not one unrelated value per
+frequency plane:
+
+```text
+s_t   = 1 + speed_bound * tanh(raw_t)
+tau_t = sum_{j<t} s_j
+delta_phase[t,i] = (tau_t - t) * omega_i
+```
+
+The same phase is composed into Q and K. Fixed `omega_i` means every rotary
+plane in a head advances on one scalar coordinate (spectral locking), while
+`0 < s_t < 2` makes the coordinate strictly increasing. The exclusive sum
+makes token `t` control the interval from `t` to `t+1`; content at `t` cannot
+change the position assigned to itself. At the zero-output initialization,
+`s_t=1`, `tau_t=t`, and logits match ordinary RoPE exactly.
+
+`temporal=causal_conv` places an identity-initialized depthwise convolution in
+the low-rank latent space. It reads only the current and preceding tokens and
+has an incremental state of `kernel_size-1` latent vectors. A learned EMA or
+linear-RNN backend is not yet exposed: add one behind the temporal mapper only
+after eager/compiled forward-backward and streaming parity are demonstrated.
+
+The clock requires active ordinary RoPE with fixed base frequencies. It cannot
+be combined with another Q/K position channel or with `qk_preprojection` in its
+first controlled implementation. Diagnostics report raw controller magnitude,
+speed bounds, accumulated clock drift, and phase drift.
 
 ## Q/K channel
 

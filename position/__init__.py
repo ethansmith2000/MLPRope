@@ -19,6 +19,12 @@ from position.channels import (
     count_position_parameters,
     load_position_compatible_state_dict,
 )
+from position.clock import (
+    ROTARY_CLOCK_DEFAULTS,
+    RotaryClockController,
+    RotaryClockState,
+    normalize_rotary_clock_config,
+)
 from position.config import (
     POSITION_PRESETS,
     POSITION_SCHEMA_VERSION,
@@ -50,6 +56,12 @@ from position.frequency import (
     parameterize_rope_frequencies,
 )
 from position.mappers import FeatureMapper, build_mapper
+from position.preprojection import (
+    QK_PREPROJECTION_DEFAULTS,
+    QKPreprojectionPosition,
+    normalize_qk_preprojection_config,
+)
+from position.temporal import CausalControlMapper
 from position.rotary import (
     apply_rotary,
     build_rope_cache,
@@ -76,7 +88,13 @@ __all__ = [
     "ROPE_FREQUENCY_DEFAULTS",
     "ROPE_FREQUENCY_MAPPERS",
     "ROPE_FREQUENCY_PARAMETERIZATIONS",
+    "ROTARY_CLOCK_DEFAULTS",
+    "QK_PREPROJECTION_DEFAULTS",
     "RopeFrequencyController",
+    "RotaryClockController",
+    "RotaryClockState",
+    "QKPreprojectionPosition",
+    "CausalControlMapper",
     "adapt_legacy_position_state_dict",
     "apply_rotary",
     "build_attention_position_write_channel",
@@ -102,6 +120,8 @@ __all__ = [
     "normalize_attention_write_config",
     "normalize_residual_stream_config",
     "normalize_rope_frequency_config",
+    "normalize_rotary_clock_config",
+    "normalize_qk_preprojection_config",
     "parameterize_rope_frequencies",
     "resolve_channel_config",
     "rotate_half",

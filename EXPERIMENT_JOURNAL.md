@@ -3032,3 +3032,41 @@ position network as the carrier amplitude, exact-null at init, fused SDPA. This
 asks whether the confirmed `-0.051` is positional geometry or adaptive
 attention allocation. The matched-FFN control did not test this. Phase-24
 (RoPE-embed basis) continues in the background; 3 of 12 runs complete.
+
+## 2026-08-22 — Phase 24 complete; dynamic primitives refactored
+
+Phase 24 completed all 12 planned h768/d8, 5k cells. The disjoint 256-example
+context-1024 means recovered from launcher logs are: fixed RoPE `4.579567`,
+compact basis anchor 0.3 `4.472233`, compact basis anchor 1.0 `4.428000`, and
+full native RoPE basis anchor 1.0 `4.442033`. The anchor-1 compact basis beats
+anchor-0.3 by `-0.044233` and the full native basis by `-0.014033`, favorable
+in all three seeds. Thus amplitude scale was the largest tested lever and the
+full native basis did not explain the additive-carrier gain. This remains a 5k
+screen. Model-output directories were intentionally removed, so only aggregate
+losses survive and per-example confidence intervals cannot be regenerated.
+`analyze_rope_embed_basis_screen.py` now reconstructs the durable report from
+logs under `results/phase24_rope_embed_basis/`.
+
+Repository cleanup kept provenance separate from active design. The obsolete
+`transformer_old.py` and checkpoints stay deleted. Archived schema loading and
+the phase-23 frequency controller remain because configs and tests still depend
+on them, but the controller is explicitly historical. Saved configs carrying
+the derived `pos_variant="custom"` label now round-trip through `load_config`
+without relaxing unknown-key rejection.
+
+Two untrained mechanisms were added as isolated first-stage interventions:
+
+1. `qk_preprojection`: add a full-width frozen Fourier vector only before
+   `W_q/W_k`, leaving V and the residual stream untouched. By linearity this is
+   exactly a tied projected additive carrier.
+2. `rotary_clock`: predict bounded positive local speed, exclusive-cumsum it to
+   a monotone coordinate, and multiply that one coordinate by the fixed RoPE
+   spectrum. This is spectrally locked and removes the direct
+   `position * learned_frequency_error` actuator.
+
+The clock supports pointwise and short depthwise causal-convolution controllers
+with full/incremental parity. EMA/linear-RNN support is deferred behind the
+temporal-controller boundary until a stable differentiable scan or custom
+kernel has parity, compile, and throughput evidence. The CPU suite is now 123
+passing tests plus one existing CUDA-only skip, including prefix-causality,
+exact-anchor, gradient, fp32-frequency, config, and streaming-state checks.

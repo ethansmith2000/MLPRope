@@ -12,6 +12,30 @@ context 1024, fused SDPA only** (no materialized logit biases, no
 FlexAttention), small GPT (h768/d8, h1024/d12), RoPE as the anchor/prior.
 Compatibility tags: **SDPA-OK** / **custom kernel** / **materialized bias**.
 
+**Implementation/novelty update (2026-08-22).** The new
+`position/clock.py` path is not a claim that accumulated content-dependent
+rotation is a new family. [CARoPE](https://arxiv.org/abs/2507.23083) is the
+closest softmax-attention neighbor: it accumulates a token/head-conditioned
+scalar whose powers generate the frequency planes. [Selective
+RoPE](https://arxiv.org/abs/2511.17388) learns input-dependent arbitrary angles,
+uses sigmoid angle gates, learnable frequencies and a short convolution, and
+is evaluated primarily with gated linear attention. [PaTH
+Attention](https://arxiv.org/abs/2505.16381) is the noncommutative accumulated-
+Householder generalization with a custom kernel. Our implementation is a
+narrower control: it fixes the standard RoPE spectrum, learns only one bounded
+positive local speed per head (or globally), uses an exact standard-RoPE null,
+and applies the resulting phase before ordinary fused SDPA. Any contribution
+would come from this controlled restriction and the direct comparison with the
+confirmed additive carrier, not from claiming the cumulative idea itself.
+
+The June-2026 analysis [Why Do Accumulated Transformations
+Extrapolate?](https://arxiv.org/abs/2606.24975) adds an important limit: learned
+accumulated rotations can create a useful finite mixing window, but rotation
+alone eventually loses control of far attention mass at extreme lengths. This
+does not invalidate a fixed-1024 mechanistic screen; it does rule out describing
+the clock as an unbounded-context solution without a separate decay/far-mass
+mechanism.
+
 ---
 
 ## 1. Where our questions sit in the field

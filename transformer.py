@@ -12,7 +12,9 @@ from torch.nn.attention.flex_attention import (
 
 from position import (
     PositionChannel,
+    QKPreprojectionPosition,
     RopeFrequencyController,
+    RotaryClockController,
     adapt_legacy_position_state_dict,
     apply_rotary,
     build_attention_position_write_channel,
@@ -25,6 +27,8 @@ from position import (
     interleaved_fourier_basis,
     normalize_logit_bias_config,
     normalize_rope_frequency_config,
+    normalize_rotary_clock_config,
+    normalize_qk_preprojection_config,
     normalize_attention_write_config,
     normalize_position_content_config,
     normalize_residual_stream_config,
@@ -138,6 +142,8 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         qk_norm_mode: str = "legacy_layernorm",
         rope_frequency_mode: str = "fixed",
         rope_frequency_config: dict | None = None,
+        qk_preprojection_config: dict | None = None,
+        rotary_clock_config: dict | None = None,
     ):
         super().__init__()
         self.dim = dim
@@ -162,6 +168,14 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 self.rope_frequency_config["head_coupling"],
             )
         ]
+        self.qk_preprojection_config = normalize_qk_preprojection_config(
+            qk_preprojection_config,
+            model_dim=dim,
+            rope_theta=rope_theta,
+        )
+        self.rotary_clock_config = normalize_rotary_clock_config(
+            rotary_clock_config
+        )
         self.max_seq_len = max_seq_len
         self.rel_extent = rel_extent or max_seq_len
         self.attn_impl = attn_impl
@@ -259,6 +273,20 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             extent=max_seq_len,
             rope_theta=rope_theta,
         )
+        if self.qk_preprojection_config["enabled"] and self.qk_position is not None:
+            raise ValueError(
+                "qk_preprojection and qk position channels cannot be combined; "
+                "test one attention-local injection mechanism at a time"
+            )
+        self.qk_preprojection = (
+            QKPreprojectionPosition(
+                self.qk_preprojection_config,
+                model_dim=dim,
+                extent=max_seq_len,
+            )
+            if self.qk_preprojection_config["enabled"]
+            else None
+        )
         # Additive Fourier Q/K replaces multiplicative RoPE. Explicit
         # use_rope=False also enables residual-only and no-explicit-PE controls.
         self.multiplicative_rope = bool(use_rope) and not (
@@ -330,6 +358,34 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 config=self.rope_frequency_config,
             )
             if self.rope_frequency_config["mode"] == "content"
+            else None
+        )
+        if self.rotary_clock_config["enabled"]:
+            if not self.multiplicative_rope:
+                raise ValueError("rotary_clock requires active multiplicative RoPE")
+            if self.rope_frequency_config["mode"] != "fixed":
+                raise ValueError(
+                    "rotary_clock cannot be combined with learned/static RoPE "
+                    "frequencies in its first controlled implementation"
+                )
+            if self.qk_position is not None:
+                raise ValueError(
+                    "rotary_clock cannot be combined with another rotary Q/K channel"
+                )
+            if self.qk_preprojection is not None:
+                raise ValueError(
+                    "rotary_clock and qk_preprojection are isolated first-stage "
+                    "interventions and cannot be combined"
+                )
+        self.rotary_clock = (
+            RotaryClockController(
+                model_dim=dim,
+                heads=heads,
+                pair_dim=self.head_dim // 2,
+                inverse_frequency=self.rope_inverse_frequency,
+                config=self.rotary_clock_config,
+            )
+            if self.rotary_clock_config["enabled"]
             else None
         )
 
@@ -467,8 +523,14 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         return _flex_attention_call(q, k, v, block_mask=self._block_mask(q))
 
     def forward(self, x):
-        q_projected = self._split_heads(self.to_q(x))
-        k_projected = self._split_heads(self.to_k(x))
+        qk_input = x
+        if self.qk_preprojection is not None:
+            qk_input = x + self.qk_preprojection(
+                x.shape[1],
+                dtype=x.dtype,
+            )[None, :, :]
+        q_projected = self._split_heads(self.to_q(qk_input))
+        k_projected = self._split_heads(self.to_k(qk_input))
         v = self._split_heads(self.to_v(x))
         q_normed = self.q_norm(q_projected)
         k_normed = self.k_norm(k_projected)
@@ -570,6 +632,18 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 dynamic_phase
                 if k_phase_delta is None
                 else k_phase_delta + dynamic_phase
+            )
+        if self.rotary_clock is not None:
+            clock_phase = self.rotary_clock.phase_delta(x)
+            q_phase_delta = (
+                clock_phase
+                if q_phase_delta is None
+                else q_phase_delta + clock_phase
+            )
+            k_phase_delta = (
+                clock_phase
+                if k_phase_delta is None
+                else k_phase_delta + clock_phase
             )
         if self.multiplicative_rope:
             q, k = self._apply_rope(
@@ -772,6 +846,8 @@ class TransformerBlock(torch.nn.Module):
         qk_norm_mode: str = "legacy_layernorm",
         rope_frequency_mode: str = "fixed",
         rope_frequency_config: dict | None = None,
+        qk_preprojection_config: dict | None = None,
+        rotary_clock_config: dict | None = None,
     ):
         super().__init__()
         self.attn = Attention(
@@ -793,6 +869,8 @@ class TransformerBlock(torch.nn.Module):
             qk_norm_mode=qk_norm_mode,
             rope_frequency_mode=rope_frequency_mode,
             rope_frequency_config=rope_frequency_config,
+            qk_preprojection_config=qk_preprojection_config,
+            rotary_clock_config=rotary_clock_config,
         )
         self.ff = GeGLU(dim, hidden_dim=ff_hidden_dim)
         self.norm1 = torch.nn.LayerNorm(dim)
@@ -833,6 +911,8 @@ class Transformer(torch.nn.Module):
         ff_widened_layers: list[int] | tuple[int, ...] | None = None,
         rope_frequency_mode: str = "fixed",
         rope_frequency_config: dict | None = None,
+        qk_preprojection_config: dict | None = None,
+        rotary_clock_config: dict | None = None,
     ):
         super().__init__()
 
@@ -908,6 +988,8 @@ class Transformer(torch.nn.Module):
                 qk_norm_mode=qk_norm_mode,
                 rope_frequency_mode=rope_frequency_mode,
                 rope_frequency_config=rope_frequency_config,
+                qk_preprojection_config=qk_preprojection_config,
+                rotary_clock_config=rotary_clock_config,
             )
             for layer_idx in range(depth)
         ])
@@ -983,6 +1065,10 @@ class Transformer(torch.nn.Module):
                     module.reset_output_parameters()
                 elif isinstance(module, RopeFrequencyController):
                     module.reset_output_parameters()
+                elif isinstance(module, RotaryClockController):
+                    module.reset_output_parameters()
+                elif isinstance(module, QKPreprojectionPosition):
+                    module.reset_output_parameters()
 
     def prepare_flex_masks(
         self,
@@ -1048,6 +1134,37 @@ class Transformer(torch.nn.Module):
                 )
                 for key, value in controller_metrics.items():
                     metrics[f"{rope_prefix}/{key}"] = value
+            if (
+                normalized_diagnostic_x is not None
+                and block.attn.rotary_clock is not None
+            ):
+                clock_metrics = block.attn.rotary_clock.diagnostics(
+                    normalized_diagnostic_x
+                )
+                clock_prefix = f"position/layer_{layer_idx:02d}/rotary_clock"
+                for key, value in clock_metrics.items():
+                    metrics[f"{clock_prefix}/{key}"] = value
+            if block.attn.qk_preprojection is not None:
+                preprojection = block.attn.qk_preprojection
+                pre_prefix = f"position/layer_{layer_idx:02d}/qk_preprojection"
+                gate = preprojection.gate_value().detach().float()
+                metrics[f"{pre_prefix}/gate"] = gate.item()
+                if seq_len is not None:
+                    positional_input = preprojection(
+                        seq_len,
+                        dtype=torch.float32,
+                    ).detach()
+                    metrics[f"{pre_prefix}/input_rms"] = (
+                        positional_input.square().mean().sqrt().item()
+                    )
+                    q_branch = block.attn.to_q(positional_input).detach().float()
+                    k_branch = block.attn.to_k(positional_input).detach().float()
+                    metrics[f"{pre_prefix}/projected_q_rms"] = (
+                        q_branch.square().mean().sqrt().item()
+                    )
+                    metrics[f"{pre_prefix}/projected_k_rms"] = (
+                        k_branch.square().mean().sqrt().item()
+                    )
             if layer_idx in selected_layers:
                 profiles[f"rope_frequency_layer_{layer_idx:02d}"] = (
                     rope_frequencies.cpu()
@@ -1168,7 +1285,9 @@ def count_parameters(model: torch.nn.Module) -> dict[str, int]:
         "lm_head": head,
         "position_params": position_counts["position_params"],
         "qk_position_params": position_counts["qk_position_params"],
+        "qk_preprojection_params": position_counts["qk_preprojection_params"],
         "rope_frequency_params": position_counts["rope_frequency_params"],
+        "rotary_clock_params": position_counts["rotary_clock_params"],
         "logit_bias_params": position_counts["logit_bias_params"],
         "attention_write_params": position_counts["attention_write_params"],
         "residual_stream_params": position_counts["residual_stream_params"],

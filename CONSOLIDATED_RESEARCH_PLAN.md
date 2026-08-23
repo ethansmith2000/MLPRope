@@ -1,5 +1,9 @@
 # MLPRope consolidated research plan
 
+> Historical plan. Phase 19 and phase 24 are now complete and the implementation
+> has changed. Use [`CURRENT_STATUS.md`](CURRENT_STATUS.md) for current evidence
+> and priorities. Locked protocol files still govern completed experiments.
+
 _Consolidated 2026-08-05 from the original methods discussion, phases 19-23,
 and the independent implementation/evidence/methods review. This is the current
 decision roadmap; narrower protocol files remain authoritative for experiments
@@ -329,4 +333,3 @@ The write-up should separate:
 If A1 confirms, complete A2 when the stronger mechanistic claims are important.
 If A1 fails, do not search for a replacement positive result; document the
 screening-to-confirmation reversal and the robust negative/structural findings.
-
