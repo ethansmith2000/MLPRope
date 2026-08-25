@@ -1,6 +1,6 @@
 # MLPRope current status
 
-_Authoritative as of 2026-08-22. This page supersedes the old sequencing in
+_Authoritative as of 2026-08-25. This page supersedes the old sequencing in
 `HANDOFF.md` and `CONSOLIDATED_RESEARCH_PLAN.md`; those files remain historical
 records._
 
@@ -30,6 +30,22 @@ Phase 24 is complete at 5k steps. On the durable 256-example holdout at context
 The amplitude anchor was the largest lever. The compact 16-dimensional basis
 plus scalar features beat the full native RoPE embedding by `0.014033`, with
 the same sign in every seed. This is a screen, not a durable positive claim.
+
+Phase 25 is complete at 30k. The compact anchor-1.0 carrier beat fresh fixed
+RoPE by `-0.076867` mean loss and anchor 0.3 by `-0.014895`; both contrasts
+were favorable in all three seeds. The anchor-1.0 versus 0.3 seed deltas were
+`-0.023211/-0.012770/-0.008704`. Anchor 1.0 is therefore the canonical active
+mapped-carrier initialization. Anchor 0.3 remains only in locked historical
+configs/builders needed to reproduce earlier experiment families.
+
+Phase 26 is a deliberately broad paired seed-123 screen rather than an
+immediate three-seed sweep. It covers ten arms: fresh RoPE and NoPE controls,
+the anchor-1.0 AddRoPE carrier, position-only gains on Q/K/both, tied Q/K
+preprojection with and without RoPE, and pointwise/short-causal rotary clocks.
+Only clear survivors receive other seeds. The frozen launcher runs through
+Supervisor and `gpu-claim`, with CUDA smoke and 20-step full-size preflights
+before five claimed workers are released.
+
 At the exploratory 4096 context, the native-basis arm was `+0.356` worse than
 fixed RoPE, so the primary in-distribution result must not be generalized to
 length extrapolation.
@@ -55,7 +71,24 @@ intervals cannot be reconstructed. See
   archived experiment configs. It is not the implementation site for new
   dynamic work.
 
-## Newly supported, untrained mechanisms
+## Supported mechanisms entering the breadth screen
+
+### Position-only Q/K gain
+
+A compact frozen position basis now drives bounded scalar gains after RoPE:
+
+```text
+ell_q,h(t), ell_k,h(t) = linear_h([Fourier16(t), normalized_t, log_t])
+g(t) = exp(b * tanh(ell(t) / b)),  b = 1
+q_t <- g_q(t) q_t,  k_t <- g_k(t) k_t
+```
+
+The final Q/K readouts are zero-initialized, so the mechanism is exactly fixed
+RoPE at initialization. Q-only, K-only, and shared-trunk/separate-readout Q+K
+targets are isolated. The bound keeps each scalar within `[exp(-1), exp(1)]`.
+Tests cover exact anchoring (including bf16), gradients, target isolation,
+row/column logit effects, configuration round-trip, and incompatible mechanism
+combinations. Position-only input prevents content leakage by construction.
 
 ### Tied Q/K preprojection sinusoid
 
@@ -134,11 +167,11 @@ key gain is token salience.
 
 ## Experimental priority
 
-Phase 24's large anchor-1.0 screen result is now the first promotion target.
-The earned primary attribution experiment remains the position-only
-gain/salience decomposition: query-only, key-only, and both. The preprojection
-sinusoid is a clean architectural comparator. The rotary clock is worth one
-small, decisive mechanistic screen with a weak prior, not a broad mapper sweep.
-Start pointwise versus short causal-convolution clocks; do not add EMA kernels,
-frequency-wise clocks, or combinations with additive carriers until a simpler
-clock shows a meaningful signal.
+Phase 25 has promoted anchor 1.0 and retired 0.3 from active development. The
+current priority is breadth before replication: use the paired seed-123 Phase
+26 screen to prune obvious failures across gain, preprojection, and clock
+families. A direct-control delta at or below `-0.02` survives; changes inside
+`+/-0.01` are unresolved; a delta at or above `+0.01` is pruned. These are
+screening rules, not inferential claims. Repeat seeds only for the best two or
+three survivors. Do not add EMA kernels, frequency-wise clocks, or combinations
+with additive carriers until a simpler clock earns that expansion.

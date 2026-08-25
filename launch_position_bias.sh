@@ -475,6 +475,8 @@ JSON
 }
 
 v2_promoted_qk_json() {
+  # Canonical active mapped carrier.  Earlier builders above retain 0.3 only
+  # so archived experiment families can still be reconstructed faithfully.
   local geometry="$1" # amplitude_phase | pair_normalized
   local basis_dim="${2:-null}"
   local conditioning_kind="${3:-none}"
@@ -488,7 +490,7 @@ v2_promoted_qk_json() {
     conditioning_json="{\"kind\": \"${conditioning_kind}\", \"source\": \"dedicated\", \"activation\": \"linear\", \"hidden_dim\": 32, \"target\": \"${conditioning_target}\", \"coupling\": \"${conditioning_coupling}\", \"phase_bound\": 0.25}"
   fi
   cat <<JSON
-{"enabled": true, "application": "additive", "geometry": "${geometry}", "input": {"kind": "frozen_fourier", "basis_dim": ${basis_dim}, "theta": null, "scalars": ["normalized_position", "log_position"]}, "mapper": {"kind": "linear", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "output": {"amplitude_init": 0.3, "amplitude_parameterization": "signed", "learn_amplitude": true, "learn_phase": true, "phase_scale": 1.0, "additive_normalization": "${additive_normalization}", "additive_gain_init": 0.212132, "additive_gain_max": 1.0, "learn_additive_gain": true, "scale_init": 1.0, "scale_parameterization": "exp"}, "conditioning": ${conditioning_json}, "qk_coupling": "shared_trunk_separate_readouts", "head_coupling": "per_head_independent"}
+{"enabled": true, "application": "additive", "geometry": "${geometry}", "input": {"kind": "frozen_fourier", "basis_dim": ${basis_dim}, "theta": null, "scalars": ["normalized_position", "log_position"]}, "mapper": {"kind": "linear", "residual": false, "rank": ${POS_RANK}, "hidden_dim": ${POS_MLP_HIDDEN}}, "output": {"amplitude_init": 1.0, "amplitude_parameterization": "signed", "learn_amplitude": true, "learn_phase": true, "phase_scale": 1.0, "additive_normalization": "${additive_normalization}", "additive_gain_init": 0.212132, "additive_gain_max": 1.0, "learn_additive_gain": true, "scale_init": 1.0, "scale_parameterization": "exp"}, "conditioning": ${conditioning_json}, "qk_coupling": "shared_trunk_separate_readouts", "head_coupling": "per_head_independent"}
 JSON
 }
 

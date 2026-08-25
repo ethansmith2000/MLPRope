@@ -1,17 +1,41 @@
 # MLPRope next-experiment roadmap
 
-_Proposed 2026-08-23. This roadmap assumes intermittent access to 2–4 RTX
-5090s through `gpu-claim`. It does not authorize bypassing an existing claim._
+_Revised 2026-08-25. This roadmap assumes shared RTX 5090 access through
+`gpu-claim`. It does not authorize bypassing an existing claim._
+
+## 2026-08-25 execution revision
+
+Phase 25 is complete: compact AddRoPE at amplitude 1.0 beat fixed RoPE by
+`-0.076867` mean held-out loss and amplitude 0.3 by `-0.014895`, favorable in
+all three seeds. Amplitude 1.0 is now canonical; 0.3 is historical only.
+
+The next step favors breadth over immediate replication. Phase 26 is one paired
+seed-123, 5k screen with ten arms: RoPE, NoPE, AddRoPE-a1.0, position gain on
+Q/K/both, Q/K preprojection with and without RoPE, and pointwise/four-token
+causal-convolution rotary clocks. Fresh direct controls and the disjoint
+256-example holdout are retained.
+
+Screening labels are intentionally coarse:
+
+- direct-control delta `<= -0.02`: survive to consideration for replication;
+- `abs(delta) < 0.01`: unresolved;
+- delta `>= +0.01`: prune;
+- intermediate values are weak benefit/harm, not positive findings.
+
+Only the best two or three survivors should receive seeds 456/789. This
+revision supersedes the immediate three-seed Phase-26/27 job counts in the
+older stage descriptions below; their mechanistic interpretation remains
+useful.
 
 ## Objective and ordering
 
 The next work should answer three questions in this order:
 
-1. Does phase 24's large amplitude-1.0 improvement survive 30k training?
-2. How much of the additive carrier gain is query-temperature control, key
+1. How much of the additive carrier gain is query-temperature control, key
    leverage, or genuinely additive carrier geometry?
-3. Do either of the two new attention-local mechanisms—the tied Q/K
+2. Do either of the two new attention-local mechanisms—the tied Q/K
    preprojection sinusoid or the causal rotary clock—earn promotion?
+3. Which clear survivors, if any, deserve seed replication and a 30k gate?
 
 The ordering is evidence-weighted. Phase 24 already produced a large,
 three-seed effect and therefore comes before new architectural exploration.
@@ -22,8 +46,8 @@ a weak prior and should remain a small mechanistic screen.
 
 - Model for screens and the first promotion: h768/d8, 8 heads, training context
   1024, the phase-24 optimizer/data recipe, fused SDPA.
-- Seeds: `123/456/789`, with `paired_initialization_seed=seed` and identical
-  data order across arms.
+- Breadth screens use seed `123` with `paired_initialization_seed=123` and
+  identical data order across arms. Seeds `456/789` are reserved for survivors.
 - Primary endpoint: context-1024 loss. A 5k screen uses the disjoint 256-example
   holdout starting at validation batch 2048. A 30k promotion uses 1,024
   examples from the same start.
@@ -57,7 +81,7 @@ Before a full launch:
 No full training sweep starts if the exact-anchor, prefix-causality,
 full-versus-incremental, or compiled-backward gates fail.
 
-## Stage 1 / Phase 25 — promote the amplitude anchor
+## Stage 1 / Phase 25 — promote the amplitude anchor (complete)
 
 ### Question
 
@@ -86,7 +110,8 @@ plus final evaluation.
 - If the 1.0 advantage collapses or changes sign, record phase 24 as an
   early-training optimization effect and keep 0.3 as the confirmed default.
 
-An h1024/d12 confirmation is considered only after this gate. Do not jump
+The gate passed: 1.0 beat 0.3 in all seeds and is the active default. An
+h1024/d12 confirmation is considered only after later mechanism triage. Do not jump
 directly from the 5k h768 result to a large-model claim.
 
 ## Stage 2 — implement the position-only gain decomposition
@@ -129,8 +154,10 @@ Required tests:
 | position gain on K only | position-dependent key leverage |
 | position gain on Q and K | interaction and combined allocation control |
 
-Run 5 arms × 3 seeds × 5k = 15 jobs. Rerun both controls so per-example paired
-comparisons are available; phase-24 outputs no longer contain those arrays.
+These five arms are included in the single-seed ten-arm Phase-26 breadth
+screen. Rerun both controls so per-example paired comparisons are available;
+phase-24 outputs no longer contain those arrays. Other seeds are conditional on
+survival rather than launched up front.
 
 ### Interpretation
 
@@ -178,7 +205,7 @@ heads record:
 This phase is valuable as attribution even if no gain arm deserves 30k
 promotion.
 
-## Stage 4 / Phase 27 — isolated new-mechanism screen
+## Stage 4 — isolated new-mechanism arms (folded into Phase 26)
 
 Do not combine these mechanisms with the additive carrier in this stage.
 
@@ -193,8 +220,9 @@ Do not combine these mechanisms with the additive carrier in this stage.
 | pointwise per-head rotary clock | minimal cumulative content clock |
 | four-token causal-convolution rotary clock | value of short causal state |
 
-Run 6 arms × 3 seeds × 5k = 18 jobs. The compact carrier result from phase 26
-is an external reference, not a one-axis contrast with these arms.
+These six roles are folded into the same paired seed-123 Phase-26 screen. The
+compact carrier is an external architectural reference, not a one-axis contrast
+with these arms. Other seeds are deferred until an arm clears the breadth gate.
 
 For clock arms, retain per-layer speed min/max/mean, final clock-drift RMS,
 phase-drift RMS/max by frequency band, and the fraction of speeds near their
@@ -226,14 +254,16 @@ both step count and wall-clock. The old iso-wallclock estimates are not reused.
 
 ## Immediate next action
 
-The first launchable work item is Stage 0's claimed-GPU smoke, followed by
-generation and dry-run validation of the nine phase-25 configs. Phase 25 can
-train while the position-gain implementation and diagnostic evaluator are
-built. No clock or preprojection sweep needs to occupy GPUs before the stronger
-amplitude result is promoted.
+Phase 26 is launchable and registered with Supervisor. Its launcher freezes
+the tested source/configs, dry-runs all ten arms, waits for a claimed GPU for
+the compiled-bf16 CUDA smoke, then runs four serial 20-step h768/d8 preflights.
+Only after all gates pass does it release five workers through `gpu-claim`.
 
 The locked generator, analyzer, and shared-claim launcher are:
 
-- `prepare_rope_embed_basis_30k.py`
-- `analyze_rope_embed_basis_30k.py`
-- `launch_rope_embed_basis_30k.sh`
+- `prepare_position_breadth_screen.py`
+- `analyze_position_breadth_screen.py`
+- `launch_position_breadth_screen.sh`
+
+The analyzer reports direct-control paired deltas, paired-example confidence
+intervals, throughput, and layer-aggregated gain/clock/preprojection health.

@@ -60,7 +60,7 @@ RUN_CONFIG_DIR="${SNAPSHOT_DIR}/sweep_configs/phase25_rope_embed_basis_30k"
 for cfg in "${RUN_CONFIG_DIR}"/phase25-*.json; do
   "${PYTHON_BIN}" "${SNAPSHOT_DIR}/train_gpt.py" \
     --override_json "${cfg}" --dry_run \
-    >"${LOG_DIR}/$(basename "${cfg}" .json).dry-run.json"
+    >"${LOG_DIR}/$(basename "${cfg}" .json).dry-run.log"
 done
 
 if [[ "${SKIP_CUDA_SMOKE}" != "true" ]]; then

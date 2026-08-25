@@ -55,6 +55,12 @@ from position.frequency import (
     normalize_rope_frequency_config,
     parameterize_rope_frequencies,
 )
+from position.gain import (
+    POSITION_GAIN_DEFAULTS,
+    PositionGain,
+    PositionGainOutput,
+    normalize_position_gain_config,
+)
 from position.mappers import FeatureMapper, build_mapper
 from position.preprojection import (
     QK_PREPROJECTION_DEFAULTS,
@@ -89,10 +95,13 @@ __all__ = [
     "ROPE_FREQUENCY_MAPPERS",
     "ROPE_FREQUENCY_PARAMETERIZATIONS",
     "ROTARY_CLOCK_DEFAULTS",
+    "POSITION_GAIN_DEFAULTS",
     "QK_PREPROJECTION_DEFAULTS",
     "RopeFrequencyController",
     "RotaryClockController",
     "RotaryClockState",
+    "PositionGain",
+    "PositionGainOutput",
     "QKPreprojectionPosition",
     "CausalControlMapper",
     "adapt_legacy_position_state_dict",
@@ -121,6 +130,7 @@ __all__ = [
     "normalize_residual_stream_config",
     "normalize_rope_frequency_config",
     "normalize_rotary_clock_config",
+    "normalize_position_gain_config",
     "normalize_qk_preprojection_config",
     "parameterize_rope_frequencies",
     "resolve_channel_config",

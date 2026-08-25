@@ -12,6 +12,7 @@ from torch.nn.attention.flex_attention import (
 
 from position import (
     PositionChannel,
+    PositionGain,
     QKPreprojectionPosition,
     RopeFrequencyController,
     RotaryClockController,
@@ -31,6 +32,7 @@ from position import (
     normalize_qk_preprojection_config,
     normalize_attention_write_config,
     normalize_position_content_config,
+    normalize_position_gain_config,
     normalize_residual_stream_config,
     parameterize_rope_frequencies,
 )
@@ -144,6 +146,7 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         rope_frequency_config: dict | None = None,
         qk_preprojection_config: dict | None = None,
         rotary_clock_config: dict | None = None,
+        position_gain_config: dict | None = None,
     ):
         super().__init__()
         self.dim = dim
@@ -175,6 +178,13 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         )
         self.rotary_clock_config = normalize_rotary_clock_config(
             rotary_clock_config
+        )
+        self.position_gain_config = normalize_position_gain_config(
+            position_gain_config,
+            heads=heads,
+            head_dim=self.head_dim,
+            rope_theta=rope_theta,
+            normalization_extent=max_seq_len,
         )
         self.max_seq_len = max_seq_len
         self.rel_extent = rel_extent or max_seq_len
@@ -386,6 +396,33 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 config=self.rotary_clock_config,
             )
             if self.rotary_clock_config["enabled"]
+            else None
+        )
+        if self.position_gain_config["enabled"]:
+            if not self.multiplicative_rope:
+                raise ValueError("position_gain requires active multiplicative RoPE")
+            if self.qk_position is not None:
+                raise ValueError(
+                    "position_gain and qk position channels are isolated "
+                    "interventions and cannot be combined"
+                )
+            if self.qk_preprojection is not None or self.rotary_clock is not None:
+                raise ValueError(
+                    "position_gain, qk_preprojection, and rotary_clock are "
+                    "isolated first-stage interventions"
+                )
+            if self.post_position_qk_norm:
+                raise ValueError(
+                    "post_position_qk_norm would erase scalar position gains"
+                )
+        self.position_gain = (
+            PositionGain(
+                self.position_gain_config,
+                heads=heads,
+                head_dim=self.head_dim,
+                extent=max_seq_len,
+            )
+            if self.position_gain_config["enabled"]
             else None
         )
 
@@ -654,6 +691,10 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 q_scale=q_scale,
                 k_scale=k_scale,
             )
+        if self.position_gain is not None:
+            position_gain = self.position_gain(q.shape[-2], dtype=q.dtype)
+            q = q * position_gain.q
+            k = k * position_gain.k
         if q_gain is not None:
             q = q * q_gain.to(dtype=q.dtype)
         if k_gain is not None:
@@ -848,6 +889,7 @@ class TransformerBlock(torch.nn.Module):
         rope_frequency_config: dict | None = None,
         qk_preprojection_config: dict | None = None,
         rotary_clock_config: dict | None = None,
+        position_gain_config: dict | None = None,
     ):
         super().__init__()
         self.attn = Attention(
@@ -871,6 +913,7 @@ class TransformerBlock(torch.nn.Module):
             rope_frequency_config=rope_frequency_config,
             qk_preprojection_config=qk_preprojection_config,
             rotary_clock_config=rotary_clock_config,
+            position_gain_config=position_gain_config,
         )
         self.ff = GeGLU(dim, hidden_dim=ff_hidden_dim)
         self.norm1 = torch.nn.LayerNorm(dim)
@@ -913,6 +956,7 @@ class Transformer(torch.nn.Module):
         rope_frequency_config: dict | None = None,
         qk_preprojection_config: dict | None = None,
         rotary_clock_config: dict | None = None,
+        position_gain_config: dict | None = None,
     ):
         super().__init__()
 
@@ -990,6 +1034,7 @@ class Transformer(torch.nn.Module):
                 rope_frequency_config=rope_frequency_config,
                 qk_preprojection_config=qk_preprojection_config,
                 rotary_clock_config=rotary_clock_config,
+                position_gain_config=position_gain_config,
             )
             for layer_idx in range(depth)
         ])
@@ -1165,6 +1210,12 @@ class Transformer(torch.nn.Module):
                     metrics[f"{pre_prefix}/projected_k_rms"] = (
                         k_branch.square().mean().sqrt().item()
                     )
+            if block.attn.position_gain is not None and seq_len is not None:
+                gain_prefix = f"position/layer_{layer_idx:02d}/position_gain"
+                for key, value in block.attn.position_gain.diagnostics(
+                    seq_len
+                ).items():
+                    metrics[f"{gain_prefix}/{key}"] = value
             if layer_idx in selected_layers:
                 profiles[f"rope_frequency_layer_{layer_idx:02d}"] = (
                     rope_frequencies.cpu()
@@ -1286,6 +1337,7 @@ def count_parameters(model: torch.nn.Module) -> dict[str, int]:
         "position_params": position_counts["position_params"],
         "qk_position_params": position_counts["qk_position_params"],
         "qk_preprojection_params": position_counts["qk_preprojection_params"],
+        "position_gain_params": position_counts["position_gain_params"],
         "rope_frequency_params": position_counts["rope_frequency_params"],
         "rotary_clock_params": position_counts["rotary_clock_params"],
         "logit_bias_params": position_counts["logit_bias_params"],

@@ -31,6 +31,16 @@ COMMON = {
 
 
 CASES = {
+    "position_gain_qk": {
+        "position_gain_config": {
+            "enabled": True,
+            "target": "both",
+            "basis_dim": 16,
+            "scalars": ["normalized_position", "log_position"],
+            "mapper": "linear",
+            "log_gain_bound": 1.0,
+        },
+    },
     "qk_preprojection": {
         "use_rope": False,
         "qk_preprojection_config": {
@@ -94,6 +104,21 @@ def main() -> None:
         )
     del baseline, clock_anchor
 
+    baseline = Transformer(**COMMON).to(device).eval()
+    gain_anchor = Transformer(
+        **COMMON,
+        **CASES["position_gain_qk"],
+    ).to(device).eval()
+    gain_anchor.load_state_dict(baseline.state_dict(), strict=False)
+    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16):
+        torch.testing.assert_close(
+            gain_anchor(input_ids),
+            baseline(input_ids),
+            atol=0,
+            rtol=0,
+        )
+    del baseline, gain_anchor
+
     for name, overrides in CASES.items():
         model = Transformer(**COMMON, **overrides).to(device).train()
         compiled = torch.compile(model, mode="default", fullgraph=False)
@@ -102,7 +127,9 @@ def main() -> None:
         if not torch.isfinite(torch.tensor([first, second])).all():
             raise RuntimeError(f"{name} produced a non-finite loss")
 
-        if name == "qk_preprojection":
+        if name == "position_gain_qk":
+            gradient = model.blocks[0].attn.position_gain.q_readout.weight.grad
+        elif name == "qk_preprojection":
             gradient = model.blocks[0].attn.qk_preprojection.gate.grad
         else:
             gradient = model.blocks[0].attn.rotary_clock.controller.output.weight.grad

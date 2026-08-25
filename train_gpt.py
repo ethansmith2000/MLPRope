@@ -31,6 +31,7 @@ from transformers import AutoConfig, AutoTokenizer, default_data_collator, get_s
 from position import (
     POSITION_PRESETS,
     POSITION_SCHEMA_VERSION,
+    POSITION_GAIN_DEFAULTS,
     ATTENTION_WRITE_DEFAULTS,
     QK_PREPROJECTION_DEFAULTS,
     RESIDUAL_STREAM_DEFAULTS,
@@ -41,6 +42,7 @@ from position import (
     normalize_attention_write_config,
     normalize_logit_bias_config,
     normalize_position_content_config,
+    normalize_position_gain_config,
     normalize_qk_preprojection_config,
     normalize_rope_frequency_config,
     normalize_rotary_clock_config,
@@ -205,6 +207,8 @@ DEFAULT_CONFIG = {
     "qk_preprojection": copy.deepcopy(QK_PREPROJECTION_DEFAULTS),
     # Positive content-dependent clock shared by Q/K and spectrally locked per head.
     "rotary_clock": copy.deepcopy(ROTARY_CLOCK_DEFAULTS),
+    # Position-only scalar Q/K gains applied after fixed RoPE.
+    "position_gain": copy.deepcopy(POSITION_GAIN_DEFAULTS),
     "qk_norm": True,
     "post_position_qk_norm": False,
     "exclude_position_from_decay": False,
@@ -314,6 +318,9 @@ def position_run_tag(cfg: dict) -> str:
         extras.append(
             f"clock-{clock['head_coupling']}-{clock['temporal']}"
         )
+    gain = cfg.get("position_gain", {})
+    if gain.get("enabled", False):
+        extras.append(f"posgain-{gain['target']}")
     tag = base if not extras else "+".join((base, *extras))
     if source == 2:
         canonical = {
@@ -323,6 +330,7 @@ def position_run_tag(cfg: dict) -> str:
             "attention_write": cfg.get("attention_write", {}),
             "qk_preprojection": cfg.get("qk_preprojection", {}),
             "rotary_clock": cfg.get("rotary_clock", {}),
+            "position_gain": cfg.get("position_gain", {}),
             "model_context": {
                 "hidden_size": cfg["hidden_size"],
                 "n_head": cfg["n_head"],
@@ -559,6 +567,13 @@ def load_config(cli_args):
     cfg["rotary_clock"] = normalize_rotary_clock_config(
         overrides.get("rotary_clock", cfg["rotary_clock"])
     )
+    cfg["position_gain"] = normalize_position_gain_config(
+        overrides.get("position_gain", cfg["position_gain"]),
+        heads=heads,
+        head_dim=model_dim // heads,
+        rope_theta=rope_theta,
+        normalization_extent=scalar_normalization_extent,
+    )
     qk_config, qk_source = resolve_channel_config(
         "qk",
         preset_fragment=preset_config.get("qk"),
@@ -595,6 +610,20 @@ def load_config(cli_args):
                 "rotary_clock and qk_preprojection are separate first-stage "
                 "interventions and cannot be combined"
             )
+    if cfg["position_gain"]["enabled"]:
+        if not cfg["use_rope"]:
+            raise ValueError("position_gain requires use_rope=true")
+        if qk_config["enabled"]:
+            raise ValueError(
+                "position_gain and qk position channels are isolated interventions"
+            )
+        if cfg["qk_preprojection"]["enabled"] or cfg["rotary_clock"]["enabled"]:
+            raise ValueError(
+                "position_gain, qk_preprojection, and rotary_clock are "
+                "isolated first-stage interventions"
+            )
+        if cfg["post_position_qk_norm"]:
+            raise ValueError("post_position_qk_norm would erase position_gain")
     if qk_config["enabled"] and qk_config["input"]["scalars"]:
         qk_config["input"][
             "normalization_extent"
@@ -617,7 +646,11 @@ def load_config(cli_args):
         enabled_sources.append(qk_source)
     if cfg["residual_stream"]["enabled"] or cfg["attention_write"]["enabled"]:
         enabled_sources.append(2)
-    if cfg["qk_preprojection"]["enabled"] or cfg["rotary_clock"]["enabled"]:
+    if (
+        cfg["qk_preprojection"]["enabled"]
+        or cfg["rotary_clock"]["enabled"]
+        or cfg["position_gain"]["enabled"]
+    ):
         enabled_sources.append(2)
     if not cfg["use_rope"]:
         enabled_sources.append(2)
@@ -634,6 +667,7 @@ def load_config(cli_args):
             and not cfg["attention_write"]["enabled"]
             and not cfg["qk_preprojection"]["enabled"]
             and not cfg["rotary_clock"]["enabled"]
+            and not cfg["position_gain"]["enabled"]
         )
         else "custom"
     )
@@ -666,6 +700,7 @@ def load_config(cli_args):
         or cfg["attention_write"]["enabled"]
         or cfg["qk_preprojection"]["enabled"]
         or cfg["rotary_clock"]["enabled"]
+        or cfg["position_gain"]["enabled"]
     ):
         rel_extent = cfg["rel_extent"] or cfg["model_position_extent"]
         variant_tag = f"{variant_tag}-e{rel_extent}"
@@ -788,6 +823,7 @@ def make_model(args, vocab_size):
         rope_frequency_config=args.rope_frequency,
         qk_preprojection_config=args.qk_preprojection,
         rotary_clock_config=args.rotary_clock,
+        position_gain_config=args.position_gain,
         qk_norm=args.qk_norm,
         post_position_qk_norm=args.post_position_qk_norm,
         qk_norm_mode=args.qk_norm_mode,
@@ -815,6 +851,7 @@ POSITION_DECAY_EXEMPT = (
     "carrier_hypernetwork",
     "rope_frequency_controller",
     "rotary_clock",
+    "position_gain",
     "qk_preprojection",
     "rope_log_frequency_delta",
 )
@@ -1293,6 +1330,7 @@ def main():
             "rope_frequency": args.rope_frequency,
             "qk_preprojection": args.qk_preprojection,
             "rotary_clock": args.rotary_clock,
+            "position_gain": args.position_gain,
             "post_position_qk_norm": args.post_position_qk_norm,
             "exclude_position_from_decay": args.exclude_position_from_decay,
             "qk_norm_mode": args.qk_norm_mode,

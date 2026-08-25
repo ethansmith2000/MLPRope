@@ -11,10 +11,12 @@ from pathlib import Path
 import torch
 
 from position import (
+    PositionGain,
     QKPreprojectionPosition,
     RotaryClockController,
     build_rope_frequencies,
     normalize_qk_preprojection_config,
+    normalize_position_gain_config,
     normalize_rotary_clock_config,
 )
 from position.temporal import CausalControlMapper
@@ -256,6 +258,122 @@ class QKPreprojectionTest(unittest.TestCase):
         self.assertEqual(module.gate.item(), 0.25)
 
 
+class PositionGainTest(unittest.TestCase):
+    @staticmethod
+    def _config(target="both", **updates):
+        config = {
+            "enabled": True,
+            "target": target,
+            "basis_dim": 16,
+            "scalars": ["normalized_position", "log_position"],
+            "mapper": "linear",
+            "log_gain_bound": 0.7,
+        }
+        config.update(updates)
+        return normalize_position_gain_config(
+            config,
+            heads=3,
+            head_dim=8,
+            rope_theta=10_000.0,
+            normalization_extent=16,
+        )
+
+    def test_exact_unit_anchor_prefix_stability_and_bf16(self):
+        module = PositionGain(
+            self._config(),
+            heads=3,
+            head_dim=8,
+            extent=16,
+        )
+        short = module(6, dtype=torch.float32)
+        long = module(12, dtype=torch.float32)
+        torch.testing.assert_close(short.q, torch.ones_like(short.q), rtol=0, atol=0)
+        torch.testing.assert_close(short.k, torch.ones_like(short.k), rtol=0, atol=0)
+        torch.testing.assert_close(short.q, long.q[:, :, :6], rtol=0, atol=0)
+        torch.testing.assert_close(short.k, long.k[:, :, :6], rtol=0, atol=0)
+        module.to(dtype=torch.bfloat16)
+        bf16 = module(6, dtype=torch.bfloat16)
+        torch.testing.assert_close(
+            bf16.q,
+            torch.ones_like(bf16.q),
+            rtol=0,
+            atol=0,
+        )
+
+    def test_active_readouts_learn_and_inactive_branch_has_no_parameters(self):
+        for target in ("q", "k", "both"):
+            module = PositionGain(
+                self._config(target),
+                heads=3,
+                head_dim=8,
+                extent=16,
+            )
+            output = module(7, dtype=torch.float32)
+            (output.q.sum() + output.k.sum()).backward()
+            if target in {"q", "both"}:
+                self.assertIsNotNone(module.q_readout.weight.grad)
+                self.assertGreater(module.q_readout.weight.grad.abs().sum().item(), 0)
+            else:
+                self.assertIsNone(module.q_readout)
+                torch.testing.assert_close(output.q, torch.ones_like(output.q))
+            if target in {"k", "both"}:
+                self.assertIsNotNone(module.k_readout.weight.grad)
+                self.assertGreater(module.k_readout.weight.grad.abs().sum().item(), 0)
+            else:
+                self.assertIsNone(module.k_readout)
+                torch.testing.assert_close(output.k, torch.ones_like(output.k))
+
+    def test_q_gain_scales_rows_and_k_gain_scales_key_columns(self):
+        torch.manual_seed(9)
+        q = torch.randn(2, 3, 6, 8)
+        k = torch.randn(2, 3, 6, 8)
+        baseline = torch.einsum("bhid,bhjd->bhij", q, k)
+        for target in ("q", "k"):
+            module = PositionGain(
+                self._config(target),
+                heads=3,
+                head_dim=8,
+                extent=16,
+            )
+            readout = module.q_readout if target == "q" else module.k_readout
+            torch.nn.init.normal_(readout.weight, std=0.2)
+            gains = module(6, dtype=q.dtype)
+            actual = torch.einsum(
+                "bhid,bhjd->bhij",
+                q * gains.q,
+                k * gains.k,
+            )
+            expected = (
+                baseline * gains.q.squeeze(-1)[..., :, None]
+                if target == "q"
+                else baseline * gains.k.squeeze(-1)[..., None, :]
+            )
+            torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-6)
+            active = gains.q if target == "q" else gains.k
+            self.assertGreaterEqual(active.min().item(), torch.exp(torch.tensor(-0.7)).item())
+            self.assertLessEqual(active.max().item(), torch.exp(torch.tensor(0.7)).item())
+
+    def test_invalid_config_fails_early(self):
+        with self.assertRaisesRegex(ValueError, "target"):
+            self._config("neither")
+        with self.assertRaisesRegex(ValueError, "finite and positive"):
+            self._config(log_gain_bound=0.0)
+
+    def test_state_dict_round_trip_preserves_nontrivial_gains(self):
+        torch.manual_seed(12)
+        config = self._config("both")
+        source = PositionGain(config, heads=3, head_dim=8, extent=16)
+        torch.nn.init.normal_(source.q_readout.weight, std=0.2)
+        torch.nn.init.normal_(source.k_readout.weight, std=0.2)
+        expected = source(11, dtype=torch.float32)
+
+        restored = PositionGain(config, heads=3, head_dim=8, extent=16)
+        restored.load_state_dict(source.state_dict())
+        actual = restored(11, dtype=torch.float32)
+        torch.testing.assert_close(actual.q, expected.q)
+        torch.testing.assert_close(actual.k, expected.k)
+
+
 class IntegratedDynamicPositionTest(unittest.TestCase):
     @staticmethod
     def _model(**updates):
@@ -294,6 +412,29 @@ class IntegratedDynamicPositionTest(unittest.TestCase):
         self.assertGreater(counts["rotary_clock_params"], 0)
         self.assertEqual(counts["qk_preprojection_params"], 0)
 
+    def test_zero_position_gain_matches_fixed_rope_model(self):
+        baseline = self._model().eval()
+        candidate = self._model(
+            position_gain_config={
+                "enabled": True,
+                "target": "both",
+                "basis_dim": 16,
+                "mapper": "linear",
+                "log_gain_bound": 1.0,
+            }
+        ).eval()
+        candidate.load_state_dict(baseline.state_dict(), strict=False)
+        input_ids = torch.randint(0, 32, (2, 10))
+        torch.testing.assert_close(
+            candidate(input_ids),
+            baseline(input_ids),
+            rtol=0,
+            atol=0,
+        )
+        counts = count_parameters(candidate)
+        self.assertGreater(counts["position_gain_params"], 0)
+        self.assertEqual(counts["qk_position_params"], 0)
+
     def test_clock_attention_has_no_future_content_leakage(self):
         attention = Attention(
             12,
@@ -326,6 +467,16 @@ class IntegratedDynamicPositionTest(unittest.TestCase):
                 qk_preprojection_config={"enabled": True},
                 rotary_clock_config={"enabled": True},
             )
+        with self.assertRaisesRegex(ValueError, "isolated first-stage"):
+            self._model(
+                position_gain_config={"enabled": True},
+                rotary_clock_config={"enabled": True},
+            )
+        with self.assertRaisesRegex(ValueError, "erase scalar position gains"):
+            self._model(
+                position_gain_config={"enabled": True},
+                post_position_qk_norm=True,
+            )
 
     def test_derived_custom_config_round_trips(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -347,6 +498,27 @@ class IntegratedDynamicPositionTest(unittest.TestCase):
             self.assertEqual(restored.pos_variant, "custom")
             self.assertEqual(restored.qk_preprojection, first.qk_preprojection)
             self.assertEqual(restored.run_name, first.run_name)
+
+            gain_path = Path(directory) / "gain.json"
+            gain_path.write_text(
+                json.dumps(
+                    {
+                        "position_gain": {
+                            "enabled": True,
+                            "target": "q",
+                            "basis_dim": 16,
+                            "log_gain_bound": 0.7,
+                        }
+                    }
+                )
+            )
+            gain = load_config(_cli(str(gain_path)))
+            self.assertEqual(gain.pos_variant, "custom")
+            saved_gain_path = Path(directory) / "gain_training_config.json"
+            saved_gain_path.write_text(json.dumps(vars(gain)))
+            restored_gain = load_config(_cli(str(saved_gain_path)))
+            self.assertEqual(restored_gain.position_gain, gain.position_gain)
+            self.assertEqual(restored_gain.run_name, gain.run_name)
 
 
 if __name__ == "__main__":
