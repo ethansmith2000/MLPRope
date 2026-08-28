@@ -7,7 +7,11 @@ CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase26_position_breadth"
 OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase26_breadth"
 PREFLIGHT_OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase26_preflight"
 LOG_DIR="${SCRIPT_DIR}/logs/phase26_position_breadth"
-SNAPSHOT_DIR="${LOG_DIR}/source_snapshot"
+# The original snapshot and r2 are retained as failed TorchInductor SplitScan
+# attempts.  r3 uses an explicit compile-friendly associative prefix scan and
+# carries a length-1024 regression smoke.
+SNAPSHOT_REVISION="${SNAPSHOT_REVISION:-r3}"
+SNAPSHOT_DIR="${LOG_DIR}/source_snapshot_${SNAPSHOT_REVISION}"
 PYTHON_BIN="${PYTHON_BIN:-/venv/main/bin/python}"
 GPU_CLAIM_BIN="${GPU_CLAIM_BIN:-$(command -v gpu-claim || true)}"
 OWNER="${OWNER:-mlprope}"
@@ -74,7 +78,8 @@ if [[ "${SKIP_CUDA_SMOKE}" != "true" ]]; then
   smoke_log="${LOG_DIR}/position-dynamics-cuda-smoke.log"
   echo "CUDA_SMOKE_QUEUE $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   "${GPU_CLAIM_BIN}" run --owner "${OWNER}" \
-    --job "phase26-position-dynamics-smoke" --gpu "${GPU_SELECTOR}" --wait -- \
+    --job "phase26-${SNAPSHOT_REVISION}-position-dynamics-smoke" \
+    --gpu "${GPU_SELECTOR}" --wait -- \
     "${PYTHON_BIN}" -u "${SNAPSHOT_DIR}/scripts/position_dynamics_cuda_smoke.py" \
     >>"${smoke_log}" 2>&1
   echo "CUDA_SMOKE_DONE $(date -u +%Y-%m-%dT%H:%M:%SZ)"

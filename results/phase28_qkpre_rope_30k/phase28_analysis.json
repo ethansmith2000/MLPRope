@@ -1,0 +1,278 @@
+{
+  "arm_isolation_verified": true,
+  "arms": {
+    "qkpre-rope": {
+      "development_curve_by_seed": {
+        "123": {
+          "10000": 3.9278547954559326,
+          "15000": 3.7891792106628417,
+          "20000": 3.6874491786956787,
+          "25000": 3.626697454452515,
+          "30000": 3.5808188629150393,
+          "5000": 4.2432663631439205
+        },
+        "456": {
+          "10000": 3.9291179943084718,
+          "15000": 3.7955732917785645,
+          "20000": 3.6879462718963625,
+          "25000": 3.621733293533325,
+          "30000": 3.5759368705749512,
+          "5000": 4.214505939483643
+        },
+        "789": {
+          "10000": 3.9385808658599855,
+          "15000": 3.792488145828247,
+          "20000": 3.698107213973999,
+          "25000": 3.6283212184906004,
+          "30000": 3.5849272346496583,
+          "5000": 4.23595085144043
+        }
+      },
+      "loss_by_seed": {
+        "123": 3.7207631517667323,
+        "456": 3.716620285762474,
+        "789": 3.719239294528961
+      },
+      "mean_loss_across_seeds": 3.718874244019389,
+      "mechanism_health_by_seed": {
+        "123": {
+          "gate": {
+            "layer_max": 0.8108708262443542,
+            "layer_mean": 0.4907288998365402,
+            "layer_min": 0.28609055280685425
+          },
+          "input_rms": {
+            "layer_max": 0.5733722448348999,
+            "layer_mean": 0.34699773229658604,
+            "layer_min": 0.20229656994342804
+          },
+          "projected_k_rms": {
+            "layer_max": 3.186472177505493,
+            "layer_mean": 1.7949778884649277,
+            "layer_min": 0.8491478562355042
+          },
+          "projected_q_rms": {
+            "layer_max": 2.6946499347686768,
+            "layer_mean": 1.5201355442404747,
+            "layer_min": 0.8111209273338318
+          }
+        },
+        "456": {
+          "gate": {
+            "layer_max": 0.7974711060523987,
+            "layer_mean": 0.49944938719272614,
+            "layer_min": 0.257671058177948
+          },
+          "input_rms": {
+            "layer_max": 0.5638972520828247,
+            "layer_mean": 0.3531640563160181,
+            "layer_min": 0.18220095336437225
+          },
+          "projected_k_rms": {
+            "layer_max": 3.05153751373291,
+            "layer_mean": 1.751195304095745,
+            "layer_min": 0.5796390175819397
+          },
+          "projected_q_rms": {
+            "layer_max": 2.5964274406433105,
+            "layer_mean": 1.4988362565636635,
+            "layer_min": 0.8170604109764099
+          }
+        },
+        "789": {
+          "gate": {
+            "layer_max": 0.8245561122894287,
+            "layer_mean": 0.5144323222339153,
+            "layer_min": 0.2689695358276367
+          },
+          "input_rms": {
+            "layer_max": 0.5830492377281189,
+            "layer_mean": 0.36375858448445797,
+            "layer_min": 0.19019019603729248
+          },
+          "projected_k_rms": {
+            "layer_max": 3.181999444961548,
+            "layer_mean": 1.8542354255914688,
+            "layer_min": 0.8494895696640015
+          },
+          "projected_q_rms": {
+            "layer_max": 2.702876567840576,
+            "layer_mean": 1.5587044432759285,
+            "layer_min": 0.9170857667922974
+          }
+        }
+      },
+      "median_target_tokens_per_second": 192506.80237339865,
+      "target_tokens_per_second_by_seed": {
+        "123": 192568.9191174393,
+        "456": 192506.80237339865,
+        "789": 191503.5574314772
+      }
+    },
+    "rope-fixed": {
+      "development_curve_by_seed": {
+        "123": {
+          "10000": 4.000530948638916,
+          "15000": 3.86185827255249,
+          "20000": 3.759067258834839,
+          "25000": 3.690974464416504,
+          "30000": 3.6462894821166993,
+          "5000": 4.317818746566773
+        },
+        "456": {
+          "10000": 3.9766656875610353,
+          "15000": 3.8329407215118407,
+          "20000": 3.731294469833374,
+          "25000": 3.6647832775115967,
+          "30000": 3.6217846393585207,
+          "5000": 4.264781579971314
+        },
+        "789": {
+          "10000": 4.01742751121521,
+          "15000": 3.874240503311157,
+          "20000": 3.776360607147217,
+          "25000": 3.6996335983276367,
+          "30000": 3.6561254501342773,
+          "5000": 4.3193748092651365
+        }
+      },
+      "loss_by_seed": {
+        "123": 3.794251908082515,
+        "456": 3.760048412717879,
+        "789": 3.7980271477717906
+      },
+      "mean_loss_across_seeds": 3.7841091561907283,
+      "mechanism_health_by_seed": {
+        "123": {},
+        "456": {},
+        "789": {}
+      },
+      "median_target_tokens_per_second": 192713.61532793372,
+      "target_tokens_per_second_by_seed": {
+        "123": 192713.61532793372,
+        "456": 193575.63214418516,
+        "789": 192214.051336293
+      }
+    }
+  },
+  "caveat": "Paired-example confidence intervals quantify holdout precision within a seed; dispersion and sign agreement across seeds are the replication evidence.",
+  "contrast": {
+    "candidate": "qkpre-rope",
+    "candidate_wins_all_seeds": true,
+    "clears_30k_materiality_gate": true,
+    "mean_delta_across_seeds": -0.06523491217133899,
+    "negative_favors_candidate": true,
+    "reference": "rope-fixed",
+    "seed_delta_std": 0.01907018663125695,
+    "seed_results": [
+      {
+        "candidate_loss": 3.7207631517667323,
+        "delta_candidate_minus_reference": -0.07348875631578267,
+        "num_paired_examples": 1024,
+        "paired_example_ci95": [
+          -0.07525917367722847,
+          -0.07171833895433687
+        ],
+        "reference_loss": 3.794251908082515,
+        "seed": 123
+      },
+      {
+        "candidate_loss": 3.716620285762474,
+        "delta_candidate_minus_reference": -0.04342812695540488,
+        "num_paired_examples": 1024,
+        "paired_example_ci95": [
+          -0.04497685458785027,
+          -0.04187939932295948
+        ],
+        "reference_loss": 3.760048412717879,
+        "seed": 456
+      },
+      {
+        "candidate_loss": 3.719239294528961,
+        "delta_candidate_minus_reference": -0.07878785324282944,
+        "num_paired_examples": 1024,
+        "paired_example_ci95": [
+          -0.08078815993225315,
+          -0.07678754655340574
+        ],
+        "reference_loss": 3.7980271477717906,
+        "seed": 789
+      }
+    ]
+  },
+  "development_curve_delta": {
+    "10000": {
+      "candidate_wins_all_seeds": true,
+      "delta_by_seed": {
+        "123": -0.0726761531829836,
+        "456": -0.04754769325256358,
+        "789": -0.07884664535522479
+      },
+      "mean_delta_across_seeds": -0.06635683059692399
+    },
+    "15000": {
+      "candidate_wins_all_seeds": true,
+      "delta_by_seed": {
+        "123": -0.07267906188964846,
+        "456": -0.037367429733276225,
+        "789": -0.08175235748291021
+      },
+      "mean_delta_across_seeds": -0.06393294970194496
+    },
+    "20000": {
+      "candidate_wins_all_seeds": true,
+      "delta_by_seed": {
+        "123": -0.07161808013916016,
+        "456": -0.04334819793701161,
+        "789": -0.07825339317321767
+      },
+      "mean_delta_across_seeds": -0.06440655708312981
+    },
+    "25000": {
+      "candidate_wins_all_seeds": true,
+      "delta_by_seed": {
+        "123": -0.06427700996398933,
+        "456": -0.043049983978271644,
+        "789": -0.07131237983703631
+      },
+      "mean_delta_across_seeds": -0.05954645792643243
+    },
+    "30000": {
+      "candidate_wins_all_seeds": true,
+      "delta_by_seed": {
+        "123": -0.06547061920166009,
+        "456": -0.04584776878356944,
+        "789": -0.07119821548461891
+      },
+      "mean_delta_across_seeds": -0.060838867823282815
+    },
+    "5000": {
+      "candidate_wins_all_seeds": true,
+      "delta_by_seed": {
+        "123": -0.07455238342285231,
+        "456": -0.05027564048767097,
+        "789": -0.08342395782470646
+      },
+      "mean_delta_across_seeds": -0.06941732724507658
+    }
+  },
+  "final_holdout_examples_per_seed": 1024,
+  "final_holdout_start_batch": 2048,
+  "primary_context": 1024,
+  "protocol": {
+    "qkpre-rope": {
+      "fingerprint": "9a8ed53a97ee95a3ec771a20f94c65df921d86b338739ba4bf14f3eb898f1edc",
+      "matches_across_seeds": true
+    },
+    "rope-fixed": {
+      "fingerprint": "3556db2cf59da021f7fa8b6ce34061b034a9021da7df98fc921704a0615d708f",
+      "matches_across_seeds": true
+    }
+  },
+  "scope": "three_seed_qkpre_rope_30k_promotion",
+  "seeds": [
+    123,
+    456,
+    789
+  ]
+}

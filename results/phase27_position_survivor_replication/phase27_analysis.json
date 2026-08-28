@@ -1,0 +1,387 @@
+{
+  "arms": {
+    "posgain-qk": {
+      "loss_by_seed": {
+        "123": 4.560986852273345,
+        "456": 4.534076517447829,
+        "789": 4.56824498064816
+      },
+      "mean_loss_across_seeds": 4.554436116789778,
+      "mechanism_health_by_seed": {
+        "123": {
+          "position_gain": {
+            "k_gain_max": {
+              "layer_max": 2.4224319458007812,
+              "layer_mean": 2.004631072282791,
+              "layer_min": 1.667030692100525
+            },
+            "k_gain_min": {
+              "layer_max": 0.963765561580658,
+              "layer_mean": 0.6966656595468521,
+              "layer_min": 0.3852911591529846
+            },
+            "k_near_bound_fraction": {
+              "layer_max": 0.000244140625,
+              "layer_mean": 3.0517578125e-05,
+              "layer_min": 0.0
+            },
+            "q_gain_max": {
+              "layer_max": 1.89506995677948,
+              "layer_mean": 1.5317263901233673,
+              "layer_min": 1.3351813554763794
+            },
+            "q_gain_min": {
+              "layer_max": 0.978854238986969,
+              "layer_mean": 0.6978117190301418,
+              "layer_min": 0.37232714891433716
+            },
+            "q_near_bound_fraction": {
+              "layer_max": 0.1280517578125,
+              "layer_mean": 0.0160064697265625,
+              "layer_min": 0.0
+            }
+          }
+        },
+        "456": {
+          "position_gain": {
+            "k_gain_max": {
+              "layer_max": 2.2756054401397705,
+              "layer_mean": 1.9048041552305222,
+              "layer_min": 1.675279140472412
+            },
+            "k_gain_min": {
+              "layer_max": 0.9872276186943054,
+              "layer_mean": 0.7114384360611439,
+              "layer_min": 0.3813018202781677
+            },
+            "k_near_bound_fraction": {
+              "layer_max": 0.00146484375,
+              "layer_mean": 0.00018310546875,
+              "layer_min": 0.0
+            },
+            "q_gain_max": {
+              "layer_max": 2.0269689559936523,
+              "layer_mean": 1.5519099235534668,
+              "layer_min": 1.1626955270767212
+            },
+            "q_gain_min": {
+              "layer_max": 1.0381906032562256,
+              "layer_mean": 0.7449296601116657,
+              "layer_min": 0.37306734919548035
+            },
+            "q_near_bound_fraction": {
+              "layer_max": 0.0762939453125,
+              "layer_mean": 0.0095977783203125,
+              "layer_min": 0.0
+            }
+          }
+        },
+        "789": {
+          "position_gain": {
+            "k_gain_max": {
+              "layer_max": 2.2862510681152344,
+              "layer_mean": 1.9394117891788483,
+              "layer_min": 1.6661099195480347
+            },
+            "k_gain_min": {
+              "layer_max": 1.0410525798797607,
+              "layer_mean": 0.686788760125637,
+              "layer_min": 0.3882741630077362
+            },
+            "k_near_bound_fraction": {
+              "layer_max": 0.0,
+              "layer_mean": 0.0,
+              "layer_min": 0.0
+            },
+            "q_gain_max": {
+              "layer_max": 1.9056645631790161,
+              "layer_mean": 1.503480538725853,
+              "layer_min": 1.202906608581543
+            },
+            "q_gain_min": {
+              "layer_max": 1.0234029293060303,
+              "layer_mean": 0.6937868781387806,
+              "layer_min": 0.3704287111759186
+            },
+            "q_near_bound_fraction": {
+              "layer_max": 0.1243896484375,
+              "layer_mean": 0.0155487060546875,
+              "layer_min": 0.0
+            }
+          }
+        }
+      },
+      "median_target_tokens_per_second": 180293.4887926046,
+      "target_tokens_per_second_by_seed": {
+        "123": 180293.4887926046,
+        "456": 177224.71188281567,
+        "789": 180430.09959258034
+      }
+    },
+    "qkpre-rope": {
+      "loss_by_seed": {
+        "123": 4.516569352708757,
+        "456": 4.491121822968125,
+        "789": 4.520894884131849
+      },
+      "mean_loss_across_seeds": 4.50952868660291,
+      "mechanism_health_by_seed": {
+        "123": {
+          "qk_preprojection": {
+            "gate": {
+              "layer_max": 1.0443369150161743,
+              "layer_mean": 0.8384251594543457,
+              "layer_min": 0.7030894160270691
+            },
+            "input_rms": {
+              "layer_max": 0.7384577393531799,
+              "layer_mean": 0.5928561128675938,
+              "layer_min": 0.49715927243232727
+            },
+            "projected_k_rms": {
+              "layer_max": 2.279005527496338,
+              "layer_mean": 1.55978125333786,
+              "layer_min": 1.0329190492630005
+            },
+            "projected_q_rms": {
+              "layer_max": 1.7107884883880615,
+              "layer_mean": 1.3038674741983414,
+              "layer_min": 0.9853775501251221
+            }
+          }
+        },
+        "456": {
+          "qk_preprojection": {
+            "gate": {
+              "layer_max": 1.0531039237976074,
+              "layer_mean": 0.8524215072393417,
+              "layer_min": 0.654834508895874
+            },
+            "input_rms": {
+              "layer_max": 0.7446569204330444,
+              "layer_mean": 0.6027530282735825,
+              "layer_min": 0.46303790807724
+            },
+            "projected_k_rms": {
+              "layer_max": 2.3035621643066406,
+              "layer_mean": 1.561392918229103,
+              "layer_min": 0.7361582517623901
+            },
+            "projected_q_rms": {
+              "layer_max": 1.7333416938781738,
+              "layer_mean": 1.3272170200943947,
+              "layer_min": 0.8368539214134216
+            }
+          }
+        },
+        "789": {
+          "qk_preprojection": {
+            "gate": {
+              "layer_max": 1.0520658493041992,
+              "layer_mean": 0.8514404296875,
+              "layer_min": 0.6753000020980835
+            },
+            "input_rms": {
+              "layer_max": 0.7439228892326355,
+              "layer_mean": 0.6020593047142029,
+              "layer_min": 0.47750920057296753
+            },
+            "projected_k_rms": {
+              "layer_max": 2.2587578296661377,
+              "layer_mean": 1.5813761055469513,
+              "layer_min": 1.0581564903259277
+            },
+            "projected_q_rms": {
+              "layer_max": 1.6987361907958984,
+              "layer_mean": 1.3199381679296494,
+              "layer_min": 0.9314039945602417
+            }
+          }
+        }
+      },
+      "median_target_tokens_per_second": 185365.13267369135,
+      "target_tokens_per_second_by_seed": {
+        "123": 185365.13267369135,
+        "456": 184644.93513931532,
+        "789": 186371.43505149896
+      }
+    },
+    "rope-fixed": {
+      "loss_by_seed": {
+        "123": 4.598099917173386,
+        "456": 4.550260059535503,
+        "789": 4.587592080235481
+      },
+      "mean_loss_across_seeds": 4.578650685648124,
+      "mechanism_health_by_seed": {
+        "123": {},
+        "456": {},
+        "789": {}
+      },
+      "median_target_tokens_per_second": 187325.56134343945,
+      "target_tokens_per_second_by_seed": {
+        "123": 180612.6650902609,
+        "456": 187736.05634355487,
+        "789": 187325.56134343945
+      }
+    }
+  },
+  "caveat": "Paired-example confidence intervals quantify holdout precision within a seed; seed delta dispersion is the replication evidence.",
+  "contrasts": {
+    "posgain-qk_vs_rope-fixed": {
+      "candidate": "posgain-qk",
+      "candidate_wins_all_seeds": true,
+      "clears_replication_gate": true,
+      "mean_delta_across_seeds": -0.02421456885834535,
+      "negative_favors_candidate": true,
+      "reference": "rope-fixed",
+      "seed_delta_std": 0.011281862617343598,
+      "seed_results": [
+        {
+          "candidate_loss": 4.560986852273345,
+          "delta_candidate_minus_reference": -0.037113064900040627,
+          "num_paired_examples": 256,
+          "paired_example_ci95": [
+            -0.040490584203265706,
+            -0.03373554559681555
+          ],
+          "reference_loss": 4.598099917173386,
+          "seed": 123
+        },
+        {
+          "candidate_loss": 4.534076517447829,
+          "delta_candidate_minus_reference": -0.01618354208767414,
+          "num_paired_examples": 256,
+          "paired_example_ci95": [
+            -0.01846999161732324,
+            -0.013897092558025044
+          ],
+          "reference_loss": 4.550260059535503,
+          "seed": 456
+        },
+        {
+          "candidate_loss": 4.56824498064816,
+          "delta_candidate_minus_reference": -0.01934709958732128,
+          "num_paired_examples": 256,
+          "paired_example_ci95": [
+            -0.02190132477588623,
+            -0.016792874398756333
+          ],
+          "reference_loss": 4.587592080235481,
+          "seed": 789
+        }
+      ]
+    },
+    "qkpre-rope_vs_posgain-qk": {
+      "candidate": "qkpre-rope",
+      "candidate_wins_all_seeds": true,
+      "clears_replication_gate": true,
+      "mean_delta_across_seeds": -0.044907430186867714,
+      "negative_favors_candidate": true,
+      "reference": "posgain-qk",
+      "seed_delta_std": 0.0022382836676432044,
+      "seed_results": [
+        {
+          "candidate_loss": 4.516569352708757,
+          "delta_candidate_minus_reference": -0.04441749956458807,
+          "num_paired_examples": 256,
+          "paired_example_ci95": [
+            -0.04768855163294792,
+            -0.04114644749622822
+          ],
+          "reference_loss": 4.560986852273345,
+          "seed": 123
+        },
+        {
+          "candidate_loss": 4.491121822968125,
+          "delta_candidate_minus_reference": -0.0429546944797039,
+          "num_paired_examples": 256,
+          "paired_example_ci95": [
+            -0.045835197433621216,
+            -0.04007419152578659
+          ],
+          "reference_loss": 4.534076517447829,
+          "seed": 456
+        },
+        {
+          "candidate_loss": 4.520894884131849,
+          "delta_candidate_minus_reference": -0.04735009651631117,
+          "num_paired_examples": 256,
+          "paired_example_ci95": [
+            -0.05041434167433546,
+            -0.04428585135828688
+          ],
+          "reference_loss": 4.56824498064816,
+          "seed": 789
+        }
+      ]
+    },
+    "qkpre-rope_vs_rope-fixed": {
+      "candidate": "qkpre-rope",
+      "candidate_wins_all_seeds": true,
+      "clears_replication_gate": true,
+      "mean_delta_across_seeds": -0.06912199904521306,
+      "negative_favors_candidate": true,
+      "reference": "rope-fixed",
+      "seed_delta_std": 0.011391393204679617,
+      "seed_results": [
+        {
+          "candidate_loss": 4.516569352708757,
+          "delta_candidate_minus_reference": -0.0815305644646287,
+          "num_paired_examples": 256,
+          "paired_example_ci95": [
+            -0.08420984845019319,
+            -0.0788512804790642
+          ],
+          "reference_loss": 4.598099917173386,
+          "seed": 123
+        },
+        {
+          "candidate_loss": 4.491121822968125,
+          "delta_candidate_minus_reference": -0.059138236567378044,
+          "num_paired_examples": 256,
+          "paired_example_ci95": [
+            -0.06176746933333828,
+            -0.05650900380141781
+          ],
+          "reference_loss": 4.550260059535503,
+          "seed": 456
+        },
+        {
+          "candidate_loss": 4.520894884131849,
+          "delta_candidate_minus_reference": -0.06669719610363245,
+          "num_paired_examples": 256,
+          "paired_example_ci95": [
+            -0.06950106438881394,
+            -0.06389332781845096
+          ],
+          "reference_loss": 4.587592080235481,
+          "seed": 789
+        }
+      ]
+    }
+  },
+  "final_holdout_examples_per_seed": 256,
+  "final_holdout_start_batch": 2048,
+  "primary_context": 1024,
+  "protocol": {
+    "posgain-qk": {
+      "fingerprint": "11a1fa4c73385ee8a2a3e0cc34b3d0f4a03581bdb6d90313f9060c7e7b527d7d",
+      "matches_across_seeds": true
+    },
+    "qkpre-rope": {
+      "fingerprint": "1b33c2deb6419ce2ca1b005605aecdaeb46c3caf3d52aea109f025b282589c5a",
+      "matches_across_seeds": true
+    },
+    "rope-fixed": {
+      "fingerprint": "019d1702894157b7991ad28e153835260f668649f1bc26d1bd422f4390ac1e19",
+      "matches_across_seeds": true
+    }
+  },
+  "scope": "three_seed_survivor_replication",
+  "seeds": [
+    123,
+    456,
+    789
+  ]
+}

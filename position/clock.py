@@ -24,6 +24,30 @@ ROTARY_CLOCK_DEFAULTS = {
 }
 
 
+def _exclusive_associative_sum(values: torch.Tensor) -> torch.Tensor:
+    """Exclusive prefix sum using a compile-friendly parallel scan.
+
+    This is the Hillis--Steele associative scan specialized to addition.  It
+    takes ``ceil(log2(length))`` shift-add stages and avoids PyTorch
+    Inductor's ``SplitScan`` lowering, which is broken for the length-1024
+    CUDA shape used by this project.  The zero-clock anchor remains exact:
+    scanning an all-ones fp32 speed produces exactly representable integers.
+    """
+    if values.ndim != 3:
+        raise ValueError("clock scan expects [batch, sequence, groups]")
+    inclusive = values
+    offset = 1
+    length = values.shape[1]
+    while offset < length:
+        shifted = torch.nn.functional.pad(
+            inclusive[:, :-offset],
+            (0, 0, offset, 0),
+        )
+        inclusive = inclusive + shifted
+        offset *= 2
+    return inclusive - values
+
+
 def normalize_rotary_clock_config(config: dict | None) -> dict:
     if config is None:
         config = {}
@@ -145,7 +169,7 @@ class RotaryClockController(PreserveFP32BuffersMixin, torch.nn.Module):
         speed = self.speed(normalized_residual)
         # Exclusive cumsum: the content at token t controls the interval from t
         # to t+1.  This is causal and gives tau_t=t at the zero-output anchor.
-        clock = speed.cumsum(dim=1) - speed
+        clock = _exclusive_associative_sum(speed)
         return self._expand_heads(clock)
 
     def phase_delta(self, normalized_residual: torch.Tensor) -> torch.Tensor:
@@ -203,7 +227,7 @@ class RotaryClockController(PreserveFP32BuffersMixin, torch.nn.Module):
     def diagnostics(self, normalized_residual: torch.Tensor) -> dict[str, float]:
         raw = self.raw_output(normalized_residual).detach().float()
         speed = 1.0 + float(self.config["speed_bound"]) * raw.tanh()
-        clock = self._expand_heads(speed.cumsum(dim=1) - speed)
+        clock = self._expand_heads(_exclusive_associative_sum(speed))
         positions = torch.arange(
             clock.shape[1], device=clock.device, dtype=torch.float32
         )[None, :, None]

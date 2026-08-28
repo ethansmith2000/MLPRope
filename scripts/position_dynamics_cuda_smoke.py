@@ -12,6 +12,11 @@ REPO_DIR = Path(__file__).resolve().parents[1]
 if str(REPO_DIR) not in sys.path:
     sys.path.insert(0, str(REPO_DIR))
 
+from position import (
+    RotaryClockController,
+    build_rope_frequencies,
+    normalize_rotary_clock_config,
+)
 from transformer import Transformer
 
 
@@ -71,6 +76,34 @@ CASES = {
 }
 
 
+class LongCausalClockScan(torch.nn.Module):
+    """Regression fixture for the length-1024 compiled SplitScan path."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        config = normalize_rotary_clock_config(
+            {
+                "enabled": True,
+                "head_coupling": "per_head",
+                "mapper": "low_rank_silu",
+                "rank": 16,
+                "temporal": "causal_conv",
+                "kernel_size": 4,
+                "speed_bound": 0.2,
+            }
+        )
+        self.clock = RotaryClockController(
+            model_dim=64,
+            heads=8,
+            pair_dim=4,
+            inverse_frequency=build_rope_frequencies(8, 10_000.0),
+            config=config,
+        )
+
+    def forward(self, values: torch.Tensor) -> torch.Tensor:
+        return self.clock.phase_delta(values)
+
+
 def train_step(model: Transformer, input_ids: torch.Tensor) -> float:
     targets = input_ids.roll(-1, dims=1)
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
@@ -118,6 +151,20 @@ def main() -> None:
             rtol=0,
         )
     del baseline, gain_anchor
+
+    long_values = torch.randn(8, 1_024, 64, device=device, requires_grad=True)
+    long_clock = LongCausalClockScan().to(device).train()
+    compiled_long_clock = torch.compile(long_clock, mode="default", fullgraph=False)
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        long_phase = compiled_long_clock(long_values)
+        long_loss = long_phase.float().square().mean()
+    long_loss.backward()
+    long_gradient = long_clock.clock.controller.output.weight.grad
+    if long_gradient is None or not torch.isfinite(long_gradient).all():
+        raise RuntimeError("length-1024 causal clock scan produced a bad gradient")
+    print("rotary_clock_causal_conv_length1024: compiled forward/backward ok")
+    del compiled_long_clock, long_clock, long_values, long_phase, long_loss
+    torch.compiler.reset()
 
     for name, overrides in CASES.items():
         model = Transformer(**COMMON, **overrides).to(device).train()

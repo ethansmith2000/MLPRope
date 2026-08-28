@@ -20,6 +20,7 @@ from position import (
     normalize_rotary_clock_config,
 )
 from position.temporal import CausalControlMapper
+from position.clock import _exclusive_associative_sum
 from train_gpt import load_config
 from transformer import Attention, Transformer, count_parameters
 
@@ -116,6 +117,26 @@ class RotaryClockTest(unittest.TestCase):
             atol=0,
         )
         self.assertEqual(torch.count_nonzero(clock.phase_delta(values)).item(), 0)
+
+    def test_associative_scan_matches_prefix_sum_and_long_anchor(self):
+        torch.manual_seed(13)
+        for length in (1, 2, 3, 17, 1_024):
+            speed = 0.8 + 0.4 * torch.rand(2, length, 3)
+            expected = speed.cumsum(dim=1) - speed
+            torch.testing.assert_close(
+                _exclusive_associative_sum(speed),
+                expected,
+                atol=1e-4,
+                rtol=1e-6,
+            )
+        ones = torch.ones(2, 1_024, 3)
+        expected_anchor = torch.arange(1_024, dtype=torch.float32)[None, :, None]
+        torch.testing.assert_close(
+            _exclusive_associative_sum(ones),
+            expected_anchor.expand_as(ones),
+            atol=0,
+            rtol=0,
+        )
 
     def test_speed_is_bounded_monotone_and_spectrally_locked(self):
         torch.manual_seed(3)
