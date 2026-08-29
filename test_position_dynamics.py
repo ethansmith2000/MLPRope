@@ -499,6 +499,37 @@ class IntegratedDynamicPositionTest(unittest.TestCase):
                 post_position_qk_norm=True,
             )
 
+    def test_preprojection_combines_only_with_additive_qk_channel(self):
+        additive = {
+            "enabled": True,
+            "feature_map": "mlp",
+            "sharing": "per_head",
+            "apply": "add",
+            "rank": 4,
+            "mlp_hidden": 12,
+        }
+        combined = self._model(
+            qk_config=additive,
+            qk_preprojection_config={"enabled": True},
+        ).eval()
+        attention = combined.blocks[0].attn
+        self.assertIsNotNone(attention.qk_preprojection)
+        self.assertIsNotNone(attention.qk_position)
+        self.assertEqual(attention.qk_position.application, "additive")
+        self.assertFalse(attention.multiplicative_rope)
+        output = combined(torch.randint(0, 32, (2, 10)))
+        self.assertEqual(output.shape, (2, 10, 32))
+        counts = count_parameters(combined)
+        self.assertGreater(counts["qk_preprojection_params"], 0)
+        self.assertGreater(counts["qk_position_params"], 0)
+
+        rotary = dict(additive, apply="phase_residual")
+        with self.assertRaisesRegex(ValueError, "only be combined with an additive"):
+            self._model(
+                qk_config=rotary,
+                qk_preprojection_config={"enabled": True},
+            )
+
     def test_derived_custom_config_round_trips(self):
         with tempfile.TemporaryDirectory() as directory:
             first_path = Path(directory) / "first.json"

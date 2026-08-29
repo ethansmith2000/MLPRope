@@ -283,10 +283,14 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             extent=max_seq_len,
             rope_theta=rope_theta,
         )
-        if self.qk_preprojection_config["enabled"] and self.qk_position is not None:
+        if (
+            self.qk_preprojection_config["enabled"]
+            and self.qk_position is not None
+            and self.qk_position.application != "additive"
+        ):
             raise ValueError(
-                "qk_preprojection and qk position channels cannot be combined; "
-                "test one attention-local injection mechanism at a time"
+                "qk_preprojection can only be combined with an additive qk "
+                "position channel; rotary channels remain isolated"
             )
         self.qk_preprojection = (
             QKPreprojectionPosition(

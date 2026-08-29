@@ -592,9 +592,14 @@ def load_config(cli_args):
 
     cfg["qk"] = qk_config
     cfg["logit_bias"] = logit_config
-    if cfg["qk_preprojection"]["enabled"] and qk_config["enabled"]:
+    if (
+        cfg["qk_preprojection"]["enabled"]
+        and qk_config["enabled"]
+        and qk_config["application"] != "additive"
+    ):
         raise ValueError(
-            "qk_preprojection cannot be combined with an active qk position channel"
+            "qk_preprojection can only be combined with an additive qk "
+            "position channel; rotary channels remain isolated"
         )
     if cfg["rotary_clock"]["enabled"]:
         if not cfg["use_rope"]:

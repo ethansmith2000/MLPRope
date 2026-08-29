@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Claimed-GPU smoke for Q/K preprojection and rotary-clock training paths."""
+"""Claimed-GPU smoke for the active dynamic-position training paths."""
 
 from __future__ import annotations
 
@@ -48,6 +48,31 @@ CASES = {
     },
     "qk_preprojection": {
         "use_rope": False,
+        "qk_preprojection_config": {
+            "enabled": True,
+            "gate_init": 1.0,
+            "learnable_gate": True,
+        },
+    },
+    "addrope": {
+        "qk_config": {
+            "enabled": True,
+            "feature_map": "mlp",
+            "sharing": "per_head",
+            "apply": "add",
+            "rank": 16,
+            "mlp_hidden": 32,
+        },
+    },
+    "qk_preprojection_addrope": {
+        "qk_config": {
+            "enabled": True,
+            "feature_map": "mlp",
+            "sharing": "per_head",
+            "apply": "add",
+            "rank": 16,
+            "mlp_hidden": 32,
+        },
         "qk_preprojection_config": {
             "enabled": True,
             "gate_init": 1.0,
@@ -178,6 +203,25 @@ def main() -> None:
             gradient = model.blocks[0].attn.position_gain.q_readout.weight.grad
         elif name == "qk_preprojection":
             gradient = model.blocks[0].attn.qk_preprojection.gate.grad
+        elif name == "addrope":
+            gradients = [
+                parameter.grad
+                for parameter in model.blocks[0].attn.qk_position.parameters()
+                if parameter.requires_grad
+            ]
+            gradient = torch.cat(
+                [item.reshape(-1) for item in gradients if item is not None]
+            )
+        elif name == "qk_preprojection_addrope":
+            gradients = [model.blocks[0].attn.qk_preprojection.gate.grad]
+            gradients.extend(
+                parameter.grad
+                for parameter in model.blocks[0].attn.qk_position.parameters()
+                if parameter.requires_grad
+            )
+            gradient = torch.cat(
+                [item.reshape(-1) for item in gradients if item is not None]
+            )
         else:
             gradient = model.blocks[0].attn.rotary_clock.controller.output.weight.grad
         if gradient is None or not torch.isfinite(gradient).all():
