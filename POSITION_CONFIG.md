@@ -353,6 +353,9 @@ conditioning:
   input_mode: content      # content | position | content_position
   input_normalization: none # none | modality_rms
   learnable_input_gains: false
+  temporal: pointwise      # pointwise | ema (content-input carrier only)
+  ema_decay_init: 0.9
+  ema_decay_coupling: per_dim # scalar | per_head | per_dim
   network: linear          # linear | silu_mlp | swiglu_mlp
   components: phase        # see carrier component modes below
   head_coupling: per_head_independent # shared_head | per_head_independent
@@ -397,6 +400,16 @@ and `swiglu_mlp` networks are available. With
 scaled to unit RMS over their feature dimensions before concatenation.
 `learnable_input_gains=true` then applies one learned scalar per present
 modality, initialized to one; it is valid only with modality-wise RMS.
+
+For a content-input carrier, `temporal=ema` replaces the token-local content
+with a learned, bias-corrected causal exponential average before the carrier
+network. Bias correction makes a sequence that is constant from its first
+token remain constant, avoiding a startup-dependent absolute-position ramp.
+The decay can be one scalar per layer, one scalar per layer/head, or one scalar
+per layer/projected-content dimension. The per-head form requires
+`head_coupling=per_head_independent`; scalar and per-dimension forms scan the
+shared content projection once and expand it over heads afterward. All forms
+are prefix-causal and have an equivalent streaming recurrence.
 
 Every final projection weight and bias is zero-initialized. There is no output
 RMSNorm on the predicted deltas, because normalization would magnify a tiny

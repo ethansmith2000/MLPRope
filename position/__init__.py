@@ -67,7 +67,7 @@ from position.preprojection import (
     QKPreprojectionPosition,
     normalize_qk_preprojection_config,
 )
-from position.temporal import CausalControlMapper
+from position.temporal import CausalControlMapper, CausalEMA, CausalEMAState
 from position.rotary import (
     apply_rotary,
     build_rope_cache,
@@ -104,6 +104,8 @@ __all__ = [
     "PositionGainOutput",
     "QKPreprojectionPosition",
     "CausalControlMapper",
+    "CausalEMA",
+    "CausalEMAState",
     "adapt_legacy_position_state_dict",
     "apply_rotary",
     "build_attention_position_write_channel",

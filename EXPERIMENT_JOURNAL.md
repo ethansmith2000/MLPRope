@@ -3070,3 +3070,96 @@ temporal-controller boundary until a stable differentiable scan or custom
 kernel has parity, compile, and throughput evidence. The CPU suite is now 123
 passing tests plus one existing CUDA-only skip, including prefix-causality,
 exact-anchor, gradient, fp32-frequency, config, and streaming-state checks.
+
+## 2026-09-03 — Phases 26-30: attention-local survivors
+
+Phase 26 screened ten mechanisms at 5k steps, seed 123. The useful results were
+AddRoPE amplitude 1.0 (`-0.1673` versus RoPE), the pre-Q/K sinusoid followed by
+RoPE (`-0.0815`), and position-only Q/K gain (`-0.0371`). The pointwise and
+causal-convolution rotary clocks were only `-0.0043/-0.0047` and stayed inside
+the unresolved region. Pre-Q/K injection without RoPE greatly improved NoPE
+but remained worse than fixed RoPE (`4.6248` versus `4.5981`). This last
+comparison is too short to answer whether RoPE remains necessary.
+
+Phase 27 replicated pre-Q/K+RoPE and position gain across seeds 123/456/789 at
+5k. Their mean deltas versus fresh fixed RoPE were `-0.069122` and `-0.024215`,
+respectively, favorable in every seed. Position gain explains part, but not
+most, of the pre-Q/K advantage.
+
+Phase 28 promoted pre-Q/K+RoPE to 30k across all three seeds. It beat fixed
+RoPE by `-0.065235` mean held-out loss, with per-seed deltas
+`-0.073489/-0.043428/-0.078788`. The development gap remained favorable at
+every 5k checkpoint through 30k. Median throughput was effectively unchanged
+(`192,507` versus `192,714` tokens/s).
+
+Phases 29 and 30 tested the qk-preprojection x AddRoPE factorial at 5k and 15k,
+seed 123. The combination was worse than AddRoPE alone by `+0.020261` at 5k
+and `+0.004934` at 15k. The interaction was strongly sub-additive. The two
+mechanisms therefore appear to overlap, but the 15k endpoint is not a
+mature-model result.
+
+Durable reports and paired analyses live under `results/phase26_*` through
+`results/phase30_*`.
+
+## 2026-09-03 — Phases 31-32: EMA result and decision not to promote
+
+Phase 31 compared rotary clocks and AddRoPE content conditioning at 15k,
+seed 123. Pointwise and EMA rotary clocks were both null versus RoPE
+(`-0.000360/-0.000362`), and EMA changed the pointwise clock by only
+`-0.000001`. On AddRoPE, pointwise content improved over position-only by
+`-0.014836`, while per-dimension content EMA improved over pointwise by another
+`-0.011100`.
+
+Phase 32 isolated the EMA coefficient granularity. Scalar, per-head, and
+per-dimension EMA improved over the pointwise content controller by
+`-0.010626/-0.011146/-0.010853`. Differences among the EMA forms were under
+`0.0006` with intervals crossing zero. The learned scalar decays were about
+`0.856-0.895`, corresponding to effective windows of roughly 7-10 tokens.
+
+The scalar EMA retained nearly full throughput (`147,961` versus `152,866`
+tokens/s), while per-head EMA fell to `112,790` tokens/s and doubled peak
+memory. Using the local pointwise learning-curve slope to estimate equal
+wall-clock progress consumes almost the entire scalar-EMA loss gain: estimated
+iso-wall-clock delta is about `-0.0015`. This is an estimate, not a directly
+trained endpoint.
+
+Decision: EMA is a valid small step-matched result but is not promoted. It does
+not rescue rotary clocks, coefficient granularity adds nothing, and its likely
+compute-adjusted value does not justify expanding the recurrent-controller
+surface. Preserve the compact result reports, then remove EMA from the active
+runtime during repository consolidation.
+
+## 2026-09-03 — Long-horizon and repository consolidation decision
+
+The h768/d8 baseline has approximately 153.4M parameters. With batch 8 and
+context 1024, the 5k/15k/30k experiments consume only 41M/123M/246M tokens, or
+about 0.27/0.80/1.60 tokens per parameter. The completed results primarily
+measure early optimization. In particular, the question of whether a pre-Q/K
+sinusoid needs RoPE remains unresolved.
+
+The active next mechanism is a static constrained adapter applied only to the
+pre-Q/K positional carrier:
+
+```text
+A_i^q = a_i^q R(phi_i^q)
+A_i^k = a_i^k R(phi_i^k)
+q = W_q(x + A_q z(p))
+k = W_k(x + A_k z(p)).
+```
+
+The nested ladder is tied scalar, separate Q/K scalars, separate Q/K pairwise
+amplitudes, and separate pairwise amplitude+phase. All variants initialize to
+the current carrier at `a=1, phi=0`. A per-head axis is intentionally excluded
+because the intervention occurs before `W_q/W_k` create heads.
+
+The consolidation screen will use one paired seed, six arms, and a common
+200k-step learning-rate horizon from step zero. Milestones are
+10k/30k/60k/100k/150k/200k; only finalists receive other seeds. Short runs
+whose linear scheduler already reached zero cannot be resumed as equivalent
+prefixes of this protocol.
+
+Repository policy: keep fixed RoPE, AddRoPE, Fourier utilities, and the pre-Q/K
+carrier; remove learned/dynamic multiplicative RoPE, rotary phase special
+cases, clocks, EMA, retired residual/write channels, and the completed
+position-gain control from the active runtime after the Phase 29-32 state is
+committed. The exact plan is `CONSOLIDATION_PLAN.md`.

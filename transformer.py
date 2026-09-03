@@ -90,10 +90,12 @@ class PositionContentProjection(torch.nn.Module):
         content_dim: int,
         heads: int,
         coupling: str,
+        compact_heads: bool = False,
     ):
         super().__init__()
         self.heads = heads
         self.coupling = coupling
+        self.compact_heads = bool(compact_heads)
         self.q_projection = torch.nn.Linear(model_dim, content_dim, bias=False)
         self.k_projection = (
             self.q_projection
@@ -110,7 +112,17 @@ class PositionContentProjection(torch.nn.Module):
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         q_content = self._unit_rms(self.q_projection(x))
-        k_content = self._unit_rms(self.k_projection(x))
+        k_content = (
+            q_content
+            if self.coupling == "shared"
+            else self._unit_rms(self.k_projection(x))
+        )
+        if self.compact_heads:
+            q_grouped = q_content[:, None]
+            k_grouped = (
+                q_grouped if k_content is q_content else k_content[:, None]
+            )
+            return q_grouped, k_grouped
         return (
             q_content[:, None].expand(-1, self.heads, -1, -1).contiguous(),
             k_content[:, None].expand(-1, self.heads, -1, -1).contiguous(),
@@ -269,6 +281,10 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 self.position_content_config["dim"],
                 heads,
                 self.position_content_config["coupling"],
+                compact_heads=(
+                    qk_conditioning["kind"] == "carrier_hypernetwork"
+                    and qk_conditioning["temporal"] == "ema"
+                ),
             )
             if uses_dedicated_content
             else None

@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parent
 CONFIG_ROOT = ROOT / "sweep_configs" / "phase29_qkpre_addrope_factorial"
 OUTPUT_ROOT = ROOT / "model-output" / "position_bias_phase29_qkpre_addrope_factorial"
 RESULT_ROOT = ROOT / "results" / "phase29_qkpre_addrope_factorial"
+PHASE = 29
 SEED = 123
 STEPS = 5_000
 ARMS = ("rope-fixed", "qkpre-rope", "addrope-a10", "qkpre-addrope-a10")
@@ -26,18 +27,18 @@ CONTRASTS = (
 
 
 def run_dir(arm: str) -> Path:
-    return OUTPUT_ROOT / f"phase29-{arm}-seed{SEED}-s{STEPS}-h768d8"
+    return OUTPUT_ROOT / f"phase{PHASE}-{arm}-seed{SEED}-s{STEPS}-h768d8"
 
 
 def config_path(arm: str) -> Path:
-    return CONFIG_ROOT / f"phase29-{arm}-seed{SEED}-s{STEPS}-h768d8.json"
+    return CONFIG_ROOT / f"phase{PHASE}-{arm}-seed{SEED}-s{STEPS}-h768d8.json"
 
 
 def load_losses(arm: str) -> list[float]:
     path = (
         run_dir(arm)
         / "evaluation_details"
-        / "step_00005000_context_001024.json"
+        / f"step_{STEPS:08d}_context_001024.json"
     )
     payload = json.loads(path.read_text())
     if payload["evaluation_kind"] != "final_holdout":
@@ -214,7 +215,7 @@ def analyze() -> dict:
     single_best = min(("qkpre-rope", "addrope-a10"), key=lambda arm: arms[arm]["loss"])
     combo_vs_best = paired_summary(losses["qkpre-addrope-a10"], losses[single_best])
     return {
-        "scope": "paired_seed123_2x2_qkpre_addrope_screen",
+        "scope": f"phase{PHASE}_paired_seed123_2x2_qkpre_addrope_screen",
         "seed": SEED,
         "steps": STEPS,
         "primary_context": 1_024,
@@ -242,9 +243,10 @@ def render_markdown(results: dict) -> str:
         "qkpre-addrope-a10": "qkpre + AddRoPE a1.0",
     }
     lines = [
-        "# Phase-29 qkpre x AddRoPE factorial screen",
+        f"# Phase-{PHASE} qkpre x AddRoPE factorial screen",
         "",
-        "Paired seed 123, 5k steps, with a disjoint 256-example holdout.",
+        f"Paired seed {SEED}, {STEPS // 1_000}k steps, with a disjoint "
+        "256-example holdout.",
         "AddRoPE is the additive Q/K replacement for multiplicative RoPE; the",
         "combined cell adds qk-preprojection upstream of that additive channel.",
         "",
@@ -297,10 +299,10 @@ def main() -> None:
     results = analyze()
     rendered = render_markdown(results)
     RESULT_ROOT.mkdir(parents=True, exist_ok=True)
-    (RESULT_ROOT / "phase29_analysis.json").write_text(
+    (RESULT_ROOT / f"phase{PHASE}_analysis.json").write_text(
         json.dumps(results, indent=2, sort_keys=True) + "\n"
     )
-    (RESULT_ROOT / "PHASE29_RESULTS.md").write_text(rendered)
+    (RESULT_ROOT / f"PHASE{PHASE}_RESULTS.md").write_text(rendered)
     print(rendered)
 
 

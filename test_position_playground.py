@@ -52,6 +52,9 @@ def qk_config(
     conditioning_input_mode: str = "content",
     conditioning_input_normalization: str = "none",
     conditioning_learnable_input_gains: bool = False,
+    conditioning_temporal: str = "pointwise",
+    conditioning_ema_decay_init: float = 0.9,
+    conditioning_ema_decay_coupling: str = "per_dim",
     conditioning_network: str = "linear",
     conditioning_components: str = "phase",
     conditioning_head_coupling: str = "per_head_independent",
@@ -107,6 +110,9 @@ def qk_config(
                 "input_mode": conditioning_input_mode,
                 "input_normalization": conditioning_input_normalization,
                 "learnable_input_gains": conditioning_learnable_input_gains,
+                "temporal": conditioning_temporal,
+                "ema_decay_init": conditioning_ema_decay_init,
+                "ema_decay_coupling": conditioning_ema_decay_coupling,
                 "network": conditioning_network,
                 "components": conditioning_components,
                 "head_coupling": conditioning_head_coupling,
@@ -269,6 +275,151 @@ class GeometryAndContentTest(unittest.TestCase):
                         torch.count_nonzero(output.k_hyper_phase_delta).item(),
                         0,
                     )
+
+    def test_ema_carrier_is_prefix_causal_and_has_learned_decay(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            conditioning="carrier_hypernetwork",
+            conditioning_input_mode="content_position",
+            conditioning_network="silu_mlp",
+            conditioning_components="amplitude_phase",
+            conditioning_temporal="ema",
+            conditioning_ema_decay_init=0.85,
+            learn_amplitude=False,
+            learn_phase=False,
+            amplitude_init=1.0,
+        )
+        channel = self._channel(config)
+        hyper = channel.carrier_hypernetwork
+        torch.nn.init.normal_(hyper.q_readout.weight, std=0.1)
+        torch.nn.init.normal_(hyper.k_readout.weight, std=0.1)
+        content = torch.randn(2, 4, 11, 8, requires_grad=True)
+        altered = content.detach().clone()
+        altered[:, :, 6:] = torch.randn_like(altered[:, :, 6:])
+        original = channel(11, q_content=content, k_content=content)
+        changed = channel(11, q_content=altered, k_content=altered)
+        torch.testing.assert_close(original.q[:, :, :6], changed.q[:, :, :6])
+        torch.testing.assert_close(original.k[:, :, :6], changed.k[:, :, :6])
+        original.q.square().sum().backward()
+        self.assertGreater(hyper.content_ema.decay_logit.grad.abs().sum().item(), 0)
+        diagnostics = hyper.temporal_diagnostics()
+        self.assertAlmostEqual(diagnostics["ema_decay_mean"], 0.85, places=6)
+
+    def test_ema_decay_couplings_have_expected_parameter_axes(self):
+        expected = {
+            "scalar": ((1,), 1),
+            "per_head": ((4,), 4),
+            "per_dim": ((8,), 1),
+        }
+        for coupling, (parameter_shape, groups) in expected.items():
+            with self.subTest(coupling=coupling):
+                config = qk_config(
+                    "additive",
+                    "amplitude_phase",
+                    conditioning="carrier_hypernetwork",
+                    conditioning_input_mode="content_position",
+                    conditioning_network="silu_mlp",
+                    conditioning_components="amplitude_phase",
+                    conditioning_temporal="ema",
+                    conditioning_ema_decay_coupling=coupling,
+                    learn_amplitude=False,
+                    learn_phase=False,
+                    amplitude_init=1.0,
+                )
+                channel = self._channel(config)
+                ema = channel.carrier_hypernetwork.content_ema
+                self.assertEqual(tuple(ema.decay_logit.shape), parameter_shape)
+                self.assertEqual(ema.groups, groups)
+                content = torch.randn(2, 1, 11, 8, requires_grad=True)
+                altered = content.detach().clone()
+                altered[:, :, 6:] = torch.randn_like(altered[:, :, 6:])
+                original = channel(11, q_content=content, k_content=content)
+                changed = channel(11, q_content=altered, k_content=altered)
+                torch.testing.assert_close(
+                    original.q[:, :, :6],
+                    changed.q[:, :, :6],
+                )
+                torch.nn.init.normal_(
+                    channel.carrier_hypernetwork.q_readout.weight,
+                    std=0.1,
+                )
+                channel(
+                    11,
+                    q_content=content,
+                    k_content=content,
+                ).q.square().sum().backward()
+                self.assertGreater(ema.decay_logit.grad.abs().sum().item(), 0)
+
+    def test_compact_shared_ema_matches_repeated_head_inputs(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            conditioning="carrier_hypernetwork",
+            conditioning_input_mode="content_position",
+            conditioning_network="silu_mlp",
+            conditioning_components="amplitude_phase",
+            conditioning_temporal="ema",
+            learn_amplitude=False,
+            learn_phase=False,
+            amplitude_init=1.0,
+        )
+        channel = self._channel(config)
+        hyper = channel.carrier_hypernetwork
+        torch.nn.init.normal_(hyper.q_readout.weight, std=0.1)
+        torch.nn.init.normal_(hyper.k_readout.weight, std=0.1)
+        compact = torch.randn(2, 1, 11, 8)
+        repeated = compact.expand(-1, 4, -1, -1).contiguous()
+        optimized = channel(11, q_content=compact, k_content=compact)
+        reference = channel(11, q_content=repeated, k_content=repeated)
+        torch.testing.assert_close(optimized.q, reference.q)
+        torch.testing.assert_close(optimized.k, reference.k)
+
+        attention = Attention(
+            32,
+            4,
+            qk_config=config,
+            position_content_coupling="shared",
+            qk_norm_mode="method_aware_rms",
+            attn_impl="sdpa",
+        )
+        q_content, k_content = attention.position_content(
+            torch.randn(2, 11, 32)
+        )
+        self.assertEqual(
+            q_content.shape,
+            (2, 1, 11, attention.position_content_config["dim"]),
+        )
+        self.assertIs(q_content, k_content)
+
+    def test_ema_carrier_requires_content_input(self):
+        with self.assertRaisesRegex(ValueError, "content-input"):
+            qk_config(
+                "additive",
+                "amplitude_phase",
+                conditioning="carrier_hypernetwork",
+                conditioning_input_mode="position",
+                conditioning_temporal="ema",
+                conditioning_components="amplitude_phase",
+                learn_amplitude=False,
+                learn_phase=False,
+                amplitude_init=1.0,
+            )
+
+        with self.assertRaisesRegex(ValueError, "per-head EMA"):
+            qk_config(
+                "additive",
+                "amplitude_phase",
+                conditioning="carrier_hypernetwork",
+                conditioning_input_mode="content",
+                conditioning_head_coupling="shared_head",
+                conditioning_temporal="ema",
+                conditioning_ema_decay_coupling="per_head",
+                conditioning_components="amplitude_phase",
+                learn_amplitude=False,
+                learn_phase=False,
+                amplitude_init=1.0,
+            )
 
     def test_shared_carrier_hypernetwork_requires_shared_content(self):
         config = qk_config(

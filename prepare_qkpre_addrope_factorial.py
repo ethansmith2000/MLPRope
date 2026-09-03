@@ -30,8 +30,11 @@ ADDROPE_CONFIG = (
 )
 CONFIG_DIR = ROOT / "sweep_configs" / "phase29_qkpre_addrope_factorial"
 OUTPUT_ROOT = ROOT / "model-output" / "position_bias_phase29_qkpre_addrope_factorial"
+PHASE = 29
 SEED = 123
 STEPS = 5_000
+VALIDATE_EVERY = 5_000
+CHECKPOINTING_STEPS = 2_500
 ARMS = {
     "rope-fixed": (False, False),
     "qkpre-rope": (True, False),
@@ -44,7 +47,7 @@ def _write_locked(path: Path, payload: dict, *, force: bool) -> None:
     rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     if path.exists() and path.read_text() != rendered and not force:
         raise RuntimeError(
-            f"Refusing to change locked Phase-29 config {path}; pass --force "
+            f"Refusing to change locked Phase-{PHASE} config {path}; pass --force "
             "only for an intentional protocol revision."
         )
     path.write_text(rendered)
@@ -59,7 +62,7 @@ def build(*, force: bool = False) -> list[Path]:
     written = []
     for arm, (qkpre_enabled, addrope_enabled) in ARMS.items():
         cfg = copy.deepcopy(base)
-        run_name = f"phase29-{arm}-seed{SEED}-s{STEPS}-h768d8"
+        run_name = f"phase{PHASE}-{arm}-seed{SEED}-s{STEPS}-h768d8"
         cfg.update(
             {
                 "run_name": run_name,
@@ -69,14 +72,14 @@ def build(*, force: bool = False) -> list[Path]:
                 "max_train_steps": STEPS,
                 "model_position_extent": 1_024,
                 "evaluation_lengths": [1_024],
-                "validate_every": STEPS,
+                "validate_every": VALIDATE_EVERY,
                 "num_validation_batches": 25,
                 "validation_start_batch": 0,
                 "num_final_validation_batches": 256,
                 "final_validation_start_batch": 2_048,
                 "save_evaluation_details": True,
                 "save_final_model": True,
-                "checkpointing_steps": 2_500,
+                "checkpointing_steps": CHECKPOINTING_STEPS,
                 "resume_from_checkpoint": "auto",
                 "with_tracking": False,
                 "profile_every_n_steps": 0,
@@ -105,7 +108,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--force", action="store_true")
     paths = build(force=parser.parse_args().force)
-    print(f"locked {len(paths)} Phase-29 factorial configs under {CONFIG_DIR}")
+    print(f"locked {len(paths)} Phase-{PHASE} factorial configs under {CONFIG_DIR}")
 
 
 if __name__ == "__main__":

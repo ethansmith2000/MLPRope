@@ -1,0 +1,318 @@
+{
+  "arms": {
+    "addrope-a10": {
+      "loss": 3.9245746387168765,
+      "mechanism_health": {
+        "addrope": {
+          "addend_k_to_k_rms_ratio": {
+            "layer_max": 2.1200859546661377,
+            "layer_mean": 1.6141199991106987,
+            "layer_min": 0.9944397807121277
+          },
+          "addend_q_to_q_rms_ratio": {
+            "layer_max": 1.4696840047836304,
+            "layer_mean": 1.0873565003275871,
+            "layer_min": 0.7676287889480591
+          },
+          "final_k_rms": {
+            "layer_max": 1.3702468872070312,
+            "layer_mean": 1.2163822948932648,
+            "layer_min": 1.0432460308074951
+          },
+          "final_q_rms": {
+            "layer_max": 1.3625071048736572,
+            "layer_mean": 1.2009442746639252,
+            "layer_min": 1.0318517684936523
+          }
+        },
+        "qk_preprojection": {}
+      },
+      "target_tokens_per_second": 170158.66756965604
+    },
+    "qkpre-addrope-a10": {
+      "loss": 3.9295090176165104,
+      "mechanism_health": {
+        "addrope": {
+          "addend_k_to_k_rms_ratio": {
+            "layer_max": 2.2455835342407227,
+            "layer_mean": 1.5523772239685059,
+            "layer_min": 0.7128422260284424
+          },
+          "addend_q_to_q_rms_ratio": {
+            "layer_max": 1.4485455751419067,
+            "layer_mean": 0.9768495708703995,
+            "layer_min": 0.519966721534729
+          },
+          "final_k_rms": {
+            "layer_max": 1.3654093742370605,
+            "layer_mean": 1.1963640600442886,
+            "layer_min": 1.0447196960449219
+          },
+          "final_q_rms": {
+            "layer_max": 1.3589783906936646,
+            "layer_mean": 1.1879666596651077,
+            "layer_min": 1.0429670810699463
+          }
+        },
+        "qk_preprojection": {
+          "gate": {
+            "layer_max": 0.6429856419563293,
+            "layer_mean": 0.41763895377516747,
+            "layer_min": 0.24775686860084534
+          },
+          "input_rms": {
+            "layer_max": 0.45465952157974243,
+            "layer_mean": 0.29531534388661385,
+            "layer_min": 0.17519056797027588
+          },
+          "projected_k_rms": {
+            "layer_max": 1.375899314880371,
+            "layer_mean": 0.6792058162391186,
+            "layer_min": 0.353877991437912
+          },
+          "projected_q_rms": {
+            "layer_max": 1.097080945968628,
+            "layer_mean": 0.6608114428818226,
+            "layer_min": 0.3799301087856293
+          }
+        }
+      },
+      "target_tokens_per_second": 162226.01836677844
+    },
+    "qkpre-rope": {
+      "loss": 3.9456257559359074,
+      "mechanism_health": {
+        "addrope": {},
+        "qk_preprojection": {
+          "gate": {
+            "layer_max": 0.9548512101173401,
+            "layer_mean": 0.6210323385894299,
+            "layer_min": 0.413488507270813
+          },
+          "input_rms": {
+            "layer_max": 0.6751817464828491,
+            "layer_mean": 0.43913617730140686,
+            "layer_min": 0.29238054156303406
+          },
+          "projected_k_rms": {
+            "layer_max": 2.9992384910583496,
+            "layer_mean": 1.7491196170449257,
+            "layer_min": 0.9395354390144348
+          },
+          "projected_q_rms": {
+            "layer_max": 2.4002275466918945,
+            "layer_mean": 1.458168886601925,
+            "layer_min": 0.8986165523529053
+          }
+        }
+      },
+      "target_tokens_per_second": 183472.72353061585
+    },
+    "rope-fixed": {
+      "loss": 4.0229892916977406,
+      "mechanism_health": {
+        "addrope": {},
+        "qk_preprojection": {}
+      },
+      "target_tokens_per_second": 183961.49057958135
+    }
+  },
+  "best_single": "addrope-a10",
+  "caveat": "This is a one-seed architecture screen. Paired-example intervals measure holdout precision, not across-seed replication.",
+  "combo_is_best": false,
+  "combo_vs_best_single": {
+    "candidate_loss": 3.9295090176165104,
+    "delta_candidate_minus_reference": 0.004934378899633884,
+    "negative_favors_candidate": true,
+    "num_paired_examples": 256,
+    "paired_example_ci95": [
+      0.0024871984003835986,
+      0.00738155939888417
+    ],
+    "paired_example_std": 0.019976983667349273,
+    "reference_loss": 3.9245746387168765
+  },
+  "contrasts": {
+    "addrope-a10_vs_rope-fixed": {
+      "candidate_loss": 3.9245746387168765,
+      "delta_candidate_minus_reference": -0.09841465298086405,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.1039329616813529,
+        -0.0928963442803752
+      ],
+      "paired_example_std": 0.045047417963174276,
+      "reference_loss": 4.0229892916977406
+    },
+    "combo_vs_addrope-a10": {
+      "candidate_loss": 3.9295090176165104,
+      "delta_candidate_minus_reference": 0.004934378899633884,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        0.0024871984003835986,
+        0.00738155939888417
+      ],
+      "paired_example_std": 0.019976983667349273,
+      "reference_loss": 3.9245746387168765
+    },
+    "combo_vs_qkpre-rope": {
+      "candidate_loss": 3.9295090176165104,
+      "delta_candidate_minus_reference": -0.016116738319396973,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.020659320760198784,
+        -0.011574155878595161
+      ],
+      "paired_example_std": 0.037082305639198454,
+      "reference_loss": 3.9456257559359074
+    },
+    "qkpre-addrope-a10_vs_rope-fixed": {
+      "candidate_loss": 3.9295090176165104,
+      "delta_candidate_minus_reference": -0.09348027408123016,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.09874532672995438,
+        -0.08821522143250594
+      ],
+      "paired_example_std": 0.042980021622238566,
+      "reference_loss": 4.0229892916977406
+    },
+    "qkpre-rope_vs_rope-fixed": {
+      "candidate_loss": 3.9456257559359074,
+      "delta_candidate_minus_reference": -0.07736353576183319,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.08052842383241647,
+        -0.07419864769124991
+      ],
+      "paired_example_std": 0.025835820984353348,
+      "reference_loss": 4.0229892916977406
+    }
+  },
+  "factorial_isolation": {
+    "factor_blocks": {
+      "addrope-a10": {
+        "qk": {
+          "application": "additive",
+          "conditioning": {
+            "kind": "none"
+          },
+          "enabled": true,
+          "geometry": "amplitude_phase",
+          "head_coupling": "per_head_independent",
+          "input": {
+            "basis_dim": 16,
+            "kind": "frozen_fourier",
+            "scalars": [
+              "normalized_position",
+              "log_position"
+            ],
+            "theta": null
+          },
+          "mapper": {
+            "hidden_dim": 128,
+            "kind": "linear",
+            "rank": 32,
+            "residual": false
+          },
+          "output": {
+            "amplitude_init": 1.0,
+            "amplitude_parameterization": "signed",
+            "learn_amplitude": true,
+            "learn_phase": true,
+            "parameter_source": "mapped"
+          },
+          "qk_coupling": "shared_trunk_separate_readouts"
+        },
+        "qk_preprojection": {
+          "enabled": false
+        }
+      },
+      "qkpre-addrope-a10": {
+        "qk": {
+          "application": "additive",
+          "conditioning": {
+            "kind": "none"
+          },
+          "enabled": true,
+          "geometry": "amplitude_phase",
+          "head_coupling": "per_head_independent",
+          "input": {
+            "basis_dim": 16,
+            "kind": "frozen_fourier",
+            "scalars": [
+              "normalized_position",
+              "log_position"
+            ],
+            "theta": null
+          },
+          "mapper": {
+            "hidden_dim": 128,
+            "kind": "linear",
+            "rank": 32,
+            "residual": false
+          },
+          "output": {
+            "amplitude_init": 1.0,
+            "amplitude_parameterization": "signed",
+            "learn_amplitude": true,
+            "learn_phase": true,
+            "parameter_source": "mapped"
+          },
+          "qk_coupling": "shared_trunk_separate_readouts"
+        },
+        "qk_preprojection": {
+          "basis_dim": 768,
+          "enabled": true,
+          "gate_init": 1.0,
+          "learnable_gate": true,
+          "theta": null
+        }
+      },
+      "qkpre-rope": {
+        "qk": {
+          "enabled": false
+        },
+        "qk_preprojection": {
+          "basis_dim": 768,
+          "enabled": true,
+          "gate_init": 1.0,
+          "learnable_gate": true,
+          "theta": null
+        }
+      },
+      "rope-fixed": {
+        "qk": {
+          "enabled": false
+        },
+        "qk_preprojection": {
+          "enabled": false
+        }
+      }
+    },
+    "verified": true
+  },
+  "final_holdout_examples": 256,
+  "final_holdout_start_batch": 2048,
+  "interaction": {
+    "ci95": [
+      0.07814752644361983,
+      0.08644830287931432
+    ],
+    "classification": "sub_additive_or_redundant",
+    "formula": "L_combo - L_qkpre - L_addrope + L_rope",
+    "mean": 0.08229791466146708,
+    "negative_is_super_additive": true,
+    "num_paired_examples": 256,
+    "std": 0.03388072014569176
+  },
+  "primary_context": 1024,
+  "scope": "phase30_paired_seed123_2x2_qkpre_addrope_screen",
+  "seed": 123,
+  "steps": 15000
+}

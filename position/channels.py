@@ -20,6 +20,7 @@ from position.config import (
     normalize_residual_stream_config,
 )
 from position.mappers import FeatureMapper, build_mapper
+from position.temporal import CausalEMA
 
 
 class PositionChannel(torch.nn.Module):
@@ -516,6 +517,8 @@ class CarrierHypernetwork(PreserveFP32BuffersMixin, torch.nn.Module):
         self.input_mode = config["input_mode"]
         self.input_normalization = config["input_normalization"]
         self.learnable_input_gains = config["learnable_input_gains"]
+        self.temporal = config["temporal"]
+        self.ema_decay_coupling = config["ema_decay_coupling"]
         self.network = config["network"]
         self.components = config["components"]
         self.target = config["target"]
@@ -594,6 +597,20 @@ class CarrierHypernetwork(PreserveFP32BuffersMixin, torch.nn.Module):
         )
         self.position_input_gain = (
             torch.nn.Parameter(torch.ones(())) if learn_position_gain else None
+        )
+        self.content_ema = (
+            CausalEMA(
+                content_dim,
+                decay_init=float(config["ema_decay_init"]),
+                groups=(heads if self.ema_decay_coupling == "per_head" else 1),
+                decay_coupling=(
+                    "per_group"
+                    if self.ema_decay_coupling == "per_head"
+                    else self.ema_decay_coupling
+                ),
+            )
+            if self.temporal == "ema"
+            else None
         )
 
         def make_trunk() -> _GroupedHyperTrunk:
@@ -685,16 +702,42 @@ class CarrierHypernetwork(PreserveFP32BuffersMixin, torch.nn.Module):
         length = position.shape[0]
         pieces = []
         if needs_content:
-            if content.ndim != 4 or content.shape[1] != self.heads:
+            if content.ndim != 4 or content.shape[1] not in {1, self.heads}:
                 raise ValueError(
-                    "Hypernetwork content must be [batch, heads, sequence, dim]"
+                    "Hypernetwork content must be [batch, 1|heads, sequence, dim]"
                 )
             if content.shape[2] != length:
                 raise ValueError("Hypernetwork content/position lengths differ")
             content_values = content[:, :1] if self.groups == 1 else content
-            pieces.append(
-                self._prepare_modality(content_values, self.content_input_gain)
+            content_values = self._prepare_modality(
+                content_values,
+                self.content_input_gain,
             )
+            if self.content_ema is not None:
+                content_shape = content_values.shape
+                if self.ema_decay_coupling == "per_head":
+                    if content_shape[1] == 1:
+                        content_values = content_values.expand(
+                            -1, self.heads, -1, -1
+                        )
+                    content_values = self.content_ema(content_values)
+                elif content_shape[1] == 1:
+                    content_values = self.content_ema(content_values[:, 0])[:, None]
+                else:
+                    # Preserve the standalone channel API when callers provide
+                    # genuinely head-specific content. The Transformer uses the
+                    # compact single-head form above and therefore takes the
+                    # optimized shared scan path.
+                    content_values = self.content_ema(
+                        content_values.reshape(
+                            content_shape[0] * content_shape[1],
+                            content_shape[2],
+                            content_shape[3],
+                        )
+                    ).reshape(content_shape)
+            if self.groups > 1 and content_values.shape[1] == 1:
+                content_values = content_values.expand(-1, self.groups, -1, -1)
+            pieces.append(content_values)
         if self.input_mode in {"position", "content_position"}:
             position_values = position.to(
                 dtype=(
@@ -713,6 +756,12 @@ class CarrierHypernetwork(PreserveFP32BuffersMixin, torch.nn.Module):
                 )
             )
         return pieces[0] if len(pieces) == 1 else torch.cat(pieces, dim=-1)
+
+    @torch.no_grad()
+    def temporal_diagnostics(self) -> dict[str, float]:
+        if self.content_ema is None:
+            return {}
+        return self.content_ema.diagnostics()
 
     def _read(
         self,
@@ -796,7 +845,11 @@ class CarrierHypernetwork(PreserveFP32BuffersMixin, torch.nn.Module):
         position: torch.Tensor,
     ) -> tuple[CarrierDeltas, CarrierDeltas]:
         q_values = self._inputs(q_content, position)
-        k_values = self._inputs(k_content, position)
+        k_values = (
+            q_values
+            if k_content is q_content
+            else self._inputs(k_content, position)
+        )
         if self.coupling == "shared" and self.target == "both":
             q_raw = self._branch(q_values, "q")
             k_raw = q_raw
@@ -2043,6 +2096,10 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                 )
                 if gain is not None:
                     metrics[f"hyper_{name}_input_gain"] = gain.detach().item()
+            for name, value in (
+                self.carrier_hypernetwork.temporal_diagnostics().items()
+            ):
+                metrics[f"hyper_{name}"] = value
         diff = (output.q - output.k).detach().float()
         metrics["qk_diff_rms"] = diff.pow(2).mean().sqrt().item()
         if output.application == "rotary":

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import sys
 from pathlib import Path
 
@@ -98,7 +99,64 @@ CASES = {
             "speed_bound": 0.2,
         },
     },
+    "rotary_clock_ema": {
+        "rotary_clock_config": {
+            "enabled": True,
+            "mapper": "low_rank_silu",
+            "rank": 16,
+            "temporal": "ema",
+            "ema_decay_init": 0.9,
+            "speed_bound": 0.2,
+        },
+    },
+    "addrope_content_ema_per_dim": {
+        "qk_config": {
+            "enabled": True,
+            "application": "additive",
+            "geometry": "amplitude_phase",
+            "input": {
+                "kind": "frozen_fourier",
+                "basis_dim": 8,
+                "theta": None,
+                "scalars": ["normalized_position", "log_position"],
+            },
+            "mapper": {
+                "kind": "linear",
+                "residual": False,
+                "rank": 16,
+                "hidden_dim": 32,
+            },
+            "output": {
+                "parameter_source": "direct",
+                "amplitude_init": 1.0,
+                "amplitude_parameterization": "signed",
+                "learn_amplitude": False,
+                "learn_phase": False,
+            },
+            "conditioning": {
+                "kind": "carrier_hypernetwork",
+                "source": "dedicated",
+                "input_mode": "content_position",
+                "network": "silu_mlp",
+                "hidden_dim": 16,
+                "components": "amplitude_phase",
+                "head_coupling": "per_head_independent",
+                "target": "both",
+                "coupling": "shared_trunk_separate_readouts",
+                "temporal": "ema",
+                "ema_decay_init": 0.9,
+                "ema_decay_coupling": "per_dim",
+            },
+            "qk_coupling": "shared_trunk_separate_readouts",
+            "head_coupling": "per_head_independent",
+        },
+    },
 }
+
+for _coupling in ("scalar", "per_head"):
+    _case = copy.deepcopy(CASES["addrope_content_ema_per_dim"])
+    _case["qk_config"]["conditioning"]["ema_decay_coupling"] = _coupling
+    CASES[f"addrope_content_ema_{_coupling}"] = _case
 
 
 class LongCausalClockScan(torch.nn.Module):
@@ -127,6 +185,31 @@ class LongCausalClockScan(torch.nn.Module):
 
     def forward(self, values: torch.Tensor) -> torch.Tensor:
         return self.clock.phase_delta(values)
+
+
+class LongCausalEMAClockScan(LongCausalClockScan):
+    """Length-1024 compiled affine-scan regression fixture."""
+
+    def __init__(self) -> None:
+        torch.nn.Module.__init__(self)
+        config = normalize_rotary_clock_config(
+            {
+                "enabled": True,
+                "head_coupling": "per_head",
+                "mapper": "low_rank_silu",
+                "rank": 16,
+                "temporal": "ema",
+                "ema_decay_init": 0.9,
+                "speed_bound": 0.2,
+            }
+        )
+        self.clock = RotaryClockController(
+            model_dim=64,
+            heads=8,
+            pair_dim=4,
+            inverse_frequency=build_rope_frequencies(8, 10_000.0),
+            config=config,
+        )
 
 
 def train_step(model: Transformer, input_ids: torch.Tensor) -> float:
@@ -191,8 +274,25 @@ def main() -> None:
     del compiled_long_clock, long_clock, long_values, long_phase, long_loss
     torch.compiler.reset()
 
+    long_values = torch.randn(8, 1_024, 64, device=device, requires_grad=True)
+    long_clock = LongCausalEMAClockScan().to(device).train()
+    compiled_long_clock = torch.compile(long_clock, mode="default", fullgraph=False)
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        long_phase = compiled_long_clock(long_values)
+        long_loss = long_phase.float().square().mean()
+    long_loss.backward()
+    output_gradient = long_clock.clock.controller.output.weight.grad
+    if output_gradient is None or not torch.isfinite(output_gradient).all():
+        raise RuntimeError("length-1024 EMA clock scan produced a bad gradient")
+    print("rotary_clock_ema_length1024: compiled forward/backward ok")
+    del compiled_long_clock, long_clock, long_values, long_phase, long_loss
+    torch.compiler.reset()
+
     for name, overrides in CASES.items():
-        model = Transformer(**COMMON, **overrides).to(device).train()
+        # Merge first so a case can intentionally replace a COMMON default,
+        # notably qk_config for the AddRoPE coverage below.
+        model_kwargs = {**COMMON, **overrides}
+        model = Transformer(**model_kwargs).to(device).train()
         compiled = torch.compile(model, mode="default", fullgraph=False)
         first = train_step(compiled, input_ids)
         second = train_step(compiled, input_ids)
@@ -203,7 +303,7 @@ def main() -> None:
             gradient = model.blocks[0].attn.position_gain.q_readout.weight.grad
         elif name == "qk_preprojection":
             gradient = model.blocks[0].attn.qk_preprojection.gate.grad
-        elif name == "addrope":
+        elif name == "addrope" or name.startswith("addrope_content_ema_"):
             gradients = [
                 parameter.grad
                 for parameter in model.blocks[0].attn.qk_position.parameters()

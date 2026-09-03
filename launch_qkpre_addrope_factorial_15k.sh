@@ -1,14 +1,12 @@
 #!/bin/bash
-# Queue the Phase-29 qkpre x AddRoPE factorial screen through gpu-claim.
+# Queue the fresh Phase-30 15k qkpre x AddRoPE factorial through gpu-claim.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase29_qkpre_addrope_factorial"
-OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase29_qkpre_addrope_factorial"
-LOG_DIR="${SCRIPT_DIR}/logs/phase29_qkpre_addrope_factorial"
+CONFIG_DIR="${SCRIPT_DIR}/sweep_configs/phase30_qkpre_addrope_factorial_15k"
+OUTPUT_ROOT="${SCRIPT_DIR}/model-output/position_bias_phase30_qkpre_addrope_factorial_15k"
+LOG_DIR="${SCRIPT_DIR}/logs/phase30_qkpre_addrope_factorial_15k"
 SNAPSHOT_DIR="${LOG_DIR}/source_snapshot"
-PHASE28_SNAPSHOT="${SCRIPT_DIR}/logs/phase28_qkpre_rope_30k/source_snapshot"
-PHASE28_COMMIT="${PHASE28_COMMIT:-c2bbc2f}"
 PYTHON_BIN="${PYTHON_BIN:-/venv/main/bin/python}"
 GPU_CLAIM_BIN="${GPU_CLAIM_BIN:-$(command -v gpu-claim || true)}"
 OWNER="${OWNER:-mlprope}"
@@ -25,95 +23,61 @@ if ! [[ "${MAX_WORKERS}" =~ ^[1-4]$ ]]; then
   echo "MAX_WORKERS must be an integer from 1 through 4" >&2
   exit 2
 fi
-if [[ ! -f "${PHASE28_SNAPSHOT}/SNAPSHOT_READY" ]]; then
-  # Machine-local logs did not survive the box migration. The Phase-28 source
-  # did: c2bbc2f is the persisted post-Phase-28 commit, immediately preceding
-  # the narrowly reviewed Phase-29 combination commit.
-  if ! git -C "${SCRIPT_DIR}" cat-file -e "${PHASE28_COMMIT}^{commit}"; then
-    echo "Neither the Phase-28 snapshot nor commit ${PHASE28_COMMIT} is available" >&2
-    exit 3
-  fi
-fi
 
 mkdir -p "${LOG_DIR}" "${OUTPUT_ROOT}"
 exec 9>"${LOG_DIR}/launcher.lock"
 if ! flock -n 9; then
-  echo "Another Phase-29 launcher already holds ${LOG_DIR}/launcher.lock" >&2
-  exit 4
+  echo "Another Phase-30 launcher holds ${LOG_DIR}/launcher.lock" >&2
+  exit 3
 fi
 echo "$$" >"${LOG_DIR}/launcher.pid"
-"${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_qkpre_addrope_factorial.py"
 
-# No position primitive changed for this combination. Only the train/model
-# isolation guards and CUDA coverage differ from the Phase-28 implementation.
-for source in "${SCRIPT_DIR}"/position/*.py; do
-  rel="position/$(basename "${source}")"
-  if [[ -f "${PHASE28_SNAPSHOT}/SNAPSHOT_READY" ]]; then
-    if ! cmp -s "${source}" "${PHASE28_SNAPSHOT}/${rel}"; then
-      echo "Unexpected position primitive drift from Phase 28: ${rel}" >&2
-      exit 5
-    fi
-  elif ! git -C "${SCRIPT_DIR}" show "${PHASE28_COMMIT}:${rel}" | cmp -s "${source}" -; then
-    echo "Unexpected position primitive drift from ${PHASE28_COMMIT}: ${rel}" >&2
-    exit 5
-  fi
-done
+"${PYTHON_BIN}" "${SCRIPT_DIR}/prepare_qkpre_addrope_factorial_15k.py"
+
+# The experiment may use a repaired smoke harness and new orchestration, but
+# the model, training implementation, and position primitives must be clean.
 if ! git -C "${SCRIPT_DIR}" diff --quiet -- \
-  train_gpt.py transformer.py position scripts/position_dynamics_cuda_smoke.py; then
-  echo "Uncommitted core-source drift exists; refusing to freeze Phase 29" >&2
-  exit 5
+  train_gpt.py transformer.py position; then
+  echo "Uncommitted model/training/position drift; refusing to freeze Phase 30" >&2
+  exit 4
 fi
 
 if [[ ! -f "${SNAPSHOT_DIR}/SNAPSHOT_READY" ]]; then
   snapshot_tmp="${SNAPSHOT_DIR}.tmp.$$"
   mkdir -p "${snapshot_tmp}/scripts" \
-    "${snapshot_tmp}/sweep_configs/phase29_qkpre_addrope_factorial"
+    "${snapshot_tmp}/sweep_configs/phase30_qkpre_addrope_factorial_15k"
   cp "${SCRIPT_DIR}/train_gpt.py" "${snapshot_tmp}/"
   cp "${SCRIPT_DIR}/transformer.py" "${snapshot_tmp}/"
   cp -a "${SCRIPT_DIR}/position" "${snapshot_tmp}/position"
   cp "${SCRIPT_DIR}/scripts/position_dynamics_cuda_smoke.py" \
     "${snapshot_tmp}/scripts/"
-  cp "${CONFIG_DIR}"/phase29-*.json \
-    "${snapshot_tmp}/sweep_configs/phase29_qkpre_addrope_factorial/"
+  cp "${CONFIG_DIR}"/phase30-*.json \
+    "${snapshot_tmp}/sweep_configs/phase30_qkpre_addrope_factorial_15k/"
   git -C "${SCRIPT_DIR}" rev-parse HEAD >"${snapshot_tmp}/git-commit.txt"
   git -C "${SCRIPT_DIR}" status --short >"${snapshot_tmp}/git-status.txt"
   git -C "${SCRIPT_DIR}" diff --binary >"${snapshot_tmp}/working-tree.patch"
-  if [[ -f "${PHASE28_SNAPSHOT}/SOURCE_SHA256SUMS" ]]; then
-    cp "${PHASE28_SNAPSHOT}/SOURCE_SHA256SUMS" \
-      "${snapshot_tmp}/PHASE28_SOURCE_SHA256SUMS"
-  else
-    git -C "${SCRIPT_DIR}" rev-parse "${PHASE28_COMMIT}^{commit}" \
-      >"${snapshot_tmp}/PHASE28_SOURCE_COMMIT"
-    git -C "${SCRIPT_DIR}" ls-tree -r "${PHASE28_COMMIT}" position \
-      >"${snapshot_tmp}/PHASE28_POSITION_TREE"
-  fi
   (
     cd "${snapshot_tmp}"
     sha256sum train_gpt.py transformer.py position/*.py \
       scripts/position_dynamics_cuda_smoke.py \
-      sweep_configs/phase29_qkpre_addrope_factorial/*.json \
+      sweep_configs/phase30_qkpre_addrope_factorial_15k/*.json \
       >SOURCE_SHA256SUMS
   )
-  touch "${snapshot_tmp}/POSITION_PRIMITIVES_MATCH_PHASE28"
   touch "${snapshot_tmp}/SNAPSHOT_READY"
   mv "${snapshot_tmp}" "${SNAPSHOT_DIR}"
 fi
-RUN_CONFIG_DIR="${SNAPSHOT_DIR}/sweep_configs/phase29_qkpre_addrope_factorial"
+RUN_CONFIG_DIR="${SNAPSHOT_DIR}/sweep_configs/phase30_qkpre_addrope_factorial_15k"
 
-for cfg in "${RUN_CONFIG_DIR}"/phase29-*.json; do
+for cfg in "${RUN_CONFIG_DIR}"/phase30-*.json; do
   "${PYTHON_BIN}" "${SNAPSHOT_DIR}/train_gpt.py" \
     --override_json "${cfg}" --dry_run \
     >"${LOG_DIR}/$(basename "${cfg}" .json).dry-run.log"
 done
 
-# This instance was rebuilt after Phase 29 was designed. Do not let four GPU
-# workers race into an absent, partial, or differently partitioned OWT cache.
 if [[ ! -f "${DATASET_PATH}/dataset_dict.json" ]]; then
-  echo "DATASET_WAIT path=${DATASET_PATH} $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  echo "Dataset is absent or incomplete: ${DATASET_PATH}" >&2
+  exit 5
 fi
-while [[ ! -f "${DATASET_PATH}/dataset_dict.json" ]]; do
-  sleep 60
-done
 "${PYTHON_BIN}" - "${DATASET_PATH}" <<'PY'
 import json
 import sys
@@ -136,23 +100,22 @@ if signature["block_size"] != 1_024 or signature["tokenizer_name"] != "openai-co
     raise RuntimeError(f"Unexpected tokenized-cache manifest: {signature}")
 print("DATASET_VERIFIED", actual)
 PY
-echo "DATASET_READY path=${DATASET_PATH} $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 if [[ "${SKIP_CUDA_SMOKE}" != "true" ]]; then
   smoke_log="${LOG_DIR}/position-dynamics-cuda-smoke.log"
   echo "CUDA_SMOKE_QUEUE $(date -u +%Y-%m-%dT%H:%M:%SZ)"
   "${GPU_CLAIM_BIN}" run --owner "${OWNER}" \
-    --job "phase29-qkpre-addrope-smoke" --gpu "${GPU_SELECTOR}" --wait -- \
+    --job "phase30-qkpre-addrope-15k-smoke" --gpu "${GPU_SELECTOR}" --wait -- \
     "${PYTHON_BIN}" -u "${SNAPSHOT_DIR}/scripts/position_dynamics_cuda_smoke.py" \
     >>"${smoke_log}" 2>&1
   echo "CUDA_SMOKE_DONE $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
 CONFIGS=(
-  "${RUN_CONFIG_DIR}/phase29-rope-fixed-seed123-s5000-h768d8.json"
-  "${RUN_CONFIG_DIR}/phase29-qkpre-addrope-a10-seed123-s5000-h768d8.json"
-  "${RUN_CONFIG_DIR}/phase29-qkpre-rope-seed123-s5000-h768d8.json"
-  "${RUN_CONFIG_DIR}/phase29-addrope-a10-seed123-s5000-h768d8.json"
+  "${RUN_CONFIG_DIR}/phase30-rope-fixed-seed123-s15000-h768d8.json"
+  "${RUN_CONFIG_DIR}/phase30-qkpre-addrope-a10-seed123-s15000-h768d8.json"
+  "${RUN_CONFIG_DIR}/phase30-qkpre-rope-seed123-s15000-h768d8.json"
+  "${RUN_CONFIG_DIR}/phase30-addrope-a10-seed123-s15000-h768d8.json"
 )
 
 run_worker() {
@@ -184,7 +147,7 @@ run_worker() {
   return "${failed}"
 }
 
-echo "MLPROPE_PHASE29_STARTED $(date -u +%Y-%m-%dT%H:%M:%SZ) workers=${MAX_WORKERS} gpus=${GPU_SELECTOR}"
+echo "MLPROPE_PHASE30_STARTED $(date -u +%Y-%m-%dT%H:%M:%SZ) workers=${MAX_WORKERS}"
 "${GPU_CLAIM_BIN}" status || true
 PIDS=()
 for ((worker=0; worker<MAX_WORKERS; worker+=1)); do
@@ -199,9 +162,9 @@ for pid in "${PIDS[@]}"; do
   fi
 done
 if [[ "${failed}" -ne 0 ]]; then
-  echo "One or more Phase-29 jobs failed; no automatic retry was attempted" >&2
+  echo "One or more Phase-30 jobs failed; no automatic retry attempted" >&2
   exit 1
 fi
 
-"${PYTHON_BIN}" "${SCRIPT_DIR}/analyze_qkpre_addrope_factorial.py"
-echo "MLPROPE_PHASE29_COMPLETED $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+"${PYTHON_BIN}" "${SCRIPT_DIR}/analyze_qkpre_addrope_factorial_15k.py"
+echo "MLPROPE_PHASE30_COMPLETED $(date -u +%Y-%m-%dT%H:%M:%SZ)"

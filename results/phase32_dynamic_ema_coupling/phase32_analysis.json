@@ -1,0 +1,311 @@
+{
+  "arms": {
+    "addrope-content-ema-per-dim": {
+      "development_curve": {
+        "10000": 3.88950475692749,
+        "15000": 3.774214735031128,
+        "5000": 4.189880981445312
+      },
+      "elapsed_seconds": 827.7026785479393,
+      "final_loss": 3.9077802607789636,
+      "mechanism_health": {
+        "hyper_amplitude_delta_k/rms": {
+          "layer_max": 3.962601661682129,
+          "layer_mean": 2.9191228300333023,
+          "layer_min": 1.730476975440979
+        },
+        "hyper_amplitude_delta_q/rms": {
+          "layer_max": 2.530200719833374,
+          "layer_mean": 1.7879791036248207,
+          "layer_min": 0.9829668402671814
+        },
+        "hyper_ema_decay_max": {
+          "layer_max": 0.9193013310432434,
+          "layer_mean": 0.9098471328616142,
+          "layer_min": 0.9021952748298645
+        },
+        "hyper_ema_decay_mean": {
+          "layer_max": 0.8941401243209839,
+          "layer_mean": 0.8877340331673622,
+          "layer_min": 0.8812127113342285
+        },
+        "hyper_ema_decay_min": {
+          "layer_max": 0.8821889758110046,
+          "layer_mean": 0.8527579233050346,
+          "layer_min": 0.8330260515213013
+        },
+        "hyper_ema_effective_window_mean": {
+          "layer_max": 9.576556205749512,
+          "layer_mean": 9.016149401664734,
+          "layer_min": 8.515691757202148
+        },
+        "hyper_phase_delta_k/rms": {
+          "layer_max": 1.1670511960983276,
+          "layer_mean": 0.932560570538044,
+          "layer_min": 0.4823014736175537
+        },
+        "hyper_phase_delta_q/rms": {
+          "layer_max": 1.024063229560852,
+          "layer_mean": 0.7863715924322605,
+          "layer_min": 0.4331279695034027
+        }
+      },
+      "peak_allocated_mib": 6956.82373046875,
+      "target_tokens_per_second": 148116.37460817932
+    },
+    "addrope-content-ema-per-head": {
+      "development_curve": {
+        "10000": 3.8898198127746584,
+        "15000": 3.7734322261810305,
+        "5000": 4.189114093780518
+      },
+      "elapsed_seconds": 1086.944517678814,
+      "final_loss": 3.9074870254844427,
+      "mechanism_health": {
+        "hyper_amplitude_delta_k/rms": {
+          "layer_max": 3.9748661518096924,
+          "layer_mean": 2.906459555029869,
+          "layer_min": 1.7235535383224487
+        },
+        "hyper_amplitude_delta_q/rms": {
+          "layer_max": 2.538067579269409,
+          "layer_mean": 1.7858668714761734,
+          "layer_min": 0.9794954061508179
+        },
+        "hyper_ema_decay_max": {
+          "layer_max": 0.9217743873596191,
+          "layer_mean": 0.9030204489827156,
+          "layer_min": 0.8861072659492493
+        },
+        "hyper_ema_decay_mean": {
+          "layer_max": 0.8980158567428589,
+          "layer_mean": 0.8843333870172501,
+          "layer_min": 0.8664673566818237
+        },
+        "hyper_ema_decay_min": {
+          "layer_max": 0.8836015462875366,
+          "layer_mean": 0.8541743978857994,
+          "layer_min": 0.819763720035553
+        },
+        "hyper_ema_effective_window_mean": {
+          "layer_max": 9.840993881225586,
+          "layer_mean": 8.89971673488617,
+          "layer_min": 7.761815071105957
+        },
+        "hyper_phase_delta_k/rms": {
+          "layer_max": 1.1588691473007202,
+          "layer_mean": 0.9296244606375694,
+          "layer_min": 0.4626805782318115
+        },
+        "hyper_phase_delta_q/rms": {
+          "layer_max": 1.0274745225906372,
+          "layer_mean": 0.7928671576082706,
+          "layer_min": 0.42018476128578186
+        }
+      },
+      "peak_allocated_mib": 13894.04248046875,
+      "target_tokens_per_second": 112789.86002138015
+    },
+    "addrope-content-ema-scalar": {
+      "development_curve": {
+        "10000": 3.8914892196655275,
+        "15000": 3.774871816635132,
+        "5000": 4.188764114379882
+      },
+      "elapsed_seconds": 828.5731538750697,
+      "final_loss": 3.9080075193196535,
+      "mechanism_health": {
+        "hyper_amplitude_delta_k/rms": {
+          "layer_max": 3.9454307556152344,
+          "layer_mean": 2.9041477888822556,
+          "layer_min": 1.7288609743118286
+        },
+        "hyper_amplitude_delta_q/rms": {
+          "layer_max": 2.490852117538452,
+          "layer_mean": 1.7843051999807358,
+          "layer_min": 0.9833774566650391
+        },
+        "hyper_ema_decay_max": {
+          "layer_max": 0.8952673673629761,
+          "layer_mean": 0.8757839426398277,
+          "layer_min": 0.8561919927597046
+        },
+        "hyper_ema_decay_mean": {
+          "layer_max": 0.8952673673629761,
+          "layer_mean": 0.8757839426398277,
+          "layer_min": 0.8561919927597046
+        },
+        "hyper_ema_decay_min": {
+          "layer_max": 0.8952673673629761,
+          "layer_mean": 0.8757839426398277,
+          "layer_min": 0.8561919927597046
+        },
+        "hyper_ema_effective_window_mean": {
+          "layer_max": 9.54812240600586,
+          "layer_mean": 8.176651000976562,
+          "layer_min": 6.953715801239014
+        },
+        "hyper_phase_delta_k/rms": {
+          "layer_max": 1.1753875017166138,
+          "layer_mean": 0.934157557785511,
+          "layer_min": 0.4606013298034668
+        },
+        "hyper_phase_delta_q/rms": {
+          "layer_max": 1.027432918548584,
+          "layer_mean": 0.7958795577287674,
+          "layer_min": 0.4236114025115967
+        }
+      },
+      "peak_allocated_mib": 6956.82373046875,
+      "target_tokens_per_second": 147960.76776883454
+    },
+    "addrope-content-pointwise": {
+      "development_curve": {
+        "10000": 3.8990138244628905,
+        "15000": 3.78609299659729,
+        "5000": 4.203759832382202
+      },
+      "elapsed_seconds": 801.9871613781434,
+      "final_loss": 3.9186333725228906,
+      "mechanism_health": {
+        "hyper_amplitude_delta_k/rms": {
+          "layer_max": 3.657977819442749,
+          "layer_mean": 2.5338946282863617,
+          "layer_min": 1.4098838567733765
+        },
+        "hyper_amplitude_delta_q/rms": {
+          "layer_max": 2.4289000034332275,
+          "layer_mean": 1.6553700268268585,
+          "layer_min": 0.9974370002746582
+        },
+        "hyper_phase_delta_k/rms": {
+          "layer_max": 0.839172899723053,
+          "layer_mean": 0.6157633066177368,
+          "layer_min": 0.36231493949890137
+        },
+        "hyper_phase_delta_q/rms": {
+          "layer_max": 0.751916766166687,
+          "layer_mean": 0.6049639321863651,
+          "layer_min": 0.3831857740879059
+        }
+      },
+      "peak_allocated_mib": 5965.78076171875,
+      "target_tokens_per_second": 152865.6890084489
+    }
+  },
+  "coefficient_structures": {
+    "per_dim": "one decay per layer and projected-content dimension, shared across heads",
+    "per_head": "one decay per layer and attention head",
+    "scalar": "one decay per layer"
+  },
+  "contrasts": {
+    "addrope-content-ema-per-dim_vs_addrope-content-ema-per-head": {
+      "candidate": "addrope-content-ema-per-dim",
+      "candidate_loss": 3.9077802607789636,
+      "delta_candidate_minus_reference": 0.00029323529452085495,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.0004070611453754709,
+        0.000993531734417181
+      ],
+      "question": "latent-specific versus head-specific decay",
+      "reference": "addrope-content-ema-per-head",
+      "reference_loss": 3.9074870254844427,
+      "triage": "unresolved"
+    },
+    "addrope-content-ema-per-dim_vs_addrope-content-ema-scalar": {
+      "candidate": "addrope-content-ema-per-dim",
+      "candidate_loss": 3.9077802607789636,
+      "delta_candidate_minus_reference": -0.00022725854068994522,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.001056593100559584,
+        0.0006020760191796936
+      ],
+      "question": "incremental value of latent-specific decay",
+      "reference": "addrope-content-ema-scalar",
+      "reference_loss": 3.9080075193196535,
+      "triage": "unresolved"
+    },
+    "addrope-content-ema-per-dim_vs_addrope-content-pointwise": {
+      "candidate": "addrope-content-ema-per-dim",
+      "candidate_loss": 3.9077802607789636,
+      "delta_candidate_minus_reference": -0.010853111743927002,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.0139678186483774,
+        -0.0077384048394766045
+      ],
+      "question": "value of latent-specific causal timescales",
+      "reference": "addrope-content-pointwise",
+      "reference_loss": 3.9186333725228906,
+      "triage": "survive"
+    },
+    "addrope-content-ema-per-head_vs_addrope-content-ema-scalar": {
+      "candidate": "addrope-content-ema-per-head",
+      "candidate_loss": 3.9074870254844427,
+      "delta_candidate_minus_reference": -0.0005204938352108002,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.0014016006971869117,
+        0.0003606130267653114
+      ],
+      "question": "incremental value of head-specific decay",
+      "reference": "addrope-content-ema-scalar",
+      "reference_loss": 3.9080075193196535,
+      "triage": "unresolved"
+    },
+    "addrope-content-ema-per-head_vs_addrope-content-pointwise": {
+      "candidate": "addrope-content-ema-per-head",
+      "candidate_loss": 3.9074870254844427,
+      "delta_candidate_minus_reference": -0.011146347038447857,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.01419904349637904,
+        -0.008093650580516674
+      ],
+      "question": "value of head-specific causal timescales",
+      "reference": "addrope-content-pointwise",
+      "reference_loss": 3.9186333725228906,
+      "triage": "survive"
+    },
+    "addrope-content-ema-scalar_vs_addrope-content-pointwise": {
+      "candidate": "addrope-content-ema-scalar",
+      "candidate_loss": 3.9080075193196535,
+      "delta_candidate_minus_reference": -0.010625853203237057,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.013805319756087757,
+        -0.007446386650386357
+      ],
+      "question": "value of a single causal timescale",
+      "reference": "addrope-content-pointwise",
+      "reference_loss": 3.9186333725228906,
+      "triage": "survive"
+    }
+  },
+  "development_checkpoints": [
+    5000,
+    10000,
+    15000
+  ],
+  "ema_decay_init": 0.9,
+  "ema_definition": "learned bias-corrected causal EMA over the shared 128-d content projection",
+  "final_holdout_examples": 256,
+  "final_holdout_start_batch": 2048,
+  "primary_context": 1024,
+  "scope": "single_seed_15k_ema_coefficient_axis_screen",
+  "seed": 123,
+  "triage_thresholds": {
+    "note": "single-seed screen; replicate only a clear survivor",
+    "prune": "delta >= +0.01",
+    "survive": "delta <= -0.01",
+    "unresolved": "otherwise"
+  }
+}

@@ -88,6 +88,9 @@ V2_CONDITIONING_KEYS = {
     "input_mode",
     "input_normalization",
     "learnable_input_gains",
+    "temporal",
+    "ema_decay_init",
+    "ema_decay_coupling",
     "network",
     "components",
     "head_coupling",
@@ -189,6 +192,9 @@ V2_CHANNEL_DEFAULTS = {
             "activation": "tanh",
             "hidden_dim": 64,
             "input_mode": "content",
+            "temporal": "pointwise",
+            "ema_decay_init": 0.9,
+            "ema_decay_coupling": "per_dim",
             "network": "linear",
             "components": "phase",
             "head_coupling": "per_head_independent",
@@ -828,6 +834,13 @@ def normalize_position_config_v2(
         "learnable_input_gains": conditioning_cfg.get(
             "learnable_input_gains", False
         ),
+        "temporal": conditioning_cfg.get("temporal", "pointwise"),
+        "ema_decay_init": float(
+            conditioning_cfg.get("ema_decay_init", 0.9)
+        ),
+        "ema_decay_coupling": conditioning_cfg.get(
+            "ema_decay_coupling", "per_dim"
+        ),
         "network": conditioning_cfg.get("network", "linear"),
         "components": conditioning_cfg.get("components", "phase"),
         "head_coupling": conditioning_cfg.get(
@@ -929,6 +942,52 @@ def normalize_position_config_v2(
             f"{channel_name}: hypernetwork input normalization/gains require "
             "conditioning.kind='carrier_hypernetwork'"
         )
+    if conditioning["temporal"] not in {"pointwise", "ema"}:
+        raise ValueError(
+            f"{channel_name}.conditioning.temporal must be 'pointwise' or 'ema'"
+        )
+    if not 0.0 < conditioning["ema_decay_init"] < 1.0:
+        raise ValueError(
+            f"{channel_name}.conditioning.ema_decay_init must lie strictly "
+            "inside (0, 1)"
+        )
+    if conditioning["ema_decay_coupling"] not in {
+        "scalar",
+        "per_head",
+        "per_dim",
+    }:
+        raise ValueError(
+            f"{channel_name}.conditioning.ema_decay_coupling must be "
+            "'scalar', 'per_head', or 'per_dim'"
+        )
+    if conditioning["temporal"] == "ema" and not (
+        conditioning_kind == "carrier_hypernetwork"
+        and conditioning["input_mode"] in {"content", "content_position"}
+    ):
+        raise ValueError(
+            f"{channel_name}: temporal='ema' requires a content-input "
+            "carrier_hypernetwork"
+        )
+    if (
+        conditioning["temporal"] == "ema"
+        and conditioning["ema_decay_coupling"] == "per_head"
+        and conditioning["head_coupling"] != "per_head_independent"
+    ):
+        raise ValueError(
+            f"{channel_name}: per-head EMA decay requires "
+            "conditioning.head_coupling='per_head_independent'"
+        )
+    if conditioning_kind != "carrier_hypernetwork" and (
+        conditioning["temporal"] != "pointwise"
+    ):
+        raise ValueError(
+            f"{channel_name}: temporal conditioning is only supported by "
+            "carrier_hypernetwork"
+        )
+    if conditioning["temporal"] != "ema":
+        # Canonicalize an inactive hyperparameter.
+        conditioning["ema_decay_init"] = 0.9
+        conditioning["ema_decay_coupling"] = "per_dim"
     if conditioning["network"] not in {"linear", "silu_mlp", "swiglu_mlp"}:
         raise ValueError(
             f"{channel_name}.conditioning.network must be 'linear', "

@@ -2,6 +2,7 @@
 
 - [Current status and decisions](CURRENT_STATUS.md)
 - [Next experiment roadmap](NEXT_EXPERIMENT_ROADMAP.md)
+- [Active research and repository consolidation plan](CONSOLIDATION_PLAN.md)
 - [Experiment journal](EXPERIMENT_JOURNAL.md)
 - [Position embedding design](position_embedding_experiments.md)
 - [Position playground configuration](POSITION_CONFIG.md)

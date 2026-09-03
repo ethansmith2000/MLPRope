@@ -19,7 +19,7 @@ from position import (
     normalize_position_gain_config,
     normalize_rotary_clock_config,
 )
-from position.temporal import CausalControlMapper
+from position.temporal import CausalControlMapper, CausalEMA
 from position.clock import _exclusive_associative_sum
 from train_gpt import load_config
 from transformer import Attention, Transformer, count_parameters
@@ -37,6 +37,42 @@ def _cli(path: str) -> Namespace:
 
 
 class CausalControlMapperTest(unittest.TestCase):
+    def test_debiased_ema_matches_streaming_and_preserves_constants(self):
+        torch.manual_seed(0)
+        ema = CausalEMA(5, decay_init=0.9)
+        values = torch.randn(3, 17, 5)
+        expected = ema(values)
+        state = ema.initial_state(3, device=values.device)
+        steps = []
+        for token in values.unbind(dim=1):
+            output, state = ema.step(token, state)
+            steps.append(output)
+        torch.testing.assert_close(
+            torch.stack(steps, dim=1),
+            expected,
+            atol=2e-6,
+            rtol=2e-6,
+        )
+
+        constant = torch.randn(3, 1, 5).expand(-1, 23, -1).clone()
+        torch.testing.assert_close(
+            ema(constant),
+            constant,
+            atol=2e-6,
+            rtol=2e-6,
+        )
+
+    def test_debiased_ema_is_prefix_causal_and_decay_learns(self):
+        torch.manual_seed(8)
+        ema = CausalEMA(4, decay_init=0.8)
+        values = torch.randn(2, 13, 4, requires_grad=True)
+        altered = values.detach().clone()
+        altered[:, 7:] = torch.randn_like(altered[:, 7:])
+        torch.testing.assert_close(ema(values)[:, :7], ema(altered)[:, :7])
+        ema(values).square().sum().backward()
+        self.assertIsNotNone(ema.decay_logit.grad)
+        self.assertGreater(ema.decay_logit.grad.abs().sum().item(), 0)
+
     def test_causal_convolution_matches_incremental_execution(self):
         torch.manual_seed(1)
         mapper = CausalControlMapper(
@@ -75,6 +111,32 @@ class CausalControlMapperTest(unittest.TestCase):
         altered = values.clone()
         altered[:, 5:] = torch.randn_like(altered[:, 5:])
         torch.testing.assert_close(mapper(values)[:, :5], mapper(altered)[:, :5])
+
+    def test_ema_mapper_matches_incremental_execution(self):
+        torch.manual_seed(9)
+        mapper = CausalControlMapper(
+            input_dim=8,
+            output_dim=3,
+            mapper="low_rank_silu",
+            rank=5,
+            temporal="ema",
+            kernel_size=1,
+            ema_decay_init=0.85,
+        )
+        torch.nn.init.normal_(mapper.output.weight, std=0.2)
+        values = torch.randn(2, 19, 8)
+        expected = mapper(values)
+        state = mapper.initial_state(2, device=values.device, dtype=values.dtype)
+        steps = []
+        for token in values.unbind(dim=1):
+            output, state = mapper.step(token, state)
+            steps.append(output)
+        torch.testing.assert_close(
+            torch.stack(steps, dim=1),
+            expected,
+            atol=3e-6,
+            rtol=3e-6,
+        )
 
 
 class RotaryClockTest(unittest.TestCase):
@@ -203,6 +265,14 @@ class RotaryClockTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires mapper"):
             normalize_rotary_clock_config(
                 {"temporal": "causal_conv", "mapper": "linear"}
+            )
+        with self.assertRaisesRegex(ValueError, "requires mapper"):
+            normalize_rotary_clock_config(
+                {"temporal": "ema", "mapper": "linear"}
+            )
+        with self.assertRaisesRegex(ValueError, "ema_decay_init"):
+            normalize_rotary_clock_config(
+                {"temporal": "ema", "ema_decay_init": 1.0}
             )
 
 

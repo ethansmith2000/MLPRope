@@ -1,0 +1,341 @@
+{
+  "arms": {
+    "addrope-content-ema": {
+      "development_curve": {
+        "10000": 3.8908939456939695,
+        "15000": 3.7748097229003905,
+        "5000": 4.188289489746094
+      },
+      "final_loss": 3.9075149334967136,
+      "mechanism_health": {
+        "hyper_amplitude_delta_k/rms": {
+          "layer_max": 3.963043212890625,
+          "layer_mean": 2.9168770760297775,
+          "layer_min": 1.7432987689971924
+        },
+        "hyper_amplitude_delta_q/rms": {
+          "layer_max": 2.518577814102173,
+          "layer_mean": 1.788417436182499,
+          "layer_min": 0.969942033290863
+        },
+        "hyper_ema_decay_max": {
+          "layer_max": 0.9197124242782593,
+          "layer_mean": 0.9102602154016495,
+          "layer_min": 0.902686595916748
+        },
+        "hyper_ema_decay_mean": {
+          "layer_max": 0.8947269320487976,
+          "layer_mean": 0.8877859488129616,
+          "layer_min": 0.8810909986495972
+        },
+        "hyper_ema_decay_min": {
+          "layer_max": 0.8842182159423828,
+          "layer_mean": 0.8538092076778412,
+          "layer_min": 0.8375006318092346
+        },
+        "hyper_ema_effective_window_mean": {
+          "layer_max": 9.557825088500977,
+          "layer_mean": 9.020932912826538,
+          "layer_min": 8.507180213928223
+        },
+        "hyper_phase_delta_k/rms": {
+          "layer_max": 1.1635221242904663,
+          "layer_mean": 0.9355044476687908,
+          "layer_min": 0.45171573758125305
+        },
+        "hyper_phase_delta_q/rms": {
+          "layer_max": 1.0570167303085327,
+          "layer_mean": 0.7945792227983475,
+          "layer_min": 0.41274285316467285
+        }
+      },
+      "peak_allocated_mib": 13894.04248046875,
+      "target_tokens_per_second": 102057.60506789705
+    },
+    "addrope-content-pointwise": {
+      "development_curve": {
+        "10000": 3.899219446182251,
+        "15000": 3.7868640518188474,
+        "5000": 4.202403659820557
+      },
+      "final_loss": 3.9186146575957537,
+      "mechanism_health": {
+        "hyper_amplitude_delta_k/rms": {
+          "layer_max": 3.673598527908325,
+          "layer_mean": 2.5352999716997147,
+          "layer_min": 1.3941961526870728
+        },
+        "hyper_amplitude_delta_q/rms": {
+          "layer_max": 2.434295892715454,
+          "layer_mean": 1.6544090956449509,
+          "layer_min": 1.0020197629928589
+        },
+        "hyper_phase_delta_k/rms": {
+          "layer_max": 0.8459109663963318,
+          "layer_mean": 0.6197386980056763,
+          "layer_min": 0.36897459626197815
+        },
+        "hyper_phase_delta_q/rms": {
+          "layer_max": 0.732097327709198,
+          "layer_mean": 0.6024013310670853,
+          "layer_min": 0.3930218815803528
+        }
+      },
+      "peak_allocated_mib": 5965.77685546875,
+      "target_tokens_per_second": 156094.13285318
+    },
+    "addrope-position": {
+      "development_curve": {
+        "10000": 3.9131115818023683,
+        "15000": 3.7954651355743407,
+        "5000": 4.214718952178955
+      },
+      "final_loss": 3.933450361713767,
+      "mechanism_health": {
+        "hyper_amplitude_delta_k/rms": {
+          "layer_max": 3.0926032066345215,
+          "layer_mean": 2.2330534905195236,
+          "layer_min": 1.2912592887878418
+        },
+        "hyper_amplitude_delta_q/rms": {
+          "layer_max": 1.9647867679595947,
+          "layer_mean": 1.3526948764920235,
+          "layer_min": 0.8643470406532288
+        },
+        "hyper_phase_delta_k/rms": {
+          "layer_max": 0.8393882513046265,
+          "layer_mean": 0.6654051393270493,
+          "layer_min": 0.49687325954437256
+        },
+        "hyper_phase_delta_q/rms": {
+          "layer_max": 0.639240562915802,
+          "layer_mean": 0.4813888818025589,
+          "layer_min": 0.3438108265399933
+        }
+      },
+      "peak_allocated_mib": 5338.65185546875,
+      "target_tokens_per_second": 165998.9474198765
+    },
+    "clock-ema": {
+      "development_curve": {
+        "10000": 3.9943057441711427,
+        "15000": 3.8750317764282225,
+        "5000": 4.321041440963745
+      },
+      "final_loss": 4.02262172754854,
+      "mechanism_health": {
+        "clock_final_drift_rms": {
+          "layer_max": 6.969624996185303,
+          "layer_mean": 4.658669322729111,
+          "layer_min": 2.0157852172851562
+        },
+        "ema_decay_max": {
+          "layer_max": 0.9025939702987671,
+          "layer_mean": 0.8914690390229225,
+          "layer_min": 0.8717304468154907
+        },
+        "ema_decay_mean": {
+          "layer_max": 0.8921757936477661,
+          "layer_mean": 0.8606520816683769,
+          "layer_min": 0.8060296773910522
+        },
+        "ema_decay_min": {
+          "layer_max": 0.8849926590919495,
+          "layer_mean": 0.8285379111766815,
+          "layer_min": 0.7473704218864441
+        },
+        "ema_effective_window_mean": {
+          "layer_max": 9.279134750366211,
+          "layer_mean": 7.661871373653412,
+          "layer_min": 5.269192218780518
+        },
+        "phase_delta_abs_max": {
+          "layer_max": 10.219970703125,
+          "layer_mean": 7.4846954345703125,
+          "layer_min": 3.0032958984375
+        },
+        "speed_max": {
+          "layer_max": 1.0099999904632568,
+          "layer_mean": 1.009279578924179,
+          "layer_min": 1.0069602727890015
+        },
+        "speed_min": {
+          "layer_max": 0.9964829683303833,
+          "layer_mean": 0.991017147898674,
+          "layer_min": 0.9900000095367432
+        }
+      },
+      "peak_allocated_mib": 5327.48388671875,
+      "target_tokens_per_second": 165339.49287887223
+    },
+    "clock-pointwise": {
+      "development_curve": {
+        "10000": 3.994959840774536,
+        "15000": 3.8748366928100584,
+        "5000": 4.321578168869019
+      },
+      "final_loss": 4.02262317109853,
+      "mechanism_health": {
+        "clock_final_drift_rms": {
+          "layer_max": 5.9485321044921875,
+          "layer_mean": 4.418150365352631,
+          "layer_min": 2.264381170272827
+        },
+        "phase_delta_abs_max": {
+          "layer_max": 10.219970703125,
+          "layer_mean": 7.4437255859375,
+          "layer_min": 3.416259765625
+        },
+        "speed_max": {
+          "layer_max": 1.0099999904632568,
+          "layer_mean": 1.0099970400333405,
+          "layer_min": 1.009988784790039
+        },
+        "speed_min": {
+          "layer_max": 0.9903771281242371,
+          "layer_mean": 0.9900868162512779,
+          "layer_min": 0.9900000095367432
+        }
+      },
+      "peak_allocated_mib": 5079.71044921875,
+      "target_tokens_per_second": 174913.72693136393
+    },
+    "rope-fixed": {
+      "development_curve": {
+        "10000": 3.994052219390869,
+        "15000": 3.87493839263916,
+        "5000": 4.318738832473755
+      },
+      "final_loss": 4.022983591072261,
+      "mechanism_health": {},
+      "peak_allocated_mib": 5066.02294921875,
+      "target_tokens_per_second": 183352.34370755497
+    }
+  },
+  "clock_speed_bound": 0.01,
+  "contrasts": {
+    "addrope-content-ema_vs_addrope-content-pointwise": {
+      "candidate": "addrope-content-ema",
+      "candidate_loss": 3.9075149334967136,
+      "delta_candidate_minus_reference": -0.011099724099040031,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.014210502297233129,
+        -0.007988945900846934
+      ],
+      "question": "EMA memory incremental value",
+      "reference": "addrope-content-pointwise",
+      "reference_loss": 3.9186146575957537,
+      "triage": "survive"
+    },
+    "addrope-content-ema_vs_addrope-position": {
+      "candidate": "addrope-content-ema",
+      "candidate_loss": 3.9075149334967136,
+      "delta_candidate_minus_reference": -0.025935428217053413,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.029118043358589116,
+        -0.02275281307551771
+      ],
+      "question": "EMA content total incremental value",
+      "reference": "addrope-position",
+      "reference_loss": 3.933450361713767,
+      "triage": "survive"
+    },
+    "addrope-content-pointwise_vs_addrope-position": {
+      "candidate": "addrope-content-pointwise",
+      "candidate_loss": 3.9186146575957537,
+      "delta_candidate_minus_reference": -0.014835704118013382,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.017572838691054617,
+        -0.012098569544972147
+      ],
+      "question": "pointwise content incremental value",
+      "reference": "addrope-position",
+      "reference_loss": 3.933450361713767,
+      "triage": "survive"
+    },
+    "addrope-position_vs_rope-fixed": {
+      "candidate": "addrope-position",
+      "candidate_loss": 3.933450361713767,
+      "delta_candidate_minus_reference": -0.08953322935849428,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.09449723344550748,
+        -0.08456922527148109
+      ],
+      "question": "position-only AddRoPE value",
+      "reference": "rope-fixed",
+      "reference_loss": 4.022983591072261,
+      "triage": "survive"
+    },
+    "clock-ema_vs_clock-pointwise": {
+      "candidate": "clock-ema",
+      "candidate_loss": 4.02262172754854,
+      "delta_candidate_minus_reference": -1.4435499906539917e-06,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.0006859727502896945,
+        0.0006830856503083865
+      ],
+      "question": "EMA clock incremental value",
+      "reference": "clock-pointwise",
+      "reference_loss": 4.02262317109853,
+      "triage": "unresolved"
+    },
+    "clock-ema_vs_rope-fixed": {
+      "candidate": "clock-ema",
+      "candidate_loss": 4.02262172754854,
+      "delta_candidate_minus_reference": -0.00036186352372169495,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.0010610299133984968,
+        0.00033730286595510693
+      ],
+      "question": "EMA clock total value",
+      "reference": "rope-fixed",
+      "reference_loss": 4.022983591072261,
+      "triage": "unresolved"
+    },
+    "clock-pointwise_vs_rope-fixed": {
+      "candidate": "clock-pointwise",
+      "candidate_loss": 4.02262317109853,
+      "delta_candidate_minus_reference": -0.00036041997373104095,
+      "negative_favors_candidate": true,
+      "num_paired_examples": 256,
+      "paired_example_ci95": [
+        -0.0010132974049834385,
+        0.0002924574575213566
+      ],
+      "question": "pointwise clock value",
+      "reference": "rope-fixed",
+      "reference_loss": 4.022983591072261,
+      "triage": "unresolved"
+    }
+  },
+  "development_checkpoints": [
+    5000,
+    10000,
+    15000
+  ],
+  "ema_decay_init": 0.9,
+  "ema_definition": "learned per-latent bias-corrected causal EMA",
+  "final_holdout_examples": 256,
+  "final_holdout_start_batch": 2048,
+  "primary_context": 1024,
+  "scope": "single_seed_15k_mechanism_screen",
+  "seed": 123,
+  "triage_thresholds": {
+    "note": "single-seed screen; replicate only clear survivors",
+    "prune": "delta >= +0.01",
+    "survive": "delta <= -0.01",
+    "unresolved": "otherwise"
+  }
+}

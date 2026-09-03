@@ -20,6 +20,7 @@ ROTARY_CLOCK_DEFAULTS = {
     "rank": 32,
     "temporal": "pointwise",
     "kernel_size": 3,
+    "ema_decay_init": 0.9,
     "speed_bound": 0.25,
 }
 
@@ -66,9 +67,9 @@ def normalize_rotary_clock_config(config: dict | None) -> dict:
         raise ValueError("rotary_clock.head_coupling must be 'shared' or 'per_head'")
     if normalized["mapper"] not in {"linear", "low_rank_silu"}:
         raise ValueError("rotary_clock.mapper must be 'linear' or 'low_rank_silu'")
-    if normalized["temporal"] not in {"pointwise", "causal_conv"}:
+    if normalized["temporal"] not in {"pointwise", "causal_conv", "ema"}:
         raise ValueError(
-            "rotary_clock.temporal must be 'pointwise' or 'causal_conv'"
+            "rotary_clock.temporal must be 'pointwise', 'causal_conv', or 'ema'"
         )
     rank = normalized["rank"]
     if isinstance(rank, bool) or not isinstance(rank, int) or rank <= 0:
@@ -80,7 +81,7 @@ def normalize_rotary_clock_config(config: dict | None) -> dict:
         or kernel_size <= 0
     ):
         raise ValueError("rotary_clock.kernel_size must be a positive integer")
-    if normalized["temporal"] == "pointwise" and kernel_size != 1:
+    if normalized["temporal"] in {"pointwise", "ema"} and kernel_size != 1:
         # Canonicalize the inert value so config hashes do not distinguish it.
         normalized["kernel_size"] = 1
     if (
@@ -94,6 +95,26 @@ def normalize_rotary_clock_config(config: dict | None) -> dict:
         raise ValueError(
             "rotary_clock temporal='causal_conv' requires kernel_size >= 2"
         )
+    if (
+        normalized["temporal"] == "ema"
+        and normalized["mapper"] != "low_rank_silu"
+    ):
+        raise ValueError(
+            "rotary_clock temporal='ema' requires mapper='low_rank_silu'"
+        )
+    decay_init = normalized["ema_decay_init"]
+    if isinstance(decay_init, bool) or not isinstance(decay_init, (int, float)):
+        raise TypeError("rotary_clock.ema_decay_init must be a number")
+    normalized["ema_decay_init"] = float(decay_init)
+    if not math.isfinite(normalized["ema_decay_init"]) or not (
+        0.0 < normalized["ema_decay_init"] < 1.0
+    ):
+        raise ValueError(
+            "rotary_clock.ema_decay_init must lie strictly inside (0, 1)"
+        )
+    if normalized["temporal"] != "ema":
+        # Canonicalize an inactive hyperparameter.
+        normalized["ema_decay_init"] = ROTARY_CLOCK_DEFAULTS["ema_decay_init"]
     speed_bound = normalized["speed_bound"]
     if isinstance(speed_bound, bool) or not isinstance(speed_bound, (int, float)):
         raise TypeError("rotary_clock.speed_bound must be a number")
@@ -148,6 +169,7 @@ class RotaryClockController(PreserveFP32BuffersMixin, torch.nn.Module):
             rank=int(config["rank"]),
             temporal=config["temporal"],
             kernel_size=int(config["kernel_size"]),
+            ema_decay_init=float(config["ema_decay_init"]),
         )
 
     def reset_output_parameters(self) -> None:
@@ -235,7 +257,7 @@ class RotaryClockController(PreserveFP32BuffersMixin, torch.nn.Module):
         phase = drift.permute(0, 2, 1)[..., None] * self.inverse_frequency[
             None, None, None, :
         ]
-        return {
+        metrics = {
             "raw_mean": raw.mean().item(),
             "raw_rms": raw.square().mean().sqrt().item(),
             "raw_abs_max": raw.abs().max().item(),
@@ -248,3 +270,5 @@ class RotaryClockController(PreserveFP32BuffersMixin, torch.nn.Module):
             "phase_delta_rms": phase.square().mean().sqrt().item(),
             "phase_delta_abs_max": phase.abs().max().item(),
         }
+        metrics.update(self.controller.temporal_diagnostics())
+        return metrics
