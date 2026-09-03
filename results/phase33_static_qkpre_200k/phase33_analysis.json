@@ -1,0 +1,121 @@
+{
+  "arms": {
+    "qkpre-pair-amplitude-rope": {
+      "elapsed_seconds": 9100.160596319009,
+      "final_holdout_loss": 3.325484265689738,
+      "target_tokens_per_second": 179846.97112510467
+    },
+    "qkpre-pair-polar-rope": {
+      "elapsed_seconds": 9061.3786031981,
+      "final_holdout_loss": 3.3256495656678453,
+      "target_tokens_per_second": 180616.7021232696
+    },
+    "qkpre-split-scalar-rope": {
+      "elapsed_seconds": 8928.392000186024,
+      "final_holdout_loss": 3.3256006704177707,
+      "target_tokens_per_second": 183306.95157267965
+    },
+    "qkpre-tied-nope": {
+      "elapsed_seconds": 8822.396635081852,
+      "final_holdout_loss": 3.355384295573458,
+      "target_tokens_per_second": 185509.26553131736
+    },
+    "qkpre-tied-rope": {
+      "elapsed_seconds": 8917.03778426908,
+      "final_holdout_loss": 3.324610823066905,
+      "target_tokens_per_second": 183540.3594327321
+    },
+    "rope-fixed": {
+      "elapsed_seconds": 8876.174197199056,
+      "final_holdout_loss": 3.3874420085921884,
+      "target_tokens_per_second": 184385.33129695145
+    }
+  },
+  "caveat": "Paired-example intervals measure holdout precision for seed 123, not training-seed variability. Replicate only candidates that clear the next one-seed scope screen.",
+  "contrasts": {
+    "pair-amplitude_vs_split-scalar": {
+      "candidate": "qkpre-pair-amplitude-rope",
+      "candidate_loss": 3.325484265689738,
+      "delta_candidate_minus_reference": -0.00011640472803264856,
+      "num_paired_examples": 1024,
+      "paired_example_ci95": [
+        -0.0012122901366382506,
+        0.0009794806805729535
+      ],
+      "reference": "qkpre-split-scalar-rope",
+      "reference_loss": 3.3256006704177707
+    },
+    "pair-polar_vs_pair-amplitude": {
+      "candidate": "qkpre-pair-polar-rope",
+      "candidate_loss": 3.3256495656678453,
+      "delta_candidate_minus_reference": 0.00016529997810721397,
+      "num_paired_examples": 1024,
+      "paired_example_ci95": [
+        -0.0008472453513971333,
+        0.0011778453076115613
+      ],
+      "reference": "qkpre-pair-amplitude-rope",
+      "reference_loss": 3.325484265689738
+    },
+    "qkpre-tied-nope_vs_rope-fixed": {
+      "candidate": "qkpre-tied-nope",
+      "candidate_loss": 3.355384295573458,
+      "delta_candidate_minus_reference": -0.03205771301873028,
+      "num_paired_examples": 1024,
+      "paired_example_ci95": [
+        -0.0336357540277336,
+        -0.03047967200972697
+      ],
+      "reference": "rope-fixed",
+      "reference_loss": 3.3874420085921884
+    },
+    "qkpre-tied-rope_vs_rope-fixed": {
+      "candidate": "qkpre-tied-rope",
+      "candidate_loss": 3.324610823066905,
+      "delta_candidate_minus_reference": -0.06283118552528322,
+      "num_paired_examples": 1024,
+      "paired_example_ci95": [
+        -0.06442561604026638,
+        -0.06123675501030005
+      ],
+      "reference": "rope-fixed",
+      "reference_loss": 3.3874420085921884
+    },
+    "rope_contribution": {
+      "candidate": "qkpre-tied-rope",
+      "candidate_loss": 3.324610823066905,
+      "delta_candidate_minus_reference": -0.030773472506552935,
+      "num_paired_examples": 1024,
+      "paired_example_ci95": [
+        -0.03242372316427815,
+        -0.02912322184882772
+      ],
+      "reference": "qkpre-tied-nope",
+      "reference_loss": 3.355384295573458
+    },
+    "split-scalar_vs_tied": {
+      "candidate": "qkpre-split-scalar-rope",
+      "candidate_loss": 3.3256006704177707,
+      "delta_candidate_minus_reference": 0.0009898473508656025,
+      "num_paired_examples": 1024,
+      "paired_example_ci95": [
+        -9.619971601398914e-05,
+        0.0020758944177451943
+      ],
+      "reference": "qkpre-tied-rope",
+      "reference_loss": 3.324610823066905
+    }
+  },
+  "final_holdout_examples": 1024,
+  "final_holdout_start_batch": 2048,
+  "interpretation": {
+    "qk_or_pairwise_static_adapter_earned_followup": false,
+    "rope_remains_material_with_carrier": true,
+    "tied_carrier_survives_long_training": true
+  },
+  "primary_context": 1024,
+  "scope": "phase33_one_seed_200k_static_qkpre_ladder",
+  "seed": 123,
+  "training_steps": 200000,
+  "training_tokens": 1638236160
+}

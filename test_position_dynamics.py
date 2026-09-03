@@ -7,15 +7,18 @@ import tempfile
 import unittest
 from argparse import Namespace
 from pathlib import Path
+from unittest import mock
 
 import torch
 
 from position import (
     QK_PREPROJECTION_MODES,
     QKPreprojectionPosition,
+    SharedFrequencyBank,
     normalize_qk_preprojection_config,
+    normalize_shared_frequency_config,
 )
-from train_gpt import load_config
+from train_gpt import frequency_gradient_clip_groups, load_config, make_optimizer
 from transformer import Attention, Transformer, count_parameters
 
 
@@ -49,7 +52,7 @@ def _config(
     )
 
 
-class QKPreprojectionTest(unittest.TestCase):
+class QKPreprojectionFormulaTest(unittest.TestCase):
     def test_tied_scalar_preserves_original_formula_and_v_input(self):
         config = _config(gate_init=0.3, learnable_gate=False)
         attention = Attention(
@@ -94,6 +97,58 @@ class QKPreprojectionTest(unittest.TestCase):
             rtol=1e-6,
         )
 
+
+class SharedFrequencyBankTest(unittest.TestCase):
+    def _bank(self, mode: str, *, dimension: int = 8, reference_length: int = 16):
+        config = normalize_shared_frequency_config(
+            {"mode": mode},
+            default_reference_length=reference_length,
+        )
+        return SharedFrequencyBank(dimension, 10_000.0, config)
+
+    def test_both_learned_parameterizations_start_at_exact_fixed_frequency(self):
+        fixed = self._bank("fixed").frequencies()
+        for mode in ("learned_log", "learned_horizon"):
+            with self.subTest(mode=mode):
+                bank = self._bank(mode)
+                torch.testing.assert_close(bank.frequencies(), fixed, rtol=0, atol=0)
+                self.assertEqual(bank.coordinate.dtype, torch.float32)
+
+    def test_horizon_coordinate_has_position_normalized_phase_gradient(self):
+        reference_length = 16
+        bank = self._bank("learned_horizon", reference_length=reference_length)
+        position = reference_length - 1
+        angle = position * bank.frequencies()[2]
+        gradient = torch.autograd.grad(angle, bank.coordinate)[0]
+        expected = torch.zeros_like(gradient)
+        expected[2] = position / reference_length
+        torch.testing.assert_close(gradient, expected, rtol=0, atol=0)
+        self.assertLessEqual(gradient.abs().max().item(), 1.0)
+
+    def test_log_frequency_stays_positive_and_both_modes_receive_gradients(self):
+        for mode in ("learned_log", "learned_horizon"):
+            with self.subTest(mode=mode):
+                bank = self._bank(mode)
+                if mode == "learned_log":
+                    with torch.no_grad():
+                        bank.coordinate.copy_(torch.tensor([-2.0, -0.5, 0.5, 2.0]))
+                    self.assertTrue(bool((bank.frequencies() > 0).all()))
+                bank.frequencies().square().sum().backward()
+                self.assertIsNotNone(bank.coordinate.grad)
+                self.assertTrue(torch.isfinite(bank.coordinate.grad).all().item())
+
+    def test_frequency_parameters_survive_explicit_bf16_conversion(self):
+        bank = self._bank("learned_log")
+        with torch.no_grad():
+            bank.coordinate.copy_(torch.tensor([0.1, -0.2, 0.3, -0.4]))
+        expected = bank.coordinate.detach().clone()
+        bank.bfloat16()
+        self.assertEqual(bank.base_frequency.dtype, torch.float32)
+        self.assertEqual(bank.coordinate.dtype, torch.float32)
+        torch.testing.assert_close(bank.coordinate, expected, rtol=0, atol=0)
+
+
+class QKPreprojectionTest(unittest.TestCase):
     def test_all_modes_share_the_exact_unit_anchor(self):
         modules = {
             mode: QKPreprojectionPosition(
@@ -423,11 +478,177 @@ class IntegratedPreprojectionTest(unittest.TestCase):
                     self.assertIsNotNone(parameter.grad)
                     self.assertTrue(torch.isfinite(parameter.grad).all().item())
 
+    def test_shared_rope_frequency_is_exact_anchor_and_global(self):
+        fixed = self._model(depth=3).eval()
+        learned = self._model(
+            depth=3,
+            rope_frequency_config={"mode": "learned_log"},
+        ).eval()
+        ids = torch.randint(0, 32, (2, 11))
+        torch.testing.assert_close(learned(ids), fixed(ids), rtol=0, atol=0)
+        self.assertIsNotNone(learned.rope_frequency)
+        self.assertEqual(learned.rope_frequency.coordinate.numel(), 4)
+        self.assertFalse(
+            any(
+                hasattr(block.attn, "rope_frequency")
+                for block in learned.blocks
+            )
+        )
+        counts = count_parameters(learned)
+        self.assertEqual(counts["rope_frequency_params"], 4)
+
+    def test_shared_carrier_frequency_is_exact_anchor_and_global(self):
+        fixed_config = {
+            "enabled": True,
+            "mode": "tied_scalar",
+        }
+        fixed = self._model(
+            depth=3,
+            qk_preprojection_config=fixed_config,
+        ).eval()
+        for frequency_mode in ("learned_log", "learned_horizon"):
+            with self.subTest(frequency_mode=frequency_mode):
+                learned_config = {
+                    **fixed_config,
+                    "frequency": {"mode": frequency_mode, "reference_length": 16},
+                }
+                learned = self._model(
+                    depth=3,
+                    qk_preprojection_config=learned_config,
+                ).eval()
+                ids = torch.randint(0, 32, (2, 11))
+                torch.testing.assert_close(learned(ids), fixed(ids), rtol=0, atol=0)
+                self.assertEqual(
+                    learned.qk_preprojection_frequency.coordinate.numel(),
+                    8,
+                )
+                counts = count_parameters(learned)
+                self.assertEqual(counts["qk_preprojection_params"], 3)
+                self.assertEqual(counts["qk_preprojection_frequency_params"], 8)
+
+    def test_shared_frequency_coordinates_receive_finite_model_gradients(self):
+        ids = torch.randint(0, 32, (2, 11))
+        targets = torch.randint(0, 32, (2, 11))
+        models = (
+            self._model(rope_frequency_config={"mode": "learned_log"}),
+            self._model(
+                qk_preprojection_config={
+                    "enabled": True,
+                    "mode": "tied_scalar",
+                    "frequency": {
+                        "mode": "learned_horizon",
+                        "reference_length": 16,
+                    },
+                }
+            ),
+        )
+        for model in models:
+            with self.subTest(bank="rope" if model.rope_frequency else "carrier"):
+                model(ids, targets).backward()
+                bank = model.rope_frequency or model.qk_preprojection_frequency
+                self.assertIsNotNone(bank.coordinate.grad)
+                self.assertTrue(torch.isfinite(bank.coordinate.grad).all().item())
+                self.assertGreater(bank.coordinate.grad.abs().max().item(), 0)
+
+    def test_frequency_diagnostics_preserve_full_shared_spectrum(self):
+        model = self._model(
+            rope_frequency_config={"mode": "learned_log"},
+            qk_preprojection_config={
+                "enabled": True,
+                "mode": "tied_scalar",
+                "frequency": {"mode": "learned_horizon", "reference_length": 16},
+            },
+        )
+        metrics, profiles = model.position_diagnostics(sequence_length=8)
+        self.assertEqual(
+            metrics["position/shared_rope_frequency/multiplier_mean"],
+            1.0,
+        )
+        self.assertEqual(
+            metrics["position/shared_qkpre_frequency/endpoint_phase_delta_rms"],
+            0.0,
+        )
+        self.assertEqual(profiles["shared_rope_frequency/frequency"].numel(), 4)
+        self.assertEqual(profiles["shared_qkpre_frequency/frequency"].numel(), 8)
+
+    def test_frequency_configs_round_trip_with_explicit_reference_horizon(self):
+        payload = {
+            "training_length": 64,
+            "model_position_extent": 64,
+            "evaluation_lengths": [64],
+            "rope_frequency": {"mode": "learned_log"},
+            "qk_preprojection": {
+                "enabled": True,
+                "mode": "tied_scalar",
+                "frequency": {"mode": "learned_horizon"},
+            },
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "frequency.json"
+            path.write_text(json.dumps(payload))
+            config = load_config(_cli(str(path)))
+            self.assertEqual(config.rope_frequency["reference_length"], 64)
+            self.assertEqual(
+                config.qk_preprojection["frequency"]["reference_length"],
+                64,
+            )
+            resolved = Path(directory) / "resolved.json"
+            resolved.write_text(json.dumps(vars(config)))
+            restored = load_config(_cli(str(resolved)))
+            self.assertEqual(restored.rope_frequency, config.rope_frequency)
+            self.assertEqual(restored.qk_preprojection, config.qk_preprojection)
+
+    def test_frequency_banks_have_no_decay_and_independent_clip_groups(self):
+        model = self._model(
+            rope_frequency_config={"mode": "learned_log", "max_grad_norm": 0.25},
+            qk_preprojection_config={
+                "enabled": True,
+                "mode": "tied_scalar",
+                "frequency": {
+                    "mode": "learned_horizon",
+                    "reference_length": 16,
+                    "max_grad_norm": 0.5,
+                },
+            },
+        )
+        optimizer_args = Namespace(
+            optimizer="adamw",
+            exclude_position_from_decay=False,
+            weight_decay=0.1,
+            learning_rate=3.0e-4,
+            beta1=0.9,
+            beta2=0.98,
+        )
+        with mock.patch("torch.cuda.is_available", return_value=False):
+            optimizer = make_optimizer(optimizer_args, model)
+        decay_by_id = {
+            id(parameter): group["weight_decay"]
+            for group in optimizer.param_groups
+            for parameter in group["params"]
+        }
+        self.assertEqual(decay_by_id[id(model.rope_frequency.coordinate)], 0.0)
+        self.assertEqual(
+            decay_by_id[id(model.qk_preprojection_frequency.coordinate)],
+            0.0,
+        )
+        qkpre_gate = model.blocks[0].attn.qk_preprojection.gate
+        self.assertEqual(decay_by_id[id(qkpre_gate)], 0.1)
+
+        clip_groups = frequency_gradient_clip_groups(model)
+        self.assertEqual(len(clip_groups), 2)
+        self.assertEqual({max_norm for _, max_norm in clip_groups}, {0.25, 0.5})
+        self.assertEqual(
+            {id(parameters[0]) for parameters, _ in clip_groups},
+            {
+                id(model.rope_frequency.coordinate),
+                id(model.qk_preprojection_frequency.coordinate),
+            },
+        )
+
     def test_removed_mechanisms_fail_with_migration_message(self):
         removed = {
             "position_gain": {"enabled": True},
             "rotary_clock": {"enabled": True},
-            "rope_frequency": {"mode": "content"},
         }
         with tempfile.TemporaryDirectory() as directory:
             for key, value in removed.items():
@@ -436,6 +657,12 @@ class IntegratedPreprojectionTest(unittest.TestCase):
                     path.write_text(json.dumps({key: value}))
                     with self.assertRaisesRegex(ValueError, "removed|only fixed"):
                         load_config(_cli(str(path)))
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "content-frequency.json"
+            path.write_text(json.dumps({"rope_frequency": {"mode": "content"}}))
+            with self.assertRaisesRegex(ValueError, "frequency mode"):
+                load_config(_cli(str(path)))
 
 
 if __name__ == "__main__":

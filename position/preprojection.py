@@ -10,6 +10,10 @@ from typing import Literal
 import torch
 
 from position.basis import FrozenFourierBasis
+from position.frequency import (
+    SHARED_FREQUENCY_DEFAULTS,
+    normalize_shared_frequency_config,
+)
 from position.precision import PreserveFP32BuffersMixin
 
 
@@ -33,6 +37,9 @@ QK_PREPROJECTION_DEFAULTS = {
     "theta": None,
     "gate_init": 1.0,
     "learnable_gate": True,
+    # The parameterized bank itself lives once on Transformer and is shared by
+    # all of these per-layer carrier adapters.
+    "frequency": copy.deepcopy(SHARED_FREQUENCY_DEFAULTS),
 }
 
 
@@ -49,6 +56,7 @@ def normalize_qk_preprojection_config(
     *,
     model_dim: int,
     rope_theta: float,
+    frequency_reference_length: int | None = None,
 ) -> dict:
     if config is None:
         config = {}
@@ -89,6 +97,15 @@ def normalize_qk_preprojection_config(
         raise ValueError("qk_preprojection.gate_init must be finite")
     if not isinstance(normalized["learnable_gate"], bool):
         raise TypeError("qk_preprojection.learnable_gate must be a boolean")
+    normalized["frequency"] = normalize_shared_frequency_config(
+        normalized["frequency"],
+        default_reference_length=frequency_reference_length,
+    )
+    if not normalized["enabled"] and normalized["frequency"]["mode"] != "fixed":
+        raise ValueError(
+            "qk_preprojection.frequency can be learned only when "
+            "qk_preprojection.enabled=true"
+        )
     return normalized
 
 
@@ -274,17 +291,32 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
         )
         return (rotated * amplitude[None, :, None]).flatten(-2).to(dtype=dtype)
 
-    def forward(self, length: int, *, dtype: torch.dtype) -> QKPreprojectionOutput:
+    def forward(
+        self,
+        length: int,
+        *,
+        dtype: torch.dtype,
+        basis_override: torch.Tensor | None = None,
+    ) -> QKPreprojectionOutput:
         q_gate, k_gate = self.gate_values()
+        if basis_override is not None:
+            if basis_override.shape != (length, self.model_dim):
+                raise ValueError(
+                    "basis_override must have shape "
+                    f"[{length},{self.model_dim}], got {list(basis_override.shape)}"
+                )
+            basis_fp32 = basis_override.float()
+        else:
+            basis_fp32 = self.basis(length)
         if self.mode in {"tied_scalar", "split_scalar"}:
-            basis = self.basis(length, dtype=dtype)
+            basis = basis_fp32.to(dtype=dtype)
             q = basis * q_gate.to(dtype=dtype)
             k = basis * k_gate.to(dtype=dtype)
             return QKPreprojectionOutput(q=q, k=k)
 
         # Keep the stored carrier and phase/amplitude transforms in fp32; cast
         # only the completed coefficients used by the model-width branches.
-        basis = self.basis(length)
+        basis = basis_fp32
         q_delta, k_delta = self.log_amplitude_deltas()
         q_phase, k_phase = self.phase_values()
         return QKPreprojectionOutput(

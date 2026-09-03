@@ -2123,6 +2123,10 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
 
     qk_total = 0
     qk_preprojection_total = 0
+    rope_frequency_total = _unique_numel(getattr(model, "rope_frequency", None))
+    qk_preprojection_frequency_total = _unique_numel(
+        getattr(model, "qk_preprojection_frequency", None)
+    )
     logit_total = 0
     content_total = 0
     blocks = getattr(model, "blocks", None)
@@ -2142,12 +2146,16 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
     position_total = (
         qk_total
         + qk_preprojection_total
+        + rope_frequency_total
+        + qk_preprojection_frequency_total
         + logit_total
         + content_total
     )
     return {
         "qk_position_params": qk_total,
         "qk_preprojection_params": qk_preprojection_total,
+        "rope_frequency_params": rope_frequency_total,
+        "qk_preprojection_frequency_params": qk_preprojection_frequency_total,
         "logit_bias_params": logit_total,
         "position_content_params": content_total,
         "position_params": position_total,

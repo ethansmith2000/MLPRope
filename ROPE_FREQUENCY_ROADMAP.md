@@ -1,10 +1,12 @@
 # Learned RoPE frequency roadmap
 
-> Implementation update (2026-08-22): new cumulative dynamic work lives in
-> `position/clock.py`, not in the historical token-local frequency controller
-> described below. The clock fixes the spectrum and learns bounded positive
-> local speed followed by an exclusive cumulative sum. See
-> [`CURRENT_STATUS.md`](CURRENT_STATUS.md).
+> Current update (2026-09-03): cumulative and token-local frequency mechanisms
+> were retired after negative results. Phase 34 narrowly reopens one static
+> spectrum shared across the complete model, motivated by newer evidence and by
+> the stronger coherence constraint. See
+> [`SHARED_FREQUENCY_PLAN.md`](SHARED_FREQUENCY_PLAN.md) and
+> [`CURRENT_STATUS.md`](CURRENT_STATUS.md). The remainder of this document is
+> the historical decision record for the removed mechanisms.
 
 _Consolidated 2026-08-03. Eval loss at context 1024 is the sole primary
 endpoint. Length extrapolation is not a current hypothesis._

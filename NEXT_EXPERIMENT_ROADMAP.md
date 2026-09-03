@@ -77,7 +77,7 @@ resume smoke retained only the newest marked checkpoint and restored model,
 optimizer, scheduler, sampler, and RNG state. Compact evidence is in
 `results/phase33_static_qkpre_preflight/`.
 
-## Stage 3 — one-seed 200k consolidation screen
+## Stage 3 — one-seed 200k consolidation screen (completed)
 
 The six resolved long-run configs are frozen under
 `sweep_configs/phase33_static_qkpre_200k/`. At measured mean throughput, one
@@ -110,7 +110,25 @@ disjoint holdout slices. Save paired per-example losses. Report:
 An arm may stop early only for divergence, clear sustained harm, or a mechanism
 health failure. Do not prune a close arm from a 10k endpoint.
 
-## Stage 4 — promote finalists
+Final result: tied pre-Q/K plus fixed RoPE beat fixed RoPE by `-0.062831`, and
+RoPE contributed `-0.030773` relative to the tied no-RoPE arm. Every added
+static Q/K/pair amplitude or phase degree of freedom was within about `0.001`
+of its parent. See the Phase-33 report linked from `CURRENT_STATUS.md`.
+
+## Stage 4 — globally shared frequency screen (active)
+
+New evidence supports a materially different static-frequency hypothesis from
+the removed local tables: one learned bank shared across all layers, heads, and
+Q/K branches. The implementation and five-arm protocol are specified in
+[`SHARED_FREQUENCY_PLAN.md`](SHARED_FREQUENCY_PLAN.md).
+
+The screen contains fixed and learned-log pure-RoPE arms, plus fixed,
+learned-log, and horizon-normalized versions of the tied pre-Q/K carrier. All
+use one paired seed and a common 200k horizon. No content conditioning,
+per-layer/head frequency axis, or learned-RoPE/learned-carrier combination is
+included.
+
+## Stage 5 — promote finalists
 
 Promote no more than two candidates. Add seeds 456 and 789 under the identical
 long-horizon protocol. A durable claim requires:
@@ -133,6 +151,9 @@ Only after this gate consider model-width transfer or longer-context testing.
 - full or low-rank mixing between Fourier pairs;
 - combinations of AddRoPE and pre-Q/K injection;
 - broad mapper or coupling sweeps.
+
+Also defer smooth/order-preserving shared spectra and combined learned
+RoPE+carrier arms until the free globally shared banks clear Phase 34.
 
 These are recoverable from history if new evidence creates a specific reason to
 reopen them.

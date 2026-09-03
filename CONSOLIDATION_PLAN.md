@@ -1,16 +1,16 @@
 # MLPRope research and repository consolidation
 
-_Decision record, 2026-09-03. This is the active plan. Historical protocols,
-configs, and the experiment journal remain evidence, not current priorities._
+_Decision record, 2026-09-03; amended after Phase 33 and the globally shared
+frequency review. Historical protocols, configs, and the experiment journal
+remain evidence, not current priorities._
 
 ## Research focus
 
 The active question is now deliberately narrow:
 
-> Can an attention-local sinusoidal signal be made more useful by learning a
-> static, constrained transform of the positional signal before the Q and K
-> projections, while retaining ordinary RoPE as a stable relative-position
-> backbone?
+> Can the successful tied pre-Q/K carrier, or RoPE itself, be improved by one
+> static frequency bank shared across the entire model while retaining a
+> coherent Q/K coordinate system?
 
 The active mechanism families are:
 
@@ -19,11 +19,12 @@ The active mechanism families are:
    initialization;
 3. a sinusoidal signal injected only before the Q/K projections, optionally
    followed by fixed RoPE; and
-4. static Q/K-specific spectral adapters on that preprojection signal.
+4. one static frequency bank shared globally across Q/K, heads, and layers.
 
 Dynamic RoPE frequency, tokenwise rotary phase, cumulative rotary clocks, and
-EMA controllers are closed as active directions. Their results remain useful
-negative or attribution evidence, but they should not define the active API.
+EMA controllers are closed as active directions. The globally shared static
+bank is the only reopened frequency mechanism; it should not revive the old
+local/controller API.
 
 ## Implemented preprojection adapter
 
@@ -90,7 +91,7 @@ spectrum. The initialization is `g=1`, `delta=0`, and `phi=0`.
   bounded phase interventions were materially null. These are different from
   static positional-carrier amplitude and phase.
 
-## Evidence limitation: the models are undertrained
+## Evidence limitation: the models are still below compute-optimal training
 
 At batch 8 and sequence length 1024, each step consumes 8,192 tokens. The
 h768/d8 baseline has approximately 153.4M parameters:
@@ -103,44 +104,39 @@ h768/d8 baseline has approximately 153.4M parameters:
 | 100k | 819.2M | 5.34 |
 | 200k | 1.638B | 10.68 |
 
-Consequently, the completed experiments establish early-training behavior.
-Even the replicated 30k results are not mature-model rankings. In particular,
-the existing pre-Q/K-without-RoPE comparison is only a 5k screen and does not
-answer whether the sinusoidal input ultimately needs RoPE.
+The 200k runs are substantially more informative than the earlier 5k--30k
+screens, but 10.68 tokens per parameter is still below a conventional
+compute-optimal budget. One paired seed can establish a long-horizon mechanism
+ranking, not seed robustness; only a promoted candidate should receive repeats.
 
-## Long-horizon consolidation experiment
+## Phase 33 long-horizon result
 
-Use one paired seed initially and run every arm under the same long-horizon
-schedule:
+The six-arm, one-seed consolidation screen completed at 200k steps on the same
+box and cache. Paired per-example evaluation gave:
 
-| Arm | Question |
-| --- | --- |
-| fixed RoPE | same-box reference |
-| current tied pre-Q/K carrier, no RoPE | does the local sinusoid suffice? |
-| current tied pre-Q/K carrier + RoPE | established preprojection candidate |
-| separate Q/K scalar amplitudes + RoPE | does Q/K tying constrain it? |
-| separate Q/K pair amplitudes + RoPE | does spectral selection help? |
-| separate Q/K pair amplitude and phase + RoPE | does constrained phase add value? |
+| Contrast | Candidate minus reference loss | 95% paired CI |
+| --- | ---: | ---: |
+| tied carrier, no RoPE vs fixed RoPE | -0.032058 | [-0.033636, -0.030480] |
+| tied carrier + RoPE vs fixed RoPE | -0.062831 | [-0.064426, -0.061237] |
+| tied carrier + RoPE vs no-RoPE carrier | -0.030773 | [-0.032424, -0.029123] |
+| split Q/K scalar vs tied carrier | +0.000990 | [-0.000096, +0.002076] |
+| pair amplitude vs split scalar | -0.000116 | [-0.001212, +0.000979] |
+| pair amplitude + phase vs pair amplitude | +0.000165 | [-0.000847, +0.001178] |
 
-Configure all arms for 200k steps from step zero. Evaluate at 10k, 30k, 60k,
-100k, 150k, and 200k. The current linear learning-rate schedule depends on
-`max_train_steps`; a completed short-horizon run whose learning rate reached
-zero is not equivalent to the prefix of a 200k run.
+The carrier remains useful at long horizon, and fixed RoPE contributes another
+large, complementary gain. Separate Q/K amplitudes, per-pair amplitudes, and
+per-pair phase are all materially null. The active anchor is therefore the
+simple tied carrier plus fixed RoPE. See
+[`results/phase33_static_qkpre_200k/PHASE33_RESULTS.md`](results/phase33_static_qkpre_200k/PHASE33_RESULTS.md).
 
-Use successive halving only for clear failures. Compare the full learning
-curves and late-curve slopes, not just a single endpoint. Additional seeds are
-reserved for the best one or two candidates after this screen.
+## Phase 34 globally shared frequency follow-up
 
-Before launch:
-
-1. run all arms on the same box and data cache;
-2. add rolling checkpoint retention so only the latest resumable checkpoint is
-   kept during training;
-3. use the canonical dataset path
-   `/workspace/data/tokenized/openwebtext_gpt2_bs1024` in generated configs;
-4. freeze the source and resolved configs in git; and
-5. pass CPU tests, compiled bf16 CUDA smoke, exact-anchor tests, and parameter
-   count checks.
+The only reopened frequency question is whether one model-wide static spectrum
+can improve RoPE or the tied carrier without introducing token-, head-, layer-,
+or Q/K-specific coordinate drift. The five-arm protocol, parameterizations,
+and promotion gates are frozen in
+[`SHARED_FREQUENCY_PLAN.md`](SHARED_FREQUENCY_PLAN.md). All arms retain the
+Phase 33 200k schedule; additional seeds remain reserved for a clear winner.
 
 ## Repository consolidation policy
 
@@ -154,6 +150,7 @@ runtime does not need to execute every historical configuration.
 - frozen Fourier basis utilities;
 - static AddRoPE and its promoted mapped-carrier reference;
 - the current pre-Q/K sinusoid and the new constrained Q/K spectral adapter;
+- the narrowly scoped model-wide static frequency bank used by Phase 34;
 - fused SDPA training, evaluation, diagnostics, and paired initialization;
 - compact result reports and analysis JSON.
 
@@ -163,7 +160,8 @@ not part of the next sweep. Reconsider it only after the static consolidation.
 
 ### Remove from the active runtime after a provenance commit
 
-- learned static and content-dependent multiplicative RoPE frequencies;
+- old per-layer/per-head learned frequency tables and content-dependent
+  multiplicative RoPE frequencies;
 - rotary phase-residual special cases;
 - cumulative rotary clocks and their pointwise/convolution/EMA controllers;
 - EMA conditioning for AddRoPE;

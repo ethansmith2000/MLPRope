@@ -4,7 +4,14 @@ from position.autograd import exp_with_identity_grad
 from position.basis import (
     FrozenFourierBasis,
     build_position_basis,
+    interleaved_fourier_from_frequencies,
     interleaved_fourier_basis,
+)
+from position.frequency import (
+    FREQUENCY_MODES,
+    SHARED_FREQUENCY_DEFAULTS,
+    SharedFrequencyBank,
+    normalize_shared_frequency_config,
 )
 from position.channels import (
     PositionChannel,
@@ -43,6 +50,7 @@ from position.preprojection import (
 from position.rotary import (
     apply_rotary,
     build_rope_cache,
+    build_rope_cache_from_frequencies,
     build_rope_frequencies,
     rotate_half,
 )
@@ -50,6 +58,7 @@ from position.rotary import (
 __all__ = [
     "FrozenFourierBasis",
     "FeatureMapper",
+    "FREQUENCY_MODES",
     "POSITION_PRESETS",
     "POSITION_SCHEMA_VERSION",
     "POSITION_VARIANTS",
@@ -62,12 +71,15 @@ __all__ = [
     "QK_PREPROJECTION_MODES",
     "QKPreprojectionPosition",
     "QKPreprojectionOutput",
+    "SHARED_FREQUENCY_DEFAULTS",
+    "SharedFrequencyBank",
     "adapt_legacy_position_state_dict",
     "apply_rotary",
     "build_mapper",
     "build_qk_position_channel",
     "build_position_basis",
     "build_rope_cache",
+    "build_rope_cache_from_frequencies",
     "build_rope_frequencies",
     "channel_theta",
     "count_position_parameters",
@@ -75,12 +87,14 @@ __all__ = [
     "ensure_channel_v2",
     "exp_with_identity_grad",
     "interleaved_fourier_basis",
+    "interleaved_fourier_from_frequencies",
     "legacy_position_run_tag",
     "load_position_compatible_state_dict",
     "normalize_logit_bias_config",
     "normalize_position_config_v2",
     "normalize_position_content_config",
     "normalize_qk_preprojection_config",
+    "normalize_shared_frequency_config",
     "resolve_channel_config",
     "rotate_half",
     "upgrade_legacy_position_config",

@@ -44,6 +44,7 @@ from position import (
     normalize_logit_bias_config,
     normalize_position_content_config,
     normalize_qk_preprojection_config,
+    normalize_shared_frequency_config,
     resolve_channel_config,
     v2_position_run_tag,
 )
@@ -286,16 +287,26 @@ def position_run_tag(cfg: dict) -> str:
             attn_impl=cfg["attn_impl"],
         )
     extras = []
+    rope_frequency = cfg.get("rope_frequency", {})
+    if rope_frequency.get("mode", "fixed") != "fixed":
+        extras.append("ropefreq-" + rope_frequency["mode"].replace("_", "-"))
     preprojection = cfg.get("qk_preprojection", {})
     if preprojection.get("enabled", False):
         mode = preprojection.get("mode", "tied_scalar").replace("_", "-")
         extras.append(f"qkpre-{mode}")
+        preprojection_frequency = preprojection.get("frequency", {})
+        if preprojection_frequency.get("mode", "fixed") != "fixed":
+            extras.append(
+                "qkpre-freq-"
+                + preprojection_frequency["mode"].replace("_", "-")
+            )
     tag = base if not extras else "+".join((base, *extras))
     if source == 2:
         canonical = {
             "qk": cfg["qk"],
             "logit_bias": cfg["logit_bias"],
             "qk_preprojection": cfg.get("qk_preprojection", {}),
+            "rope_frequency": cfg.get("rope_frequency", {}),
             "model_context": {
                 "hidden_size": cfg["hidden_size"],
                 "n_head": cfg["n_head"],
@@ -512,17 +523,18 @@ def load_config(cli_args):
     if not isinstance(cfg["use_rope"], bool):
         raise TypeError("use_rope must be a boolean")
     rope_frequency_mode = cfg.pop("rope_frequency_mode")
-    rope_frequency = cfg.pop("rope_frequency")
+    rope_frequency = cfg["rope_frequency"]
     if rope_frequency_mode != "fixed" or not isinstance(rope_frequency, dict):
         raise ValueError(
-            "learned/static RoPE frequency mechanisms were removed; only fixed "
-            "RoPE is supported"
+            "rope_frequency_mode is a retired compatibility key; configure "
+            "the nested rope_frequency object instead"
         )
-    if rope_frequency.get("mode", "fixed") != "fixed":
-        raise ValueError(
-            "learned/static RoPE frequency mechanisms were removed; only fixed "
-            "RoPE is supported"
-        )
+    cfg["rope_frequency"] = normalize_shared_frequency_config(
+        rope_frequency,
+        default_reference_length=training_length,
+    )
+    if not cfg["use_rope"] and cfg["rope_frequency"]["mode"] != "fixed":
+        raise ValueError("learned rope_frequency requires use_rope=true")
     if not isinstance(cfg["post_position_qk_norm"], bool):
         raise TypeError("post_position_qk_norm must be a boolean")
     if not isinstance(cfg["exclude_position_from_decay"], bool):
@@ -551,6 +563,7 @@ def load_config(cli_args):
         overrides.get("qk_preprojection", cfg["qk_preprojection"]),
         model_dim=model_dim,
         rope_theta=rope_theta,
+        frequency_reference_length=training_length,
     )
     for removed_key in ("rotary_clock", "position_gain"):
         removed_config = cfg.pop(removed_key)
@@ -599,6 +612,8 @@ def load_config(cli_args):
     if (
         cfg["qk_preprojection"]["enabled"]
     ):
+        enabled_sources.append(2)
+    if cfg["rope_frequency"]["mode"] != "fixed":
         enabled_sources.append(2)
     if not cfg["use_rope"]:
         enabled_sources.append(2)
@@ -877,6 +892,7 @@ def make_model(args, vocab_size):
         gradient_checkpointing=args.gradient_checkpointing,
         use_rope=args.use_rope,
         rope_theta=args.rope_theta,
+        rope_frequency_config=args.rope_frequency,
         qk_preprojection_config=args.qk_preprojection,
         qk_norm=args.qk_norm,
         post_position_qk_norm=args.post_position_qk_norm,
@@ -901,6 +917,8 @@ POSITION_DECAY_EXEMPT = (
     "position_content",
     "carrier_hypernetwork",
     "qk_preprojection",
+    "rope_frequency",
+    "qk_preprojection_frequency",
 )
 
 
@@ -909,11 +927,19 @@ def make_optimizer(args, model):
         raise ValueError("Only AdamW is supported.")
     no_decay = ("bias", "norm")
     exempt_position = bool(getattr(args, "exclude_position_from_decay", False))
+    frequency_parameter_ids = {
+        id(parameter)
+        for module_name in ("rope_frequency", "qk_preprojection_frequency")
+        if (module := getattr(model, module_name, None)) is not None
+        for parameter in module.parameters()
+    }
     grouped = {}
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        exempt = any(nd in name for nd in no_decay) or (
+        exempt = id(param) in frequency_parameter_ids or any(
+            nd in name for nd in no_decay
+        ) or (
             exempt_position
             and any(tag in name for tag in POSITION_DECAY_EXEMPT)
         )
@@ -926,6 +952,19 @@ def make_optimizer(args, model):
         betas=(args.beta1, args.beta2),
         fused=torch.cuda.is_available(),
     )
+
+
+def frequency_gradient_clip_groups(model) -> list[tuple[list[torch.nn.Parameter], float]]:
+    """Return independent learned-frequency clipping groups."""
+    groups = []
+    for module_name in ("rope_frequency", "qk_preprojection_frequency"):
+        module = getattr(model, module_name, None)
+        if module is None or module.max_grad_norm is None:
+            continue
+        parameters = [parameter for parameter in module.parameters() if parameter.requires_grad]
+        if parameters:
+            groups.append((parameters, float(module.max_grad_norm)))
+    return groups
 
 
 TOKENIZED_CACHE_MANIFEST = "mlprope_cache_manifest.json"
@@ -1559,6 +1598,7 @@ def main():
             "qk": args.qk,
             "logit_bias": args.logit_bias,
             "use_rope": args.use_rope,
+            "rope_frequency": args.rope_frequency,
             "qk_preprojection": args.qk_preprojection,
             "post_position_qk_norm": args.post_position_qk_norm,
             "exclude_position_from_decay": args.exclude_position_from_decay,
@@ -1679,6 +1719,17 @@ def main():
     # Batches are shifted by one token before entering the model.
     model.prepare_flex_masks(args.training_length - 1, accelerator.device)
 
+    frequency_clip_groups = frequency_gradient_clip_groups(model)
+    frequency_clip_parameter_ids = {
+        id(parameter)
+        for parameters, _ in frequency_clip_groups
+        for parameter in parameters
+    }
+    regular_clip_parameters = [
+        parameter
+        for parameter in model.parameters()
+        if parameter.requires_grad and id(parameter) not in frequency_clip_parameter_ids
+    ]
     optimizer = make_optimizer(args, model)
     steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     max_train_steps = args.max_train_steps or args.num_train_epochs * steps_per_epoch
@@ -1788,8 +1839,14 @@ def main():
                 stage_timer.range_end("backward")
 
                 stage_timer.range_start("optimizer")
-                if accelerator.sync_gradients and args.max_grad_norm is not None:
-                    accelerator.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                if accelerator.sync_gradients:
+                    if args.max_grad_norm is not None:
+                        accelerator.clip_grad_norm_(
+                            regular_clip_parameters,
+                            args.max_grad_norm,
+                        )
+                    for parameters, max_grad_norm in frequency_clip_groups:
+                        accelerator.clip_grad_norm_(parameters, max_grad_norm)
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=True)

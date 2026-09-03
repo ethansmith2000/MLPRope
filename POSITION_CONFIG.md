@@ -1,11 +1,15 @@
 # Position configuration
 
 MLPRope resolves positional settings to JSON-safe schema v2 before model
-construction. The active runtime deliberately supports three families:
+construction. The active runtime deliberately supports three core families:
 
 1. fixed standard RoPE, or a NoPE control;
 2. additive Fourier features on projected Q/K (AddRoPE); and
 3. a frozen sinusoid added immediately before the Q/K projections.
+
+One research-only extension can replace either fixed RoPE frequencies or the
+pre-Q/K carrier frequencies with a small static bank shared by every layer and
+attention head. It never depends on token content.
 
 The research rationale and experiment plan are in
 [`CONSOLIDATION_PLAN.md`](CONSOLIDATION_PLAN.md). Historical implementations
@@ -22,6 +26,7 @@ position_content_dim: 64
 position_content_coupling: separate # shared | separate
 
 qk_preprojection: {enabled: false}
+rope_frequency: {mode: fixed}
 qk: {enabled: false}
 logit_bias: {enabled: false}
 ```
@@ -53,13 +58,49 @@ q'_i(p) = R(omega_i p) q_i(p)
 ```
 
 RoPE angles and cached sine/cosine tables remain fp32 even when model weights
-are converted to bf16/fp16. There are no trainable frequency, phase-residual,
-scale, clock, or warp parameters in this path.
+are converted to bf16/fp16. In `fixed` mode there are no trainable frequency,
+phase-residual, scale, clock, or warp parameters in this path. Historical
+local/controller frequency forms still raise a clear migration error; the only
+trainable form is the globally shared bank described below.
 
-For compatibility with old resolved configs, the loader accepts only
-`rope_frequency: {mode: fixed}`, `rotary_clock: {enabled: false}`, and
-`position_gain: {enabled: false}`. Any active historical form raises a clear
-migration error.
+## Globally shared static frequency bank
+
+The same schema is available under top-level `rope_frequency` and under
+`qk_preprojection.frequency`:
+
+```yaml
+rope_frequency:
+  mode: fixed                 # fixed | learned_log | learned_horizon
+  reference_length: null      # resolves to the training sequence length
+  max_grad_norm: 1.0          # clips this bank independently
+```
+
+For each Fourier pair, `learned_log` uses
+
+```text
+omega_i = omega_i^0 exp(delta_i),       delta_i = 0 initially,
+```
+
+while `learned_horizon` uses
+
+```text
+omega_i = omega_i^0 + rho_i / L,        rho_i = 0 initially,
+theta_i(p) = p omega_i^0 + (p/L) rho_i.
+```
+
+Here `L` is the configured reference length. The horizon coordinates express
+the parameter directly as an endpoint phase displacement, so the multiplier
+in its phase gradient is `p/L <= 1` on the training context instead of `p`.
+This is a forward parameterization, not a custom backward rule. Both learned
+modes are exact fixed-frequency anchors at initialization.
+
+Each enabled location owns exactly one top-level fp32 vector: `D_head/2`
+parameters for RoPE or `D_model/2` for the full-width pre-Q/K carrier. That
+vector is shared across Q/K, heads, and layers, excluded from weight decay, and
+clipped independently from ordinary model gradients. Diagnostics report
+frequency multipliers, endpoint phase displacement, nonpositive frequencies,
+and ordering violations. This extension preserves causality because the bank
+is static after training and its forward value does not read the sequence.
 
 ## Pre-Q/K sinusoidal injection
 
@@ -72,6 +113,10 @@ qk_preprojection:
   theta: null           # resolves to rope_theta
   gate_init: 1.0
   learnable_gate: true
+  frequency:
+    mode: fixed               # fixed | learned_log | learned_horizon
+    reference_length: null
+    max_grad_norm: 1.0
 ```
 
 For the normalized block input `x_p` and frozen full-width Fourier vector
@@ -226,7 +271,7 @@ Legacy v1 additive configs still upgrade (`apply=add`). Enabled
 rotary output-scale keys remain parseable inside disabled archival config
 shapes but do not affect fixed RoPE.
 
-The following top-level blocks accept only their disabled form:
+The following historical top-level blocks accept only their disabled form:
 
 ```yaml
 logit_bias: {enabled: false}
@@ -234,7 +279,6 @@ residual_stream: {enabled: false}
 attention_write: {enabled: false}
 rotary_clock: {enabled: false}
 position_gain: {enabled: false}
-rope_frequency: {mode: fixed}
 ```
 
 This keeps old resolved configs understandable without retaining dormant model
