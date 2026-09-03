@@ -6,13 +6,19 @@ import argparse
 import copy
 import fcntl
 import hashlib
+import importlib.metadata
 import inspect as _inspect
 import json
 import logging
 import math
 import os
+import platform
+import shutil
+import subprocess
+import sys
 import tempfile
 import time
+from datetime import datetime, timezone
 from itertools import chain
 from pathlib import Path
 from types import SimpleNamespace
@@ -112,9 +118,9 @@ DEFAULT_CONFIG = {
     "tokenizer_name": None,
     "use_slow_tokenizer": False,
     "hf_cache_dir": os.environ["HF_DATASETS_CACHE"],
-    # Shared on-disk cache so parallel gpu-claim jobs don't re-tokenize.
+    # Canonical shared cache so parallel gpu-claim jobs don't re-tokenize.
     "tokenized_dataset_path": str(
-        WORKSPACE_DIR / ".cache" / "tokenized" / "openwebtext_gpt2_bs1024"
+        WORKSPACE_DIR / "data" / "tokenized" / "openwebtext_gpt2_bs1024"
     ),
     "preprocessing_num_workers": min(8, os.cpu_count() or 1),
     "overwrite_cache": False,
@@ -140,6 +146,9 @@ DEFAULT_CONFIG = {
     "paired_initialization_seed": None,
     "max_grad_norm": 1.0,
     "checkpointing_steps": None,
+    # Null preserves historical keep-all behavior. Long runs set this to one.
+    "checkpoint_keep_latest": None,
+    "checkpoint_milestones": [],
     "save_final_model": False,
     "resume_from_checkpoint": None,
     "output_dir": None,
@@ -390,6 +399,25 @@ def load_config(cli_args):
         if checkpointing_steps <= 0:
             raise ValueError("checkpointing_steps must be positive")
         cfg["checkpointing_steps"] = checkpointing_steps
+    checkpoint_keep_latest = cfg["checkpoint_keep_latest"]
+    if checkpoint_keep_latest is not None:
+        if isinstance(checkpoint_keep_latest, bool):
+            raise TypeError("checkpoint_keep_latest must be an integer or null")
+        checkpoint_keep_latest = int(checkpoint_keep_latest)
+        if checkpoint_keep_latest <= 0:
+            raise ValueError("checkpoint_keep_latest must be positive")
+        cfg["checkpoint_keep_latest"] = checkpoint_keep_latest
+    raw_checkpoint_milestones = cfg["checkpoint_milestones"]
+    if not isinstance(raw_checkpoint_milestones, list):
+        raise TypeError("checkpoint_milestones must be a list of integers")
+    checkpoint_milestones = []
+    for step in raw_checkpoint_milestones:
+        if isinstance(step, bool) or not isinstance(step, int):
+            raise TypeError("checkpoint_milestones must contain only integers")
+        if step <= 0:
+            raise ValueError("checkpoint_milestones must contain only positive steps")
+        checkpoint_milestones.append(step)
+    cfg["checkpoint_milestones"] = sorted(set(checkpoint_milestones))
     if not isinstance(cfg["save_final_model"], bool):
         raise TypeError("save_final_model must be a boolean")
     if not isinstance(cfg["save_evaluation_details"], bool):
@@ -624,22 +652,51 @@ def load_config(cli_args):
     return SimpleNamespace(**cfg)
 
 
+CHECKPOINT_COMPLETE_MARKER = "CHECKPOINT_COMPLETE.json"
+CHECKPOINT_POLICY_FILE = "checkpoint_policy.json"
+
+
+def _checkpoint_directories(output_dir: str | Path) -> list[tuple[int, Path]]:
+    root = Path(output_dir)
+    if not root.is_dir():
+        return []
+    candidates = []
+    for path in root.iterdir():
+        if not path.is_dir() or path.is_symlink() or not path.name.startswith("step_"):
+            continue
+        try:
+            candidates.append((int(path.name.split("_", 1)[1]), path))
+        except ValueError:
+            continue
+    return sorted(candidates)
+
+
+def _checkpoint_markers_required(output_dir: str | Path) -> bool:
+    policy_path = Path(output_dir) / CHECKPOINT_POLICY_FILE
+    if not policy_path.is_file():
+        return False
+    try:
+        with policy_path.open() as handle:
+            policy = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(policy.get("complete_marker_required", False))
+
+
 def resolve_resume_checkpoint(output_dir, resume_from_checkpoint):
     if not resume_from_checkpoint:
         return None
     if str(resume_from_checkpoint).lower() not in ("auto", "latest"):
         return os.path.abspath(os.path.expanduser(str(resume_from_checkpoint)))
-    if not os.path.isdir(output_dir):
-        return None
-    candidates = []
-    for name in os.listdir(output_dir):
-        path = os.path.join(output_dir, name)
-        if os.path.isdir(path) and name.startswith("step_"):
-            try:
-                candidates.append((int(name.split("_", 1)[1]), path))
-            except ValueError:
-                continue
-    return max(candidates, default=(None, None))[1]
+    candidates = _checkpoint_directories(output_dir)
+    if _checkpoint_markers_required(output_dir):
+        candidates = [
+            (step, path)
+            for step, path in candidates
+            if (path / CHECKPOINT_COMPLETE_MARKER).is_file()
+        ]
+    latest = max(candidates, default=(None, None))
+    return None if latest[1] is None else str(latest[1])
 
 
 def checkpoint_step(checkpoint_path):
@@ -650,6 +707,95 @@ def checkpoint_step(checkpoint_path):
         return int(name.split("_", 1)[1])
     except ValueError as exc:
         raise ValueError(f"Checkpoint directory must be named step_N, got {name!r}") from exc
+
+
+def write_checkpoint_policy(args) -> None:
+    """Declare whether this output directory uses completion-marked saves."""
+    if args.checkpoint_keep_latest is None:
+        return
+    _write_json_atomic(
+        Path(args.output_dir) / CHECKPOINT_POLICY_FILE,
+        {
+            "schema_version": 1,
+            "complete_marker_required": True,
+            "checkpoint_keep_latest": int(args.checkpoint_keep_latest),
+            "checkpoint_milestones": list(args.checkpoint_milestones),
+        },
+    )
+
+
+def prune_checkpoints(
+    output_dir: str | Path,
+    *,
+    keep_latest: int | None,
+    milestones: list[int] | tuple[int, ...] = (),
+) -> list[str]:
+    """Remove superseded complete checkpoints after a newer save succeeds."""
+    if keep_latest is None:
+        return []
+    if keep_latest <= 0:
+        raise ValueError("keep_latest must be positive or null")
+    root = Path(output_dir).resolve()
+    candidates = _checkpoint_directories(root)
+    complete = [
+        (step, path)
+        for step, path in candidates
+        if (path / CHECKPOINT_COMPLETE_MARKER).is_file()
+    ]
+    latest_steps = {step for step, _ in complete[-keep_latest:]}
+    keep_steps = latest_steps | {int(step) for step in milestones}
+    removed = []
+    for step, path in candidates:
+        if step in keep_steps:
+            continue
+        resolved = path.resolve()
+        if resolved.parent != root or path.is_symlink():
+            raise RuntimeError(f"Refusing to prune unsafe checkpoint path: {path}")
+        shutil.rmtree(resolved)
+        removed.append(path.name)
+    return removed
+
+
+def save_training_checkpoint(args, accelerator, completed_steps: int) -> None:
+    """Save, mark, then prune without risking the last complete checkpoint."""
+    checkpoint_path = Path(args.output_dir) / f"step_{completed_steps}"
+    if accelerator.is_main_process and checkpoint_path.exists():
+        if checkpoint_path.is_symlink():
+            raise RuntimeError(
+                f"Refusing to replace checkpoint symlink: {checkpoint_path}"
+            )
+        if (checkpoint_path / CHECKPOINT_COMPLETE_MARKER).is_file():
+            raise FileExistsError(
+                f"Complete checkpoint already exists: {checkpoint_path}"
+            )
+        root = Path(args.output_dir).resolve()
+        resolved = checkpoint_path.resolve()
+        if resolved.parent != root:
+            raise RuntimeError(
+                f"Refusing to replace unsafe checkpoint path: {checkpoint_path}"
+            )
+        shutil.rmtree(resolved)
+        logger.warning("Removed incomplete checkpoint before retry: %s", checkpoint_path)
+    accelerator.wait_for_everyone()
+    accelerator.save_state(str(checkpoint_path))
+    accelerator.wait_for_everyone()
+    if accelerator.is_main_process:
+        _write_json_atomic(
+            checkpoint_path / CHECKPOINT_COMPLETE_MARKER,
+            {
+                "schema_version": 1,
+                "step": int(completed_steps),
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        removed = prune_checkpoints(
+            args.output_dir,
+            keep_latest=args.checkpoint_keep_latest,
+            milestones=args.checkpoint_milestones,
+        )
+        if removed:
+            logger.info("Pruned superseded checkpoints: %s", ", ".join(removed))
+    accelerator.wait_for_everyone()
 
 
 def _interval_due(interval, step: int) -> bool:
@@ -783,6 +929,10 @@ def make_optimizer(args, model):
 
 
 TOKENIZED_CACHE_MANIFEST = "mlprope_cache_manifest.json"
+TOKENIZED_CACHE_MANIFEST_CANDIDATES = (
+    TOKENIZED_CACHE_MANIFEST,
+    ".tokenized-cache-manifest.json",
+)
 
 
 def _source_file_identity(path: str | None) -> dict | None:
@@ -822,8 +972,15 @@ def tokenized_cache_manifest(args, tokenizer) -> dict:
 def _validate_tokenized_cache(path: str | Path, args, tokenizer):
     path = Path(path)
     expected = tokenized_cache_manifest(args, tokenizer)
-    manifest_path = path / TOKENIZED_CACHE_MANIFEST
-    if manifest_path.is_file():
+    manifest_path = next(
+        (
+            path / name
+            for name in TOKENIZED_CACHE_MANIFEST_CANDIDATES
+            if (path / name).is_file()
+        ),
+        None,
+    )
+    if manifest_path is not None:
         with manifest_path.open() as handle:
             actual = json.load(handle)
         if actual.get("fingerprint") != expected["fingerprint"]:
@@ -997,6 +1154,174 @@ def _write_json_atomic(path: str | Path, payload: dict) -> None:
     os.replace(temporary_path, path)
 
 
+def _json_fingerprint(payload: object) -> str:
+    canonical = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _run_command(command: list[str]) -> str | None:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=REPO_DIR,
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.stdout.strip()
+
+
+def source_provenance() -> dict:
+    status = _run_command(["git", "status", "--porcelain=v1", "--untracked-files=all"])
+    return {
+        "repository": str(REPO_DIR.resolve()),
+        "commit": _run_command(["git", "rev-parse", "HEAD"]),
+        "branch": _run_command(["git", "branch", "--show-current"]),
+        "dirty": None if status is None else bool(status),
+        "status_porcelain": None if status is None else status.splitlines(),
+    }
+
+
+def software_provenance() -> dict:
+    packages = {}
+    for package in (
+        "accelerate",
+        "datasets",
+        "tokenizers",
+        "torch",
+        "transformers",
+        "triton",
+        "wandb",
+    ):
+        try:
+            packages[package] = importlib.metadata.version(package)
+        except importlib.metadata.PackageNotFoundError:
+            packages[package] = None
+    return {
+        "python": sys.version,
+        "platform": platform.platform(),
+        "packages": packages,
+        "torch_cuda": torch.version.cuda,
+        "cudnn": torch.backends.cudnn.version(),
+        "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
+        "nvidia_driver_versions": sorted(
+            set(
+                filter(
+                    None,
+                    (_run_command([
+                        "nvidia-smi",
+                        "--query-gpu=driver_version",
+                        "--format=csv,noheader,nounits",
+                    ]) or "").splitlines(),
+                )
+            )
+        ),
+    }
+
+
+def hardware_provenance() -> dict:
+    payload = {
+        "cpu_count": os.cpu_count(),
+        "cuda_available": torch.cuda.is_available(),
+        "cuda_device_count_visible": torch.cuda.device_count(),
+    }
+    if not torch.cuda.is_available():
+        return payload
+    device = torch.cuda.current_device()
+    properties = torch.cuda.get_device_properties(device)
+    payload["cuda_device"] = {
+        "visible_index": int(device),
+        "name": properties.name,
+        "uuid": str(getattr(properties, "uuid", "")) or None,
+        "compute_capability": list(torch.cuda.get_device_capability(device)),
+        "total_memory_bytes": int(properties.total_memory),
+        "multiprocessor_count": int(properties.multi_processor_count),
+    }
+    return payload
+
+
+def dataset_provenance(args, dataset) -> dict:
+    requested_path = args.tokenized_dataset_path
+    payload = {
+        "dataset_name": args.dataset_name,
+        "dataset_config_name": args.dataset_config_name,
+        "requested_path": requested_path,
+        "resolved_path": None,
+        "splits": {
+            name: {
+                "rows": int(len(split)),
+                "fingerprint": getattr(split, "_fingerprint", None),
+            }
+            for name, split in dataset.items()
+        },
+        "manifests": {},
+    }
+    if not requested_path:
+        return payload
+    path = Path(requested_path).expanduser()
+    payload["resolved_path"] = str(path.resolve())
+    for name in (
+        "mlprope_cache_manifest.json",
+        ".tokenized-cache-manifest.json",
+        "MANIFEST.json",
+    ):
+        manifest_path = path / name
+        if not manifest_path.is_file():
+            continue
+        raw = manifest_path.read_bytes()
+        try:
+            content = json.loads(raw)
+        except json.JSONDecodeError:
+            content = None
+        payload["manifests"][name] = {
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "content": content,
+        }
+    return payload
+
+
+def record_run_provenance(args, counts: dict, dataset) -> dict:
+    """Append one launch record without discarding an earlier resume history."""
+    resolved_config = vars(args)
+    provenance_path = Path(args.output_dir) / "run_provenance.json"
+    existing = None
+    if provenance_path.is_file():
+        try:
+            with provenance_path.open() as handle:
+                existing = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            existing = None
+    if not isinstance(existing, dict) or existing.get("schema_version") != 1:
+        existing = {"schema_version": 1, "launches": []}
+    launch = {
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+        "argv": sys.argv,
+        "working_directory": os.getcwd(),
+        "source": source_provenance(),
+        "software": software_provenance(),
+        "hardware": hardware_provenance(),
+        "dataset": dataset_provenance(args, dataset),
+    }
+    existing.update(
+        {
+            "resolved_config": resolved_config,
+            "resolved_config_sha256": _json_fingerprint(resolved_config),
+            "parameter_counts": counts,
+        }
+    )
+    existing.setdefault("launches", []).append(launch)
+    _write_json_atomic(provenance_path, existing)
+    return existing
+
+
 @torch.no_grad()
 def evaluate(
     args,
@@ -1128,16 +1453,25 @@ def evaluate(
         }
         with open(os.path.join(args.output_dir, "metrics.jsonl"), "a") as f:
             f.write(json.dumps(metrics, sort_keys=True) + "\n")
-        if final_evaluation and args.save_evaluation_details:
+        if args.save_evaluation_details:
             detail_dir = Path(args.output_dir) / "evaluation_details"
+            evaluation_kind = "final_holdout" if final_evaluation else "development"
             for context_length, details in evaluation_details.items():
+                if final_evaluation:
+                    filename = (
+                        f"step_{int(step):08d}_context_{int(context_length):06d}.json"
+                    )
+                else:
+                    filename = (
+                        f"step_{int(step):08d}_development_"
+                        f"context_{int(context_length):06d}.json"
+                    )
                 _write_json_atomic(
-                    detail_dir
-                    / f"step_{int(step):08d}_context_{int(context_length):06d}.json",
+                    detail_dir / filename,
                     {
                         "step": int(step),
                         "context_length": int(context_length),
-                        "evaluation_kind": "final_holdout",
+                        "evaluation_kind": evaluation_kind,
                         "evaluation_start_batch": int(start_batch),
                         **details,
                     },
@@ -1169,15 +1503,15 @@ def save_model(args, model, tokenizer, accelerator, completed_steps, max_train_s
     if not accelerator.is_main_process:
         return
     os.makedirs(args.output_dir, exist_ok=True)
-    with open(os.path.join(args.output_dir, "training_config.json"), "w") as f:
-        json.dump(vars(args), f, indent=2)
+    _write_json_atomic(
+        Path(args.output_dir) / "training_config.json",
+        vars(args),
+    )
     if completed_steps >= max_train_steps:
-        with open(os.path.join(args.output_dir, "COMPLETED"), "w") as f:
-            json.dump(
-                {"completed_at": time.time(), "completed_steps": completed_steps},
-                f,
-            )
-            f.write("\n")
+        _write_json_atomic(
+            Path(args.output_dir) / "COMPLETED",
+            {"completed_at": time.time(), "completed_steps": completed_steps},
+        )
     if not args.save_final_model:
         logger.info(
             "skipping weight save (save_final_model=false); markers in %s",
@@ -1294,12 +1628,18 @@ def main():
 
     if accelerator.is_main_process:
         os.makedirs(args.output_dir, exist_ok=True)
-        with open(os.path.join(args.output_dir, "training_config.json"), "w") as f:
-            json.dump(vars(args), f, indent=2)
+        _write_json_atomic(
+            Path(args.output_dir) / "training_config.json",
+            vars(args),
+        )
+        write_checkpoint_policy(args)
     accelerator.wait_for_everyone()
 
     with accelerator.main_process_first():
         lm_datasets = load_tokenized_datasets(args, tokenizer)
+    if accelerator.is_main_process:
+        record_run_provenance(args, counts, lm_datasets)
+    accelerator.wait_for_everyone()
 
     loader_kwargs = {
         "collate_fn": default_data_collator,
@@ -1495,11 +1835,12 @@ def main():
                 if args.with_tracking:
                     accelerator.log(logs, step=completed_steps)
 
-            if args.checkpointing_steps and str(args.checkpointing_steps).isdigit():
-                if _interval_due(int(args.checkpointing_steps), completed_steps):
-                    accelerator.save_state(
-                        os.path.join(args.output_dir, f"step_{completed_steps}")
-                    )
+            checkpoint_due = _interval_due(
+                args.checkpointing_steps,
+                completed_steps,
+            ) or completed_steps in args.checkpoint_milestones
+            if checkpoint_due:
+                save_training_checkpoint(args, accelerator, completed_steps)
             if _interval_due(args.validate_every, completed_steps):
                 evaluate(args, model, eval_dataloaders, accelerator, completed_steps)
             if completed_steps >= max_train_steps:

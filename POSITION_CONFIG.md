@@ -253,6 +253,39 @@ The model extent and explicit relative extent must cover every requested
 evaluation length. Longer validation examples are formed by contiguous
 rechunking of the cached validation token stream.
 
+## Long-run storage and provenance
+
+The canonical OpenWebText cache is
+`/workspace/data/tokenized/openwebtext_gpt2_bs1024`. The loader accepts and
+strictly checks both the historical MLPRope fingerprint filename and the
+shared `.tokenized-cache-manifest.json` filename. Every run copies all
+available cache manifests, their SHA-256 hashes, split counts, and dataset
+fingerprints into `run_provenance.json`.
+
+Long runs should use:
+
+```yaml
+checkpointing_steps: 5000
+checkpoint_keep_latest: 1
+checkpoint_milestones: []
+resume_from_checkpoint: auto
+save_evaluation_details: true
+```
+
+A checkpoint becomes resumable only after `accelerator.save_state` completes
+and `CHECKPOINT_COMPLETE.json` is written. Only then may older states be
+pruned. `checkpoint_keep_latest` retains that many newest complete states;
+steps named in `checkpoint_milestones` are retained in addition. A policy file
+makes automatic resume ignore a newer partial directory after an interrupted
+save. Null `checkpoint_keep_latest` preserves the historical keep-all policy.
+
+`run_provenance.json` appends one launch record on every restart. It includes
+the exact resolved config and its hash, source commit and dirty-tree listing,
+parameter counts, focused Python/package/CUDA versions, visible GPU identity,
+and dataset identity. Periodic development evaluations save their per-example
+losses separately from the final holdout details, enabling paired confidence
+intervals at every evaluation milestone.
+
 ## Verification
 
 ```bash

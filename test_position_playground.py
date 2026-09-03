@@ -23,7 +23,20 @@ from position import (
     interleaved_fourier_basis,
     normalize_position_config_v2,
 )
-from train_gpt import RechunkedTokenDataset, evaluate, load_config, make_model
+from train_gpt import (
+    CHECKPOINT_COMPLETE_MARKER,
+    RechunkedTokenDataset,
+    _validate_tokenized_cache,
+    evaluate,
+    load_config,
+    make_model,
+    prune_checkpoints,
+    record_run_provenance,
+    resolve_resume_checkpoint,
+    save_training_checkpoint,
+    tokenized_cache_manifest,
+    write_checkpoint_policy,
+)
 from transformer import (
     Attention,
     Transformer,
@@ -1514,6 +1527,15 @@ class EvaluationProtocolTest(unittest.TestCase):
             details = json.loads(detail_path.read_text())
             self.assertEqual(details["evaluation_start_batch"], 3)
             self.assertEqual(details["losses"], [5.0, 6.0])
+            development_path = (
+                Path(output_dir)
+                / "evaluation_details"
+                / "step_00000010_development_context_000004.json"
+            )
+            development_details = json.loads(development_path.read_text())
+            self.assertEqual(development_details["evaluation_kind"], "development")
+            self.assertEqual(development_details["evaluation_start_batch"], 1)
+            self.assertEqual(development_details["losses"], [3.0, 4.0])
             rows = [
                 json.loads(line)
                 for line in (Path(output_dir) / "metrics.jsonl").read_text().splitlines()
@@ -1521,6 +1543,170 @@ class EvaluationProtocolTest(unittest.TestCase):
             self.assertEqual(
                 [row["evaluation_kind"] for row in rows],
                 ["development", "final_holdout"],
+            )
+
+
+class LongRunOperationsTest(unittest.TestCase):
+    @staticmethod
+    def _mark_checkpoint(root: Path, step: int, *, complete: bool = True) -> Path:
+        path = root / f"step_{step}"
+        path.mkdir()
+        (path / "state.bin").write_bytes(b"state")
+        if complete:
+            (path / CHECKPOINT_COMPLETE_MARKER).write_text("{}\n")
+        return path
+
+    def test_checkpoint_retention_keeps_latest_and_milestones(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._mark_checkpoint(root, 10)
+            self._mark_checkpoint(root, 20)
+            self._mark_checkpoint(root, 25, complete=False)
+            self._mark_checkpoint(root, 30)
+            removed = prune_checkpoints(
+                root,
+                keep_latest=1,
+                milestones=[20],
+            )
+            self.assertEqual(removed, ["step_10", "step_25"])
+            self.assertEqual(
+                sorted(path.name for path in root.glob("step_*")),
+                ["step_20", "step_30"],
+            )
+
+    def test_marker_policy_ignores_partial_resume_but_legacy_does_not(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            complete = self._mark_checkpoint(root, 10)
+            partial = self._mark_checkpoint(root, 20, complete=False)
+            args = SimpleNamespace(
+                output_dir=str(root),
+                checkpoint_keep_latest=1,
+                checkpoint_milestones=[],
+            )
+            write_checkpoint_policy(args)
+            self.assertEqual(
+                resolve_resume_checkpoint(root, "auto"),
+                str(complete),
+            )
+            (root / "checkpoint_policy.json").unlink()
+            self.assertEqual(
+                resolve_resume_checkpoint(root, "latest"),
+                str(partial),
+            )
+
+    def test_checkpoint_save_is_marked_before_previous_state_is_pruned(self):
+        class TinyAccelerator:
+            is_main_process = True
+
+            def __init__(self):
+                self.waits = 0
+
+            def wait_for_everyone(self):
+                self.waits += 1
+
+            @staticmethod
+            def save_state(path):
+                target = Path(path)
+                target.mkdir()
+                (target / "optimizer.bin").write_bytes(b"new")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._mark_checkpoint(root, 10)
+            args = SimpleNamespace(
+                output_dir=str(root),
+                checkpoint_keep_latest=1,
+                checkpoint_milestones=[],
+            )
+            accelerator = TinyAccelerator()
+            with mock.patch("train_gpt.logger.info"):
+                save_training_checkpoint(args, accelerator, 20)
+            self.assertFalse((root / "step_10").exists())
+            self.assertTrue(
+                (root / "step_20" / CHECKPOINT_COMPLETE_MARKER).is_file()
+            )
+            self.assertEqual(accelerator.waits, 3)
+
+    def test_shared_cache_manifest_name_is_strictly_validated(self):
+        class TinyTokenizer:
+            name_or_path = "openai-community/gpt2"
+
+            def __len__(self):
+                return 64
+
+        tokenizer = TinyTokenizer()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = SimpleNamespace(
+                dataset_name="dataset",
+                dataset_config_name=None,
+                train_file=None,
+                validation_file=None,
+                validation_split_percentage=5,
+                tokenizer_name=None,
+                model_name_or_path="openai-community/gpt2",
+                use_slow_tokenizer=False,
+                block_size=4,
+            )
+            manifest = tokenized_cache_manifest(args, tokenizer)
+            (root / ".tokenized-cache-manifest.json").write_text(
+                json.dumps(manifest)
+            )
+            dataset = {
+                "train": [{"input_ids": [0, 1, 2, 3]}],
+                "validation": [{"input_ids": [4, 5, 6, 7]}],
+            }
+            with mock.patch("train_gpt.datasets.load_from_disk", return_value=dataset):
+                self.assertIs(
+                    _validate_tokenized_cache(root, args, tokenizer),
+                    dataset,
+                )
+            manifest["fingerprint"] = "wrong"
+            (root / ".tokenized-cache-manifest.json").write_text(
+                json.dumps(manifest)
+            )
+            with self.assertRaisesRegex(ValueError, "fingerprint mismatch"):
+                _validate_tokenized_cache(root, args, tokenizer)
+
+    def test_provenance_records_config_environment_dataset_and_resumes(self):
+        class TinySplit(list):
+            _fingerprint = "tiny-fingerprint"
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cache = root / "cache"
+            cache.mkdir()
+            (cache / "MANIFEST.json").write_text(
+                json.dumps({"dataset": "tiny", "counts": {"train": 1}})
+            )
+            args = SimpleNamespace(
+                output_dir=str(root / "output"),
+                tokenized_dataset_path=str(cache),
+                dataset_name="tiny",
+                dataset_config_name=None,
+                seed=123,
+            )
+            dataset = {
+                "train": TinySplit([{"input_ids": [1, 2]}]),
+                "validation": TinySplit([{"input_ids": [3, 4]}]),
+            }
+            with (
+                mock.patch("train_gpt.source_provenance", return_value={"commit": "abc"}),
+                mock.patch("train_gpt.software_provenance", return_value={"torch": "x"}),
+                mock.patch("train_gpt.hardware_provenance", return_value={"gpu": "y"}),
+            ):
+                first = record_run_provenance(args, {"total": 12}, dataset)
+                second = record_run_provenance(args, {"total": 12}, dataset)
+            self.assertEqual(first["resolved_config"], vars(args))
+            self.assertEqual(len(second["launches"]), 2)
+            self.assertEqual(
+                second["launches"][0]["dataset"]["splits"]["train"]["rows"],
+                1,
+            )
+            self.assertIn(
+                "MANIFEST.json",
+                second["launches"][0]["dataset"]["manifests"],
             )
 
 
@@ -1564,6 +1750,8 @@ class InklingAndConfigTest(unittest.TestCase):
                 "gradient_accumulation_steps": 4,
                 "gradient_checkpointing": True,
                 "checkpointing_steps": 5000,
+                "checkpoint_keep_latest": 2,
+                "checkpoint_milestones": [30000, 10000, 10000],
                 "resume_from_checkpoint": "auto",
                 "save_final_model": True,
                 "paired_initialization_seed": 77,
@@ -1586,6 +1774,8 @@ class InklingAndConfigTest(unittest.TestCase):
         self.assertEqual(config.gradient_accumulation_steps, 4)
         self.assertTrue(config.gradient_checkpointing)
         self.assertEqual(config.checkpointing_steps, 5000)
+        self.assertEqual(config.checkpoint_keep_latest, 2)
+        self.assertEqual(config.checkpoint_milestones, [10000, 30000])
         self.assertEqual(config.resume_from_checkpoint, "auto")
         self.assertTrue(config.save_final_model)
         self.assertEqual(config.paired_initialization_seed, 77)
@@ -1611,10 +1801,13 @@ class InklingAndConfigTest(unittest.TestCase):
             "per_device_eval_batch_size",
             "gradient_accumulation_steps",
             "checkpointing_steps",
+            "checkpoint_keep_latest",
         ):
             with self.subTest(key=key):
                 with self.assertRaisesRegex(ValueError, "must be positive"):
                     self._load_payload({key: 0})
+        with self.assertRaisesRegex(TypeError, "checkpoint_milestones"):
+            self._load_payload({"checkpoint_milestones": [100, 1.5]})
 
 
     def test_50k_scale_configuration_round_trips(self):
