@@ -300,12 +300,17 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
     ) -> QKPreprojectionOutput:
         q_gate, k_gate = self.gate_values()
         if basis_override is not None:
-            if basis_override.shape != (length, self.model_dim):
+            if (
+                basis_override.ndim != 2
+                or basis_override.shape[0] < length
+                or basis_override.shape[1] != self.model_dim
+            ):
                 raise ValueError(
                     "basis_override must have shape "
-                    f"[{length},{self.model_dim}], got {list(basis_override.shape)}"
+                    f"[at least {length},{self.model_dim}], got "
+                    f"{list(basis_override.shape)}"
                 )
-            basis_fp32 = basis_override.float()
+            basis_fp32 = basis_override[:length].float()
         else:
             basis_fp32 = self.basis(length)
         if self.mode in {"tied_scalar", "split_scalar"}:

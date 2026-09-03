@@ -165,6 +165,18 @@ class QKPreprojectionTest(unittest.TestCase):
                 torch.testing.assert_close(output.q, reference.q, rtol=0, atol=0)
                 torch.testing.assert_close(output.k, reference.k, rtol=0, atol=0)
 
+    def test_shared_basis_override_accepts_a_longer_cached_prefix(self):
+        module = QKPreprojectionPosition(
+            _config("tied_scalar"),
+            model_dim=8,
+            extent=16,
+        )
+        cached = module.basis(12)
+        expected = module(11, dtype=torch.float32)
+        actual = module(11, dtype=torch.float32, basis_override=cached)
+        torch.testing.assert_close(actual.q, expected.q, rtol=0, atol=0)
+        torch.testing.assert_close(actual.k, expected.k, rtol=0, atol=0)
+
     def test_split_scalar_can_separate_q_and_k(self):
         module = QKPreprojectionPosition(
             _config("split_scalar"),
