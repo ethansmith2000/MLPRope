@@ -98,7 +98,10 @@ The five resolved Phase-34 configs are frozen under
 `sweep_configs/phase34_shared_frequency_200k/`. Rolling completion-marked
 checkpoint retention, periodic paired-loss persistence, and per-launch source,
 config, package/GPU, and dataset provenance are inherited from Phase 33.
-Phase-34 preflights must pass before the long launch.
+All five Phase-34 compiled bf16 preflights now pass. The learned coordinates
+moved within 50 steps, every spectrum remained finite, positive, and ordered,
+and peak reserved memory was 5,076--5,220 MiB. Compact evidence is in
+`results/phase34_shared_frequency_preflight/`.
 
 ## Repository state
 
@@ -109,7 +112,7 @@ Phase-34 preflights must pass before the long launch.
   controllers, rotary phase residuals/clocks, EMA, residual/write channels, and
   completed position-gain path remain removed. Phase 34 adds only two tiny
   top-level static shared-bank parameterizations.
-- All retained sweep JSONs load. The CPU suite passes 119 tests with one
+- All retained sweep JSONs load. The CPU suite passes 120 tests with one
   explicitly CUDA-gated skip, and all nine consolidated bf16 CUDA cases pass
   eager and compiled forward/backward.
 - Phase 33 operational preflights passed on all six h768/d8 arms at

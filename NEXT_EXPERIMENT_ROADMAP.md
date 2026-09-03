@@ -128,6 +128,11 @@ use one paired seed and a common 200k horizon. No content conditioning,
 per-layer/head frequency axis, or learned-RoPE/learned-carrier combination is
 included.
 
+The five compiled bf16 50-step preflights pass at 5,076--5,220 MiB reserved
+memory. All learned spectra were active, finite, positive, and ordered. The
+long runs are cleared to launch through `gpu-claim`; compact preflight evidence
+is in `results/phase34_shared_frequency_preflight/`.
+
 ## Stage 5 — promote finalists
 
 Promote no more than two candidates. Add seeds 456 and 789 under the identical

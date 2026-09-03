@@ -1,0 +1,56 @@
+{
+  "scope": "phase34_shared_frequency_compiled_bf16_preflight",
+  "steps": 50,
+  "model": "h768d8",
+  "all_completed": true,
+  "arms": {
+    "rope-fixed": {
+      "target_tokens_per_second": 190825,
+      "peak_reserved_mib": 5076,
+      "frequency_parameters": 0
+    },
+    "rope-global-log": {
+      "target_tokens_per_second": 182630,
+      "peak_reserved_mib": 5096,
+      "frequency_parameters": 48,
+      "multiplier_min": 0.99911243,
+      "multiplier_max": 1.00094783,
+      "endpoint_phase_delta_rms": 0.05967874,
+      "endpoint_phase_delta_abs_max": 0.35791016,
+      "frequency_nonpositive_fraction": 0.0,
+      "frequency_order_violation_fraction": 0.0
+    },
+    "qkpre-fixed": {
+      "target_tokens_per_second": 189169,
+      "peak_reserved_mib": 5220,
+      "frequency_parameters": 0
+    },
+    "qkpre-frequency-log": {
+      "target_tokens_per_second": 187066,
+      "peak_reserved_mib": 5220,
+      "frequency_parameters": 384,
+      "multiplier_min": 0.99873179,
+      "multiplier_max": 1.00106561,
+      "endpoint_phase_delta_rms": 0.0517671,
+      "endpoint_phase_delta_abs_max": 0.38458252,
+      "frequency_nonpositive_fraction": 0.0,
+      "frequency_order_violation_fraction": 0.0
+    },
+    "qkpre-frequency-horizon": {
+      "target_tokens_per_second": 189837,
+      "peak_reserved_mib": 5220,
+      "frequency_parameters": 384,
+      "multiplier_min": 0.99228877,
+      "multiplier_max": 1.00678456,
+      "endpoint_phase_delta_rms": 0.00045816,
+      "endpoint_phase_delta_abs_max": 0.00126886,
+      "frequency_nonpositive_fraction": 0.0,
+      "frequency_order_violation_fraction": 0.0
+    }
+  },
+  "diagnostic_prefix_fix_commit": "966b897",
+  "notes": [
+    "All final reruns used clean source trees.",
+    "The short post-warmup timing window is a smoke measurement, not a stable throughput estimate."
+  ]
+}
