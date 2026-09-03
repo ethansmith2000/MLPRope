@@ -7,12 +7,11 @@ from typing import Any, Literal
 
 POSITION_SCHEMA_VERSION = 2
 
-Application = Literal["additive", "rotary"]
+Application = Literal["additive"]
 Geometry = Literal[
     "free",
     "pair_normalized",
     "amplitude_phase",
-    "phase",
 ]
 InputKind = Literal["frozen_fourier"]
 MapperKind = Literal[
@@ -88,9 +87,6 @@ V2_CONDITIONING_KEYS = {
     "input_mode",
     "input_normalization",
     "learnable_input_gains",
-    "temporal",
-    "ema_decay_init",
-    "ema_decay_coupling",
     "network",
     "components",
     "head_coupling",
@@ -113,6 +109,12 @@ V2_CONDITIONING_KEYS = {
 }
 
 POSITION_CONTENT_COUPLINGS = {"shared", "separate"}
+
+ROTARY_QK_REMOVED_MESSAGE = (
+    "Rotary Q/K phase-residual channels were removed during repository "
+    "consolidation. Use fixed RoPE, optionally with an additive Q/K channel "
+    "or qk_preprojection; see CONSOLIDATION_PLAN.md."
+)
 
 
 def _normalize_head_mixing(value: Any) -> str:
@@ -146,7 +148,7 @@ V1_CHANNEL_DEFAULTS = {
         "enabled": False,
         "feature_map": "identity",
         "sharing": "per_head",
-        "apply": "phase_residual",
+        "apply": "add",
         "rank": 32,
         "mlp_hidden": 128,
     },
@@ -155,8 +157,8 @@ V1_CHANNEL_DEFAULTS = {
 V2_CHANNEL_DEFAULTS = {
     "qk": {
         "enabled": False,
-        "application": "rotary",
-        "geometry": "phase",
+        "application": "additive",
+        "geometry": "free",
         "input": {
             "kind": "frozen_fourier",
             "basis_dim": None,
@@ -192,9 +194,6 @@ V2_CHANNEL_DEFAULTS = {
             "activation": "tanh",
             "hidden_dim": 64,
             "input_mode": "content",
-            "temporal": "pointwise",
-            "ema_decay_init": 0.9,
-            "ema_decay_coupling": "per_dim",
             "network": "linear",
             "components": "phase",
             "head_coupling": "per_head_independent",
@@ -219,46 +218,6 @@ V2_CHANNEL_DEFAULTS = {
         "head_coupling": "per_head_independent",
     },
 }
-
-RESIDUAL_STREAM_DEFAULTS = {
-    "enabled": False,
-    "placement": "input",
-    "source": "position_basis",
-    "input": {
-        "kind": "frozen_fourier",
-        "basis_dim": None,
-        "theta": None,
-        "scalars": [],
-    },
-    "mapper": {
-        "kind": "identity",
-        "residual": False,
-        "rank": 32,
-        "hidden_dim": 128,
-    },
-    "gate_init": 0.0,
-    "layer_shared": False,
-}
-
-ATTENTION_WRITE_DEFAULTS = {
-    "enabled": False,
-    "mode": "key_position",
-    "input": {
-        "kind": "frozen_fourier",
-        "basis_dim": None,
-        "theta": None,
-        "scalars": [],
-    },
-    "mapper": {
-        "kind": "identity",
-        "residual": False,
-        "rank": 32,
-        "hidden_dim": 128,
-    },
-    "head_coupling": "per_head_independent",
-    "gate_init": 0.0,
-}
-
 
 def normalize_position_content_config(
     content_dim: int = 64,
@@ -446,10 +405,12 @@ def upgrade_legacy_position_config(
         heads=heads,
     )
 
-    if normalized["apply"] == "add":
-        application, geometry = "additive", "free"
-    else:
-        application, geometry = "rotary", "phase"
+    if normalized["apply"] == "phase_residual":
+        if normalized["enabled"]:
+            raise ValueError(ROTARY_QK_REMOVED_MESSAGE)
+        # A disabled historical channel is a no-op; canonicalize it to the
+        # surviving additive schema so old baseline configs still load.
+    application, geometry = "additive", "free"
     upgraded = {
         "enabled": normalized["enabled"],
         "application": application,
@@ -513,11 +474,15 @@ def normalize_position_config_v2(
 
     application = normalized["application"]
     geometry = normalized["geometry"]
+    if application == "rotary" or geometry == "phase":
+        if normalized["enabled"]:
+            raise ValueError(ROTARY_QK_REMOVED_MESSAGE)
+        normalized["application"] = application = "additive"
+        normalized["geometry"] = geometry = "free"
     allowed_pairs = {
         ("additive", "free"),
         ("additive", "pair_normalized"),
         ("additive", "amplitude_phase"),
-        ("rotary", "phase"),
     }
     if (application, geometry) not in allowed_pairs:
         raise ValueError(
@@ -659,11 +624,6 @@ def normalize_position_config_v2(
             and not output_preview.get("learn_amplitude", True)
             and not output_preview.get("learn_phase", True)
         )
-        or (
-            application == "rotary"
-            and geometry == "phase"
-            and not output_preview.get("learn_phase", True)
-        )
     )
     if (
         not fixed_position_pipeline
@@ -741,16 +701,8 @@ def normalize_position_config_v2(
         (not learn_amplitude or not learn_phase)
         and not (
             channel_name == "qk"
-            and (
-                (application == "additive" and geometry == "amplitude_phase")
-                or (
-                    application == "rotary"
-                    and geometry == "phase"
-                    and normalized["conditioning"].get("kind")
-                    in {"adaptive_gain", "rope_phase", "carrier_hypernetwork"}
-                    and learn_amplitude
-                )
-            )
+            and application == "additive"
+            and geometry == "amplitude_phase"
         )
     ):
         raise ValueError(
@@ -814,7 +766,6 @@ def normalize_position_config_v2(
         "phase_rotation",
         "adaptive_gain",
         "additive_phase",
-        "rope_phase",
         "carrier_hypernetwork",
     }
     if conditioning_kind not in allowed_conditioning:
@@ -833,13 +784,6 @@ def normalize_position_config_v2(
         ),
         "learnable_input_gains": conditioning_cfg.get(
             "learnable_input_gains", False
-        ),
-        "temporal": conditioning_cfg.get("temporal", "pointwise"),
-        "ema_decay_init": float(
-            conditioning_cfg.get("ema_decay_init", 0.9)
-        ),
-        "ema_decay_coupling": conditioning_cfg.get(
-            "ema_decay_coupling", "per_dim"
         ),
         "network": conditioning_cfg.get("network", "linear"),
         "components": conditioning_cfg.get("components", "phase"),
@@ -942,52 +886,6 @@ def normalize_position_config_v2(
             f"{channel_name}: hypernetwork input normalization/gains require "
             "conditioning.kind='carrier_hypernetwork'"
         )
-    if conditioning["temporal"] not in {"pointwise", "ema"}:
-        raise ValueError(
-            f"{channel_name}.conditioning.temporal must be 'pointwise' or 'ema'"
-        )
-    if not 0.0 < conditioning["ema_decay_init"] < 1.0:
-        raise ValueError(
-            f"{channel_name}.conditioning.ema_decay_init must lie strictly "
-            "inside (0, 1)"
-        )
-    if conditioning["ema_decay_coupling"] not in {
-        "scalar",
-        "per_head",
-        "per_dim",
-    }:
-        raise ValueError(
-            f"{channel_name}.conditioning.ema_decay_coupling must be "
-            "'scalar', 'per_head', or 'per_dim'"
-        )
-    if conditioning["temporal"] == "ema" and not (
-        conditioning_kind == "carrier_hypernetwork"
-        and conditioning["input_mode"] in {"content", "content_position"}
-    ):
-        raise ValueError(
-            f"{channel_name}: temporal='ema' requires a content-input "
-            "carrier_hypernetwork"
-        )
-    if (
-        conditioning["temporal"] == "ema"
-        and conditioning["ema_decay_coupling"] == "per_head"
-        and conditioning["head_coupling"] != "per_head_independent"
-    ):
-        raise ValueError(
-            f"{channel_name}: per-head EMA decay requires "
-            "conditioning.head_coupling='per_head_independent'"
-        )
-    if conditioning_kind != "carrier_hypernetwork" and (
-        conditioning["temporal"] != "pointwise"
-    ):
-        raise ValueError(
-            f"{channel_name}: temporal conditioning is only supported by "
-            "carrier_hypernetwork"
-        )
-    if conditioning["temporal"] != "ema":
-        # Canonicalize an inactive hyperparameter.
-        conditioning["ema_decay_init"] = 0.9
-        conditioning["ema_decay_coupling"] = "per_dim"
     if conditioning["network"] not in {"linear", "silu_mlp", "swiglu_mlp"}:
         raise ValueError(
             f"{channel_name}.conditioning.network must be 'linear', "
@@ -1084,19 +982,15 @@ def normalize_position_config_v2(
         raise ValueError(
             "additive_phase conditioning requires additive amplitude_phase Q/K"
         )
-    if conditioning_kind == "rope_phase" and not (
-        channel_name == "qk" and application == "rotary"
-    ):
-        raise ValueError("rope_phase conditioning requires rotary Q/K")
     if conditioning_kind == "carrier_hypernetwork":
-        valid_carrier = channel_name == "qk" and (
-            (application == "additive" and geometry == "amplitude_phase")
-            or (application == "rotary" and geometry == "phase")
+        valid_carrier = (
+            channel_name == "qk"
+            and application == "additive"
+            and geometry == "amplitude_phase"
         )
         if not valid_carrier:
             raise ValueError(
-                "carrier_hypernetwork requires additive amplitude_phase or "
-                "rotary phase Q/K"
+                "carrier_hypernetwork requires additive amplitude_phase Q/K"
             )
         additive_components = {
             "amplitude",
@@ -1170,10 +1064,6 @@ def normalize_position_config_v2(
                     "parameter_source='direct', target='q' or 'k', and "
                     "non-shared Q/K coupling"
                 )
-        elif application == "rotary" and conditioning["components"] != "phase":
-            raise ValueError(
-                "rotary carrier_hypernetwork supports only components='phase'"
-            )
         elif conditioning["static_complement"]:
             raise ValueError(
                 "carrier_hypernetwork static_complement is only supported for "
@@ -1435,10 +1325,7 @@ def v2_to_legacy_tag_fields(channel_name: str, channel: dict) -> dict:
         "mlp_hidden": channel["mapper"]["hidden_dim"],
     }
     if channel_name == "qk":
-        if channel["application"] == "additive":
-            legacy["apply"] = "add"
-        else:
-            legacy["apply"] = "phase_residual"
+        legacy["apply"] = "add"
     return legacy
 
 
@@ -1469,112 +1356,3 @@ def ensure_channel_v2(
         heads=heads,
         rope_theta=rope_theta,
     )
-
-
-def normalize_residual_stream_config(
-    raw_config: dict | None,
-    *,
-    model_dim: int,
-    heads: int,
-    rope_theta: float,
-) -> dict:
-    """Normalize residual-stream absolute-position injection settings."""
-    raw = _require_dict("residual_stream", dict(raw_config or {}))
-    allowed = set(RESIDUAL_STREAM_DEFAULTS)
-    unknown = set(raw) - allowed
-    if unknown:
-        raise ValueError(f"Unknown residual_stream keys: {sorted(unknown)}")
-    normalized = deep_merge(RESIDUAL_STREAM_DEFAULTS, raw)
-    if not isinstance(normalized["enabled"], bool):
-        raise TypeError("residual_stream.enabled must be a boolean")
-    placement = normalized["placement"]
-    if placement not in {"input", "per_layer", "both"}:
-        raise ValueError(
-            "residual_stream.placement must be 'input', 'per_layer', or 'both'"
-        )
-    source = normalized["source"]
-    if source not in {"position_basis", "learned_absolute"}:
-        raise ValueError(
-            "residual_stream.source must be 'position_basis' or 'learned_absolute'"
-        )
-    if not isinstance(normalized["layer_shared"], bool):
-        raise TypeError("residual_stream.layer_shared must be a boolean")
-
-    # Reuse the strict basis/mapper normalization with a joint model-dim output.
-    probe = normalize_position_config_v2(
-        "qk",
-        {
-            "enabled": True,
-            "application": "additive",
-            "geometry": "free",
-            "input": normalized["input"],
-            "mapper": normalized["mapper"],
-            "qk_coupling": "shared",
-            "head_coupling": "per_head_joint",
-        },
-        model_dim=model_dim,
-        heads=heads,
-        rope_theta=rope_theta,
-    )
-    return {
-        "enabled": normalized["enabled"],
-        "placement": placement,
-        "source": source,
-        "input": probe["input"],
-        "mapper": probe["mapper"],
-        "gate_init": float(normalized["gate_init"]),
-        "layer_shared": normalized["layer_shared"],
-    }
-
-
-def normalize_attention_write_config(
-    raw_config: dict | None,
-    *,
-    model_dim: int,
-    heads: int,
-    rope_theta: float,
-) -> dict:
-    """Normalize attended key-position / relative-offset write settings."""
-    raw = _require_dict("attention_write", dict(raw_config or {}))
-    allowed = set(ATTENTION_WRITE_DEFAULTS)
-    unknown = set(raw) - allowed
-    if unknown:
-        raise ValueError(f"Unknown attention_write keys: {sorted(unknown)}")
-    normalized = deep_merge(ATTENTION_WRITE_DEFAULTS, raw)
-    if not isinstance(normalized["enabled"], bool):
-        raise TypeError("attention_write.enabled must be a boolean")
-    mode = normalized["mode"]
-    if mode not in {"key_position", "relative_offset", "query_position"}:
-        raise ValueError(
-            "attention_write.mode must be 'key_position', 'relative_offset', "
-            "or 'query_position'"
-        )
-    head_coupling = normalized["head_coupling"]
-    probe = normalize_position_config_v2(
-        "qk",
-        {
-            "enabled": True,
-            "application": "additive",
-            "geometry": "free",
-            "input": normalized["input"],
-            "mapper": normalized["mapper"],
-            "qk_coupling": "shared",
-            "head_coupling": head_coupling,
-        },
-        model_dim=model_dim,
-        heads=heads,
-        rope_theta=rope_theta,
-    )
-    if mode == "relative_offset" and probe["input"]["scalars"]:
-        raise ValueError(
-            "attention_write relative_offset mode requires pure paired Fourier "
-            "features; scalar inputs cannot be translated by the Fourier identity."
-        )
-    return {
-        "enabled": normalized["enabled"],
-        "mode": mode,
-        "input": probe["input"],
-        "mapper": probe["mapper"],
-        "head_coupling": head_coupling,
-        "gate_init": float(normalized["gate_init"]),
-    }

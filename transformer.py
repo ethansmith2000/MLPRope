@@ -12,29 +12,18 @@ from torch.nn.attention.flex_attention import (
 
 from position import (
     PositionChannel,
-    PositionGain,
     QKPreprojectionPosition,
-    RopeFrequencyController,
-    RotaryClockController,
     adapt_legacy_position_state_dict,
     apply_rotary,
-    build_attention_position_write_channel,
     build_qk_position_channel,
-    build_residual_position_channel,
     build_rope_cache,
     build_rope_frequencies,
     count_position_parameters,
     ensure_channel_v2,
     interleaved_fourier_basis,
     normalize_logit_bias_config,
-    normalize_rope_frequency_config,
-    normalize_rotary_clock_config,
     normalize_qk_preprojection_config,
-    normalize_attention_write_config,
     normalize_position_content_config,
-    normalize_position_gain_config,
-    normalize_residual_stream_config,
-    parameterize_rope_frequencies,
 )
 from position.precision import PreserveFP32BuffersMixin
 
@@ -90,12 +79,10 @@ class PositionContentProjection(torch.nn.Module):
         content_dim: int,
         heads: int,
         coupling: str,
-        compact_heads: bool = False,
     ):
         super().__init__()
         self.heads = heads
         self.coupling = coupling
-        self.compact_heads = bool(compact_heads)
         self.q_projection = torch.nn.Linear(model_dim, content_dim, bias=False)
         self.k_projection = (
             self.q_projection
@@ -117,12 +104,6 @@ class PositionContentProjection(torch.nn.Module):
             if self.coupling == "shared"
             else self._unit_rms(self.k_projection(x))
         )
-        if self.compact_heads:
-            q_grouped = q_content[:, None]
-            k_grouped = (
-                q_grouped if k_content is q_content else k_content[:, None]
-            )
-            return q_grouped, k_grouped
         return (
             q_content[:, None].expand(-1, self.heads, -1, -1).contiguous(),
             k_content[:, None].expand(-1, self.heads, -1, -1).contiguous(),
@@ -149,16 +130,11 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         qk_config: dict | None = None,
         logit_bias_config: dict | None = None,
         attn_impl: AttentionImpl = "sdpa",
-        attention_write_config: dict | None = None,
         post_position_qk_norm: bool = False,
         position_content_dim: int = 64,
         position_content_coupling: str = "separate",
         qk_norm_mode: str = "legacy_layernorm",
-        rope_frequency_mode: str = "fixed",
-        rope_frequency_config: dict | None = None,
         qk_preprojection_config: dict | None = None,
-        rotary_clock_config: dict | None = None,
-        position_gain_config: dict | None = None,
     ):
         super().__init__()
         self.dim = dim
@@ -167,36 +143,10 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         self.use_rope = use_rope
         self.head_dim = dim // heads
         self.rope_theta = rope_theta
-        self.rope_frequency_config = normalize_rope_frequency_config(
-            rope_frequency_config,
-            legacy_mode=rope_frequency_mode,
-        )
-        self.rope_frequency_mode = {
-            ("fixed", "shared"): "fixed",
-            ("static", "shared"): "layer_shared",
-            ("static", "per_head"): "layer_head",
-            ("content", "per_head"): "content",
-            ("content", "shared"): "content",
-        }[
-            (
-                self.rope_frequency_config["mode"],
-                self.rope_frequency_config["head_coupling"],
-            )
-        ]
         self.qk_preprojection_config = normalize_qk_preprojection_config(
             qk_preprojection_config,
             model_dim=dim,
             rope_theta=rope_theta,
-        )
-        self.rotary_clock_config = normalize_rotary_clock_config(
-            rotary_clock_config
-        )
-        self.position_gain_config = normalize_position_gain_config(
-            position_gain_config,
-            heads=heads,
-            head_dim=self.head_dim,
-            rope_theta=rope_theta,
-            normalization_extent=max_seq_len,
         )
         self.max_seq_len = max_seq_len
         self.rel_extent = rel_extent or max_seq_len
@@ -236,12 +186,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         # The relative logit-bias channel was removed; only {"enabled": false}
         # remains valid for archived-config compatibility.
         self.logit_bias_config = normalize_logit_bias_config(logit_bias_config)
-        self.attention_write_config = normalize_attention_write_config(
-            attention_write_config,
-            model_dim=dim,
-            heads=heads,
-            rope_theta=rope_theta,
-        )
         qk_conditioning = self.qk_config["conditioning"]
         if (
             qk_conditioning["kind"] == "carrier_hypernetwork"
@@ -281,10 +225,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 self.position_content_config["dim"],
                 heads,
                 self.position_content_config["coupling"],
-                compact_heads=(
-                    qk_conditioning["kind"] == "carrier_hypernetwork"
-                    and qk_conditioning["temporal"] == "ema"
-                ),
             )
             if uses_dedicated_content
             else None
@@ -299,15 +239,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             extent=max_seq_len,
             rope_theta=rope_theta,
         )
-        if (
-            self.qk_preprojection_config["enabled"]
-            and self.qk_position is not None
-            and self.qk_position.application != "additive"
-        ):
-            raise ValueError(
-                "qk_preprojection can only be combined with an additive qk "
-                "position channel; rotary channels remain isolated"
-            )
         self.qk_preprojection = (
             QKPreprojectionPosition(
                 self.qk_preprojection_config,
@@ -318,32 +249,8 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             else None
         )
         # Additive Fourier Q/K replaces multiplicative RoPE. Explicit
-        # use_rope=False also enables residual-only and no-explicit-PE controls.
-        self.multiplicative_rope = bool(use_rope) and not (
-            self.qk_position is not None
-            and not self.qk_position.uses_multiplicative_rope
-        )
-        if self.rope_frequency_mode != "fixed" and not self.multiplicative_rope:
-            raise ValueError(
-                "Learned RoPE frequencies require active multiplicative RoPE"
-            )
-        if not use_rope and (
-            self.qk_position is not None
-            and self.qk_position.application != "additive"
-        ):
-            raise ValueError(
-                "use_rope=False is incompatible with rotary Q/K position "
-                "channels; use an additive Q/K channel, residual-stream PE, "
-                "or no explicit position channel."
-            )
-        self.position_write = build_attention_position_write_channel(
-            self.attention_write_config,
-            heads=heads,
-            head_dim=self.head_dim,
-            model_dim=dim,
-            extent=max_seq_len,
-            rope_theta=rope_theta,
-        )
+        # use_rope=False enables the no-explicit-PE control.
+        self.multiplicative_rope = bool(use_rope) and self.qk_position is None
 
         if qk_norm:
             norm_type = (
@@ -369,166 +276,12 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             build_rope_frequencies(self.head_dim, self.rope_theta),
             persistent=False,
         )
-        frequency_shape = {
-            "fixed": None,
-            "layer_shared": (1, self.head_dim // 2),
-            "layer_head": (self.heads, self.head_dim // 2),
-            "content": None,
-        }[self.rope_frequency_mode]
-        self.rope_log_frequency_delta = (
-            None
-            if frequency_shape is None
-            else torch.nn.Parameter(torch.zeros(frequency_shape))
-        )
-        self.rope_frequency_controller = (
-            RopeFrequencyController(
-                model_dim=dim,
-                heads=heads,
-                pair_dim=self.head_dim // 2,
-                config=self.rope_frequency_config,
-            )
-            if self.rope_frequency_config["mode"] == "content"
-            else None
-        )
-        if self.rotary_clock_config["enabled"]:
-            if not self.multiplicative_rope:
-                raise ValueError("rotary_clock requires active multiplicative RoPE")
-            if self.rope_frequency_config["mode"] != "fixed":
-                raise ValueError(
-                    "rotary_clock cannot be combined with learned/static RoPE "
-                    "frequencies in its first controlled implementation"
-                )
-            if self.qk_position is not None:
-                raise ValueError(
-                    "rotary_clock cannot be combined with another rotary Q/K channel"
-                )
-            if self.qk_preprojection is not None:
-                raise ValueError(
-                    "rotary_clock and qk_preprojection are isolated first-stage "
-                    "interventions and cannot be combined"
-                )
-        self.rotary_clock = (
-            RotaryClockController(
-                model_dim=dim,
-                heads=heads,
-                pair_dim=self.head_dim // 2,
-                inverse_frequency=self.rope_inverse_frequency,
-                config=self.rotary_clock_config,
-            )
-            if self.rotary_clock_config["enabled"]
-            else None
-        )
-        if self.position_gain_config["enabled"]:
-            if not self.multiplicative_rope:
-                raise ValueError("position_gain requires active multiplicative RoPE")
-            if self.qk_position is not None:
-                raise ValueError(
-                    "position_gain and qk position channels are isolated "
-                    "interventions and cannot be combined"
-                )
-            if self.qk_preprojection is not None or self.rotary_clock is not None:
-                raise ValueError(
-                    "position_gain, qk_preprojection, and rotary_clock are "
-                    "isolated first-stage interventions"
-                )
-            if self.post_position_qk_norm:
-                raise ValueError(
-                    "post_position_qk_norm would erase scalar position gains"
-                )
-        self.position_gain = (
-            PositionGain(
-                self.position_gain_config,
-                heads=heads,
-                head_dim=self.head_dim,
-                extent=max_seq_len,
-            )
-            if self.position_gain_config["enabled"]
-            else None
-        )
-
-    def rope_frequencies(self) -> torch.Tensor:
-        """Return the effective per-head frequencies in fp32."""
-        base = self.rope_inverse_frequency.float()[None, :]
-        if self.rope_log_frequency_delta is None:
-            return base.expand(self.heads, -1)
-        frequencies = parameterize_rope_frequencies(
-            base,
-            self.rope_log_frequency_delta,
-            self.rope_frequency_config,
-        )
-        return frequencies.expand(self.heads, -1)
-
-    def _rope_tables(
-        self,
-        sequence_length: int,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        if self.rope_log_frequency_delta is None:
-            return self.rope_sin, self.rope_cos
-        frequencies = self.rope_frequencies()
-        positions = torch.arange(
-            sequence_length,
-            device=frequencies.device,
-            dtype=torch.float32,
-        )
-        angles = positions[None, :, None] * frequencies[:, None, :]
-        return angles.sin(), angles.cos()
-
-    @torch.no_grad()
-    def rope_frequency_diagnostics(
-        self,
-    ) -> tuple[dict[str, float], torch.Tensor]:
-        frequencies = self.rope_frequencies().detach().float()
-        base = self.rope_inverse_frequency.detach().float()[None]
-        multipliers = frequencies / base
-        nonpositive = frequencies <= 0
-        log_spacing = frequencies.abs().clamp_min(1e-30).log().diff(dim=-1).abs()
-        spacing_min = log_spacing.min().item() if log_spacing.numel() else 0.0
-        spacing_mean = log_spacing.mean().item() if log_spacing.numel() else 0.0
-        metrics = {
-            "multiplier_mean": multipliers.mean().item(),
-            "multiplier_std": multipliers.std(unbiased=False).item(),
-            "multiplier_min": multipliers.min().item(),
-            "multiplier_max": multipliers.max().item(),
-            "frequency_min": frequencies.min().item(),
-            "frequency_max": frequencies.max().item(),
-            "frequency_nonpositive_fraction": nonpositive.float().mean().item(),
-            "log_spacing_min": spacing_min,
-            "log_spacing_mean": spacing_mean,
-            "head_frequency_std_mean": frequencies.std(
-                dim=0,
-                unbiased=False,
-            ).mean().item(),
-        }
-        return metrics, frequencies
-
-    def _apply_rope(
-        self,
-        q,
-        k,
-        *,
-        q_phase_delta=None,
-        k_phase_delta=None,
-        q_scale=None,
-        k_scale=None,
-        phase_delta=None,
-    ):
-        if phase_delta is not None:
-            if q_phase_delta is not None or k_phase_delta is not None:
-                raise ValueError(
-                    "Pass either phase_delta or q_phase_delta/k_phase_delta, not both."
-                )
-            q_phase_delta = phase_delta
-            k_phase_delta = phase_delta
-        rope_sin, rope_cos = self._rope_tables(q.shape[-2])
+    def _apply_rope(self, q, k):
         return apply_rotary(
             q,
             k,
-            rope_sin,
-            rope_cos,
-            q_phase_delta=q_phase_delta,
-            k_phase_delta=k_phase_delta,
-            q_scale=q_scale,
-            k_scale=k_scale,
+            self.rope_sin,
+            self.rope_cos,
         )
 
     def _split_heads(self, x):
@@ -614,10 +367,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 position_q_content, position_k_content = content_for(
                     self.qk_config
                 )
-        q_phase_delta = None
-        k_phase_delta = None
-        q_scale = None
-        k_scale = None
         q_gain = None
         k_gain = None
         position_output = None
@@ -634,7 +383,7 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         if self.qk_norm_mode == "method_aware_rms":
             q = q_projected
             k = k_projected
-            if position_output is not None and position_output.application == "additive":
+            if position_output is not None:
                 q_addend = (
                     position_output.q[None]
                     if position_output.q.ndim == 3
@@ -652,15 +401,10 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             else:
                 q = q_normed
                 k = k_normed
-                if position_output is not None:
-                    q_phase_delta = position_output.q
-                    k_phase_delta = position_output.k
-                    q_scale = position_output.q_scale
-                    k_scale = position_output.k_scale
         else:
             q = q_normed
             k = k_normed
-            if position_output is not None and position_output.application == "additive":
+            if position_output is not None:
                 q_addend = (
                     position_output.q[None]
                     if position_output.q.ndim == 3
@@ -673,48 +417,8 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 )
                 q = q + q_addend
                 k = k + k_addend
-            elif position_output is not None:
-                q_phase_delta = position_output.q
-                k_phase_delta = position_output.k
-                q_scale = position_output.q_scale
-                k_scale = position_output.k_scale
-        if self.rope_frequency_controller is not None:
-            dynamic_phase = self.rope_frequency_controller.phase_delta(x)
-            q_phase_delta = (
-                dynamic_phase
-                if q_phase_delta is None
-                else q_phase_delta + dynamic_phase
-            )
-            k_phase_delta = (
-                dynamic_phase
-                if k_phase_delta is None
-                else k_phase_delta + dynamic_phase
-            )
-        if self.rotary_clock is not None:
-            clock_phase = self.rotary_clock.phase_delta(x)
-            q_phase_delta = (
-                clock_phase
-                if q_phase_delta is None
-                else q_phase_delta + clock_phase
-            )
-            k_phase_delta = (
-                clock_phase
-                if k_phase_delta is None
-                else k_phase_delta + clock_phase
-            )
         if self.multiplicative_rope:
-            q, k = self._apply_rope(
-                q,
-                k,
-                q_phase_delta=q_phase_delta,
-                k_phase_delta=k_phase_delta,
-                q_scale=q_scale,
-                k_scale=k_scale,
-            )
-        if self.position_gain is not None:
-            position_gain = self.position_gain(q.shape[-2], dtype=q.dtype)
-            q = q * position_gain.q
-            k = k * position_gain.k
+            q, k = self._apply_rope(q, k)
         if q_gain is not None:
             q = q * q_gain.to(dtype=q.dtype)
         if k_gain is not None:
@@ -722,19 +426,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         if self.post_position_qk_norm:
             q = self._unit_rms(q)
             k = self._unit_rms(k)
-        attended_position_write = (
-            self.position_write is not None
-            and self.position_write.mode != "query_position"
-        )
-        if attended_position_write:
-            position_values = self.position_write.position_values(
-                v.shape[-2],
-                dtype=v.dtype,
-            )
-            position_values = position_values[None].expand(
-                v.shape[0], -1, -1, -1
-            )
-            v = torch.cat((v, position_values), dim=-1)
         if self.attn_impl == "flex":
             attn = self._flex_attention(q, k, v)
         else:
@@ -744,29 +435,13 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 v,
                 is_causal=self.is_causal,
             )
-        if not attended_position_write:
-            content_attn = attn
-            position_output = None
-        else:
-            content_attn = attn[..., : self.head_dim]
-            position_summary = attn[..., self.head_dim :]
-            position_output = self.position_write(position_summary)
+        content_attn = attn
         content_attn = (
             content_attn.transpose(1, 2)
             .contiguous()
             .view(x.shape[0], x.shape[1], -1)
         )
         output = self.to_out(content_attn)
-        if position_output is not None:
-            output = output + position_output
-        if (
-            self.position_write is not None
-            and self.position_write.mode == "query_position"
-        ):
-            output = output + self.position_write.query_output(
-                x.shape[1],
-                dtype=output.dtype,
-            )[None]
         return output
 
     @torch.no_grad()
@@ -813,10 +488,7 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         dtype = parameter.dtype if parameter is not None else x.dtype
         diagnostic_q_ref = q
         diagnostic_k_ref = k
-        if (
-            self.qk_norm_mode == "method_aware_rms"
-            and self.qk_position.application == "additive"
-        ):
+        if self.qk_norm_mode == "method_aware_rms":
             # Method-aware additive attention composes position with the raw
             # projections and normalizes only afterward. Ratios and cosines
             # must therefore use the raw projections as their reference.
@@ -836,23 +508,13 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             q_content=q_content,
             k_content=k_content,
         )
-        if position.application == "additive":
-            q_add = position.q[None] if position.q.ndim == 3 else position.q
-            k_add = position.k[None] if position.k.ndim == 3 else position.k
-            if self.qk_norm_mode == "method_aware_rms":
-                final_q = self.q_norm(q_projected + q_add)
-                final_k = self.k_norm(k_projected + k_add)
-            else:
-                final_q, final_k = q + q_add, k + k_add
+        q_add = position.q[None] if position.q.ndim == 3 else position.q
+        k_add = position.k[None] if position.k.ndim == 3 else position.k
+        if self.qk_norm_mode == "method_aware_rms":
+            final_q = self.q_norm(q_projected + q_add)
+            final_k = self.k_norm(k_projected + k_add)
         else:
-            final_q, final_k = self._apply_rope(
-                q,
-                k,
-                q_phase_delta=position.q,
-                k_phase_delta=position.k,
-                q_scale=position.q_scale,
-                k_scale=position.k_scale,
-            )
+            final_q, final_k = q + q_add, k + k_add
         if position.q_gain is not None:
             final_q = final_q * position.q_gain
             final_k = final_k * position.k_gain
@@ -900,16 +562,11 @@ class TransformerBlock(torch.nn.Module):
         qk_config: dict | None = None,
         logit_bias_config: dict | None = None,
         attn_impl: AttentionImpl = "sdpa",
-        attention_write_config: dict | None = None,
         post_position_qk_norm: bool = False,
         position_content_dim: int = 64,
         position_content_coupling: str = "separate",
         qk_norm_mode: str = "legacy_layernorm",
-        rope_frequency_mode: str = "fixed",
-        rope_frequency_config: dict | None = None,
         qk_preprojection_config: dict | None = None,
-        rotary_clock_config: dict | None = None,
-        position_gain_config: dict | None = None,
     ):
         super().__init__()
         self.attn = Attention(
@@ -923,17 +580,12 @@ class TransformerBlock(torch.nn.Module):
             rel_extent=rel_extent,
             qk_config=qk_config,
             logit_bias_config=logit_bias_config,
-            attention_write_config=attention_write_config,
             attn_impl=attn_impl,
             post_position_qk_norm=post_position_qk_norm,
             position_content_dim=position_content_dim,
             position_content_coupling=position_content_coupling,
             qk_norm_mode=qk_norm_mode,
-            rope_frequency_mode=rope_frequency_mode,
-            rope_frequency_config=rope_frequency_config,
             qk_preprojection_config=qk_preprojection_config,
-            rotary_clock_config=rotary_clock_config,
-            position_gain_config=position_gain_config,
         )
         self.ff = GeGLU(dim, hidden_dim=ff_hidden_dim)
         self.norm1 = torch.nn.LayerNorm(dim)
@@ -963,8 +615,6 @@ class Transformer(torch.nn.Module):
         logit_bias_config: dict | None = None,
         attn_impl: AttentionImpl = "sdpa",
         ff_hidden_dim=None,
-        residual_stream_config: dict | None = None,
-        attention_write_config: dict | None = None,
         post_position_qk_norm: bool = False,
         position_content_dim: int = 64,
         position_content_coupling: str = "separate",
@@ -972,51 +622,12 @@ class Transformer(torch.nn.Module):
         paired_initialization_seed: int | None = None,
         ff_widened_hidden_dim: int | None = None,
         ff_widened_layers: list[int] | tuple[int, ...] | None = None,
-        rope_frequency_mode: str = "fixed",
-        rope_frequency_config: dict | None = None,
         qk_preprojection_config: dict | None = None,
-        rotary_clock_config: dict | None = None,
-        position_gain_config: dict | None = None,
     ):
         super().__init__()
 
         self.token_embedding = torch.nn.Embedding(vocab_size, dim)
         self.gradient_checkpointing = gradient_checkpointing
-        self.residual_stream_config = normalize_residual_stream_config(
-            residual_stream_config,
-            model_dim=dim,
-            heads=heads,
-            rope_theta=rope_theta,
-        )
-        placement = self.residual_stream_config["placement"]
-        self.residual_position_input = None
-        if self.residual_stream_config["enabled"] and placement in {"input", "both"}:
-            self.residual_position_input = build_residual_position_channel(
-                self.residual_stream_config,
-                model_dim=dim,
-                heads=heads,
-                extent=max_seq_len,
-                rope_theta=rope_theta,
-            )
-        self.residual_position_layer_shared = bool(
-            self.residual_stream_config["layer_shared"]
-        )
-        self.residual_position_layers = torch.nn.ModuleList()
-        if self.residual_stream_config["enabled"] and placement in {
-            "per_layer",
-            "both",
-        }:
-            layer_count = 1 if self.residual_position_layer_shared else depth
-            self.residual_position_layers.extend(
-                build_residual_position_channel(
-                    self.residual_stream_config,
-                    model_dim=dim,
-                    heads=heads,
-                    extent=max_seq_len,
-                    rope_theta=rope_theta,
-                )
-                for _ in range(layer_count)
-            )
         base_ff_hidden_dim = ff_hidden_dim or dim * ff_mult
         widened_layers = set(ff_widened_layers or ())
         if any(layer_idx < 0 or layer_idx >= depth for layer_idx in widened_layers):
@@ -1044,17 +655,12 @@ class Transformer(torch.nn.Module):
                 rel_extent=rel_extent,
                 qk_config=qk_config,
                 logit_bias_config=logit_bias_config,
-                attention_write_config=attention_write_config,
                 attn_impl=attn_impl,
                 post_position_qk_norm=post_position_qk_norm,
                 position_content_dim=position_content_dim,
                 position_content_coupling=position_content_coupling,
                 qk_norm_mode=qk_norm_mode,
-                rope_frequency_mode=rope_frequency_mode,
-                rope_frequency_config=rope_frequency_config,
                 qk_preprojection_config=qk_preprojection_config,
-                rotary_clock_config=rotary_clock_config,
-                position_gain_config=position_gain_config,
             )
             for layer_idx in range(depth)
         ])
@@ -1128,10 +734,6 @@ class Transformer(torch.nn.Module):
             for module in self.modules():
                 if isinstance(module, PositionChannel):
                     module.reset_output_parameters()
-                elif isinstance(module, RopeFrequencyController):
-                    module.reset_output_parameters()
-                elif isinstance(module, RotaryClockController):
-                    module.reset_output_parameters()
                 elif isinstance(module, QKPreprojectionPosition):
                     module.reset_output_parameters()
 
@@ -1153,62 +755,18 @@ class Transformer(torch.nn.Module):
         """Return scalar position statistics and selected logit profiles."""
         metrics: dict[str, float] = {}
         profiles: dict[str, torch.Tensor] = {}
-        selected_layers = {0, len(self.blocks) // 2, len(self.blocks) - 1}
         seq_len = sequence_length
         diagnostic_x = None
         if input_ids is not None:
             diagnostic_x = self.in_proj(self.token_embedding(input_ids))
-            if self.residual_position_input is not None:
-                diagnostic_x = diagnostic_x + self.residual_position_input(
-                    diagnostic_x.shape[1],
-                    dtype=diagnostic_x.dtype,
-                )[None, :, :]
         for layer_idx, block in enumerate(self.blocks):
             actual_qk_summary = None
             normalized_diagnostic_x = None
             if diagnostic_x is not None:
-                if self.residual_position_layers:
-                    position_idx = (
-                        0 if self.residual_position_layer_shared else layer_idx
-                    )
-                    diagnostic_x = (
-                        diagnostic_x
-                        + self.residual_position_layers[position_idx](
-                            diagnostic_x.shape[1],
-                            dtype=diagnostic_x.dtype,
-                        )[None, :, :]
-                    )
                 normalized_diagnostic_x = block.norm1(diagnostic_x)
                 actual_qk_summary = block.attn.qk_position_summary_from_input(
                     normalized_diagnostic_x
                 )
-            rope_metrics, rope_frequencies = (
-                block.attn.rope_frequency_diagnostics()
-            )
-            rope_prefix = f"position/layer_{layer_idx:02d}/rope_frequency"
-            for key, value in rope_metrics.items():
-                metrics[f"{rope_prefix}/{key}"] = value
-            if (
-                normalized_diagnostic_x is not None
-                and block.attn.rope_frequency_controller is not None
-            ):
-                controller_metrics = (
-                    block.attn.rope_frequency_controller.diagnostics(
-                        normalized_diagnostic_x
-                    )
-                )
-                for key, value in controller_metrics.items():
-                    metrics[f"{rope_prefix}/{key}"] = value
-            if (
-                normalized_diagnostic_x is not None
-                and block.attn.rotary_clock is not None
-            ):
-                clock_metrics = block.attn.rotary_clock.diagnostics(
-                    normalized_diagnostic_x
-                )
-                clock_prefix = f"position/layer_{layer_idx:02d}/rotary_clock"
-                for key, value in clock_metrics.items():
-                    metrics[f"{clock_prefix}/{key}"] = value
             if block.attn.qk_preprojection is not None:
                 preprojection = block.attn.qk_preprojection
                 pre_prefix = f"position/layer_{layer_idx:02d}/qk_preprojection"
@@ -1230,39 +788,6 @@ class Transformer(torch.nn.Module):
                     metrics[f"{pre_prefix}/projected_k_rms"] = (
                         k_branch.square().mean().sqrt().item()
                     )
-            if block.attn.position_gain is not None and seq_len is not None:
-                gain_prefix = f"position/layer_{layer_idx:02d}/position_gain"
-                for key, value in block.attn.position_gain.diagnostics(
-                    seq_len
-                ).items():
-                    metrics[f"{gain_prefix}/{key}"] = value
-            if layer_idx in selected_layers:
-                profiles[f"rope_frequency_layer_{layer_idx:02d}"] = (
-                    rope_frequencies.cpu()
-                )
-            if block.attn.position_write is not None:
-                prefix = f"position/layer_{layer_idx:02d}/attention_write"
-                if block.attn.position_write.gate is not None:
-                    gate = block.attn.position_write.gate.detach().float()
-                    metrics[f"{prefix}/gate_mean"] = gate.mean().item()
-                    metrics[f"{prefix}/gate_abs_max"] = gate.abs().max().item()
-                else:
-                    projection_weight = (
-                        block.attn.position_write.query_projection.weight
-                    )
-                    projection = projection_weight.detach().float()
-                    metrics[f"{prefix}/projection_rms"] = (
-                        projection.square().mean().sqrt().item()
-                    )
-                    if seq_len is not None:
-                        write = block.attn.position_write.query_output(
-                            seq_len,
-                            dtype=projection_weight.dtype,
-                        ).detach().float()
-                        metrics[f"{prefix}/contribution_rms"] = (
-                            write.square().mean().sqrt().item()
-                        )
-
             if diagnostic_x is not None:
                 diagnostic_x = block(diagnostic_x)
             if seq_len is None:
@@ -1277,14 +802,6 @@ class Transformer(torch.nn.Module):
             prefix = f"position/layer_{layer_idx:02d}/qk"
             for key, value in qk_summary.items():
                 metrics[f"{prefix}/{key}"] = value
-        if self.residual_position_input is not None:
-            gate = self.residual_position_input.gate.detach().float()
-            metrics["position/residual_stream/input_gate"] = gate.item()
-        for layer_idx, channel in enumerate(self.residual_position_layers):
-            gate = channel.gate.detach().float()
-            metrics[
-                f"position/residual_stream/layer_{layer_idx:02d}_gate"
-            ] = gate.item()
         return metrics, profiles
 
     def load_state_dict(self, state_dict, strict: bool = True, assign: bool = False):
@@ -1294,20 +811,7 @@ class Transformer(torch.nn.Module):
     def forward(self, input_ids, targets=None, *, return_logits: bool = False):
         """Training path returns loss only so torch.compile need not keep vocab logits live."""
         x = self.in_proj(self.token_embedding(input_ids))
-        if self.residual_position_input is not None:
-            x = x + self.residual_position_input(
-                x.shape[1],
-                dtype=x.dtype,
-            )[None, :, :]
-        for layer_idx, block in enumerate(self.blocks):
-            if self.residual_position_layers:
-                position_idx = (
-                    0 if self.residual_position_layer_shared else layer_idx
-                )
-                x = x + self.residual_position_layers[position_idx](
-                    x.shape[1],
-                    dtype=x.dtype,
-                )[None, :, :]
+        for block in self.blocks:
             if self.gradient_checkpointing:
                 x = torch.utils.checkpoint.checkpoint(
                     block,
@@ -1357,12 +861,7 @@ def count_parameters(model: torch.nn.Module) -> dict[str, int]:
         "position_params": position_counts["position_params"],
         "qk_position_params": position_counts["qk_position_params"],
         "qk_preprojection_params": position_counts["qk_preprojection_params"],
-        "position_gain_params": position_counts["position_gain_params"],
-        "rope_frequency_params": position_counts["rope_frequency_params"],
-        "rotary_clock_params": position_counts["rotary_clock_params"],
         "logit_bias_params": position_counts["logit_bias_params"],
-        "attention_write_params": position_counts["attention_write_params"],
-        "residual_stream_params": position_counts["residual_stream_params"],
         "non_embed": total - embed - head,
     }
 

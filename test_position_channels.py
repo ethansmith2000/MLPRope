@@ -16,7 +16,6 @@ from position import (
     apply_rotary,
     build_qk_position_channel,
     build_rope_cache,
-    compose_phase,
     interleaved_fourier_basis,
     normalize_position_config_v2,
     rotate_half,
@@ -103,7 +102,7 @@ class BasisAndRotaryTest(unittest.TestCase):
         module = FrozenFourierBasis(4, 4, 10_000.0)
         torch.testing.assert_close(module(2), basis[:2])
 
-    def test_rotary_no_delta_and_nonzero_delta(self):
+    def test_fixed_rotary_matches_manual_reference(self):
         head_dim = 8
         seq = 5
         sin, cos = build_rope_cache(seq, head_dim, 10_000.0)
@@ -126,12 +125,9 @@ class BasisAndRotaryTest(unittest.TestCase):
         torch.testing.assert_close(q_out, q_ref)
         torch.testing.assert_close(k_out, k_ref)
 
-        delta = torch.randn(3, seq, half)
-        composed_sin, composed_cos = compose_phase(sin_b, cos_b, delta[None])
-        q_delta = rotate_half(q, composed_sin, composed_cos)
-        # Algebraic R(theta+delta) via complex multiply on first pair.
-        # Nonzero delta must change the rotated result.
-        self.assertFalse(torch.allclose(q_delta, q_out))
+        q_applied, k_applied = apply_rotary(q, k, sin, cos)
+        torch.testing.assert_close(q_applied, q_ref)
+        torch.testing.assert_close(k_applied, k_ref)
 
     def test_fixed_position_tables_survive_explicit_half_conversion(self):
         for dtype in (torch.float16, torch.bfloat16):
@@ -175,91 +171,16 @@ class BasisAndRotaryTest(unittest.TestCase):
                     torch.testing.assert_close(value, reference)
                 self.assertEqual(channel.pipeline.basis.basis.dtype, torch.float32)
 
-    def test_bf16_dynamic_phase_is_composed_in_fp32(self):
-        sequence_length = 1024
-        head_dim = 8
-        half = head_dim // 2
-        sin, cos = build_rope_cache(sequence_length, head_dim, 10_000.0)
-        q = torch.zeros(
-            1,
-            1,
-            sequence_length,
-            head_dim,
-            dtype=torch.bfloat16,
-        )
-        q[..., :half] = 1
-        delta = torch.linspace(
-            -1.0,
-            1.0,
-            sequence_length,
-            dtype=torch.bfloat16,
-        )[None, :, None].expand(1, -1, half)
-        q_out, _ = apply_rotary(
-            q,
-            q,
-            sin,
-            cos,
-            q_phase_delta=delta,
-            k_phase_delta=delta,
-        )
-
-        delta_fp32 = delta.float()[None]
-        sin_fp32 = sin[None, None]
-        cos_fp32 = cos[None, None]
-        expected_sin = (
-            sin_fp32 * delta_fp32.cos()
-            + cos_fp32 * delta_fp32.sin()
-        ).to(torch.bfloat16)
-        expected_cos = (
-            cos_fp32 * delta_fp32.cos()
-            - sin_fp32 * delta_fp32.sin()
-        ).to(torch.bfloat16)
-        expected = torch.cat((expected_cos, expected_sin), dim=-1)
-        torch.testing.assert_close(q_out, expected, rtol=0, atol=0)
-
-
 class PositionChannelTest(unittest.TestCase):
-    def test_qk_phase_zero_init_and_add_sinusoid_init(self):
+    def test_additive_sinusoid_initialization(self):
         for sharing in SHARING_MODES:
             for feature_map in FEATURE_MAPS:
-                with self.subTest(sharing=sharing, feature_map=feature_map, apply="phase"):
-                    phase = _build_qk(
-                        _v1_qk(feature_map, sharing, "phase_residual")
-                    )
-                    output = phase(9)
-                    self.assertEqual(output.q.shape, (4, 9, 4))
-                    self.assertEqual(torch.count_nonzero(output.q).item(), 0)
-                    torch.testing.assert_close(output.q, output.k)
-
                 with self.subTest(sharing=sharing, feature_map=feature_map, apply="add"):
                     add = _build_qk(_v1_qk(feature_map, sharing, "add"))
                     output = add(9)
                     self.assertEqual(output.q.shape, (4, 9, 8))
                     if feature_map in ADDITIVE_SINUSOID_MAPS:
                         self.assertGreater(torch.count_nonzero(output.q).item(), 0)
-
-    def test_phase_residual_matches_rope_at_init(self):
-        common = {
-            "dim": 32,
-            "depth": 1,
-            "heads": 4,
-            "ff_mult": 2,
-            "vocab_size": 64,
-            "max_seq_len": 16,
-            "attn_impl": "sdpa",
-            "logit_bias_config": {"enabled": False},
-        }
-        baseline = Transformer(**common, qk_config={"enabled": False}).eval()
-        input_ids = torch.randint(0, 64, (2, 8))
-        expected = baseline(input_ids)
-
-        candidate = Transformer(
-            **common,
-            qk_config=_v1_qk("mlp", "per_head", "phase_residual", rank=4, mlp_hidden=12),
-        ).eval()
-        candidate.load_state_dict(baseline.state_dict(), strict=False)
-        actual = candidate(input_ids)
-        torch.testing.assert_close(actual, expected)
 
     def test_additive_skips_multiplicative_rope(self):
         common = {
@@ -291,32 +212,8 @@ class PositionChannelTest(unittest.TestCase):
                 residual = _build_qk(_v1_qk(feature_map, "per_head", "add"))
                 torch.testing.assert_close(identity(11).q, residual(11).q)
 
-    def test_tiny_parameter_count_fixtures(self):
-        common = dict(
-            dim=32,
-            depth=1,
-            heads=4,
-            ff_mult=2,
-            vocab_size=64,
-            max_seq_len=16,
-            attn_impl="sdpa",
-            logit_bias_config={"enabled": False},
-        )
-        rope = count_parameters(Transformer(**common, qk_config={"enabled": False}))
-        phase = count_parameters(
-            Transformer(
-                **common,
-                qk_config=_v1_qk("mlp", "per_head", "phase_residual", rank=4, mlp_hidden=12),
-            )
-        )
-        self.assertEqual(rope["total"], 15936)
-        self.assertEqual(phase["qk_position_params"], 992)
-        self.assertEqual(phase["total"], 16928)
-        self.assertEqual(rope["logit_bias_params"], 0)
-
-
 class QKCouplingTest(unittest.TestCase):
-    def _v2_qk(self, *, application, head_coupling, qk_coupling, mapper_kind="identity"):
+    def _v2_qk(self, *, head_coupling, qk_coupling, mapper_kind="identity"):
         residual = mapper_kind in {"low_rank", "bottleneck_mlp", "mlp"}
         heads = 4
         head_dim = 8
@@ -324,8 +221,8 @@ class QKCouplingTest(unittest.TestCase):
         basis_dim = model_dim if head_coupling == "per_head_joint" else head_dim
         return {
             "enabled": True,
-            "application": application,
-            "geometry": "free" if application == "additive" else "phase",
+            "application": "additive",
+            "geometry": "free",
             "input": {
                 "kind": "frozen_fourier",
                 "basis_dim": basis_dim,
@@ -343,40 +240,31 @@ class QKCouplingTest(unittest.TestCase):
         }
 
     def test_coupling_shapes_init_and_independence(self):
-        for application in ("additive", "rotary"):
-            for head_coupling in HEAD_COUPLINGS:
-                for qk_coupling in QK_COUPLINGS:
-                    with self.subTest(
-                        application=application,
+        for head_coupling in HEAD_COUPLINGS:
+            for qk_coupling in QK_COUPLINGS:
+                with self.subTest(
+                    head_coupling=head_coupling,
+                    qk_coupling=qk_coupling,
+                ):
+                    cfg = self._v2_qk(
                         head_coupling=head_coupling,
                         qk_coupling=qk_coupling,
-                    ):
-                        cfg = self._v2_qk(
-                            application=application,
-                            head_coupling=head_coupling,
-                            qk_coupling=qk_coupling,
-                            mapper_kind="mlp",
-                        )
-                        channel = _build_qk(cfg)
-                        output = channel(9)
-                        if application == "additive":
-                            self.assertEqual(output.q.shape, (4, 9, 8))
-                        else:
-                            self.assertEqual(output.q.shape, (4, 9, 4))
-                            self.assertEqual(torch.count_nonzero(output.q).item(), 0)
-                            self.assertEqual(torch.count_nonzero(output.k).item(), 0)
-                        torch.testing.assert_close(output.q, output.k)
+                        mapper_kind="mlp",
+                    )
+                    channel = _build_qk(cfg)
+                    output = channel(9)
+                    self.assertEqual(output.q.shape, (4, 9, 8))
+                    torch.testing.assert_close(output.q, output.k)
 
-                        if qk_coupling == "separate":
-                            q_ids = {id(p) for p in channel.q_pipeline.parameters()}
-                            k_ids = {id(p) for p in channel.k_pipeline.parameters()}
-                            self.assertTrue(q_ids.isdisjoint(k_ids))
+                    if qk_coupling == "separate":
+                        q_ids = {id(p) for p in channel.q_pipeline.parameters()}
+                        k_ids = {id(p) for p in channel.k_pipeline.parameters()}
+                        self.assertTrue(q_ids.isdisjoint(k_ids))
 
     def test_separate_modes_receive_distinct_gradients(self):
         for qk_coupling in ("shared_trunk_separate_readouts", "separate"):
             with self.subTest(qk_coupling=qk_coupling):
                 cfg = self._v2_qk(
-                    application="additive",
                     head_coupling="per_head_independent",
                     qk_coupling=qk_coupling,
                     mapper_kind="linear",
@@ -405,7 +293,6 @@ class QKCouplingTest(unittest.TestCase):
         counts = {}
         for qk_coupling in QK_COUPLINGS:
             cfg = self._v2_qk(
-                application="rotary",
                 head_coupling="per_head_independent",
                 qk_coupling=qk_coupling,
                 mapper_kind="mlp",
@@ -430,7 +317,7 @@ class PositionConfigTest(unittest.TestCase):
                     "enabled": True,
                     "feature_map": "mlp",
                     "sharing": "shared_head",
-                    "apply": "phase_residual",
+                    "apply": "add",
                 },
             }
         )
@@ -438,7 +325,7 @@ class PositionConfigTest(unittest.TestCase):
         self.assertFalse(config.logit_bias["enabled"])
         self.assertEqual(config.attn_impl, "sdpa")
         self.assertEqual(config.pos_variant, "custom")
-        self.assertEqual(config.qk["application"], "rotary")
+        self.assertEqual(config.qk["application"], "additive")
         self.assertEqual(config.qk["head_coupling"], "shared_head")
 
     def test_carrier_hypernetwork_schema_round_trip_and_rejections(self):
@@ -672,10 +559,10 @@ class PositionConfigTest(unittest.TestCase):
         cases = [
             ("identity", "add", "identity", False, "additive", "free"),
             ("add_rope", "add", "euclidean_affine", False, "additive", "free"),
-            ("linear", "phase_residual", "linear", False, "rotary", "phase"),
-            ("low_rank", "phase_residual", "low_rank", True, "rotary", "phase"),
+            ("linear", "add", "linear", False, "additive", "free"),
+            ("low_rank", "add", "low_rank", True, "additive", "free"),
             ("bottleneck_mlp", "add", "bottleneck_mlp", True, "additive", "free"),
-            ("mlp", "phase_residual", "mlp", True, "rotary", "phase"),
+            ("mlp", "add", "mlp", True, "additive", "free"),
         ]
         for feature_map, apply, mapper, residual, application, geometry in cases:
             with self.subTest(feature_map=feature_map, apply=apply):
@@ -701,7 +588,7 @@ class PositionConfigTest(unittest.TestCase):
         for sharing, head_coupling in mapping.items():
             upgraded = upgrade_legacy_position_config(
                 "qk",
-                _v1_qk("linear", sharing, "phase_residual"),
+                _v1_qk("linear", sharing, "add"),
                 model_dim=32,
                 heads=4,
                 rope_theta=10_000.0,
@@ -728,6 +615,14 @@ class PositionConfigTest(unittest.TestCase):
                     "qk_coupling": "shared",
                     "head_coupling": "per_head_independent",
                 },
+                model_dim=32,
+                heads=4,
+                rope_theta=10_000.0,
+            )
+        with self.assertRaisesRegex(ValueError, "removed"):
+            upgrade_legacy_position_config(
+                "qk",
+                _v1_qk("linear", "per_head", "phase_residual"),
                 model_dim=32,
                 heads=4,
                 rope_theta=10_000.0,
@@ -762,7 +657,7 @@ class PositionConfigTest(unittest.TestCase):
     def test_json_round_trip_canonical(self):
         upgraded = upgrade_legacy_position_config(
             "qk",
-            _v1_qk("mlp", "full_dim", "phase_residual"),
+            _v1_qk("mlp", "full_dim", "add"),
             model_dim=32,
             heads=4,
             rope_theta=10_000.0,
@@ -779,7 +674,7 @@ class PositionConfigTest(unittest.TestCase):
 
     def test_all_sweep_configs_load(self):
         paths = sorted(SWEEP_CONFIG_DIR.glob("*.json"))
-        self.assertEqual(len(paths), 8)
+        self.assertEqual(len(paths), 6)
         for path in paths:
             with self.subTest(config=path.name):
                 config = load_config(_cli(str(path)))
@@ -801,65 +696,6 @@ class PositionConfigTest(unittest.TestCase):
 
 
 class CompatibilityTest(unittest.TestCase):
-    def test_state_dict_adapter_shared_phase(self):
-        common = {
-            "dim": 32,
-            "depth": 1,
-            "heads": 4,
-            "ff_mult": 2,
-            "vocab_size": 64,
-            "max_seq_len": 16,
-            "attn_impl": "sdpa",
-            "logit_bias_config": {"enabled": False},
-            "qk_config": _v1_qk("linear", "per_head", "phase_residual"),
-        }
-        model = Transformer(**common).eval()
-        # Synthesize a legacy-named state dict from the live v2 module.
-        state = model.state_dict()
-        legacy = {}
-        for key, value in state.items():
-            legacy_key = (
-                key.replace(".pipeline.mapper.", ".features.")
-                .replace(".phase_head.weight", ".output_weight")
-                .replace(".phase_head.bias", ".output_bias")
-            )
-            legacy[legacy_key] = value
-        clone = Transformer(**common).eval()
-        with self.assertWarns(UserWarning):
-            missing = clone.load_state_dict(legacy, strict=True)
-        self.assertEqual(len(getattr(missing, "missing_keys", [])), 0)
-        input_ids = torch.randint(0, 64, (2, 8))
-        torch.testing.assert_close(model(input_ids), clone(input_ids))
-
-    def test_optimizer_step_after_adapted_load(self):
-        common = {
-            "dim": 32,
-            "depth": 1,
-            "heads": 4,
-            "ff_mult": 2,
-            "vocab_size": 64,
-            "max_seq_len": 16,
-            "attn_impl": "sdpa",
-            "logit_bias_config": {"enabled": False},
-            "qk_config": _v1_qk("mlp", "per_head", "phase_residual", rank=4, mlp_hidden=12),
-        }
-        model = Transformer(**common)
-        state = {
-            key.replace(".pipeline.mapper.", ".features.")
-            .replace(".phase_head.weight", ".output_weight")
-            .replace(".phase_head.bias", ".output_bias"): value
-            for key, value in model.state_dict().items()
-        }
-        restored = Transformer(**common)
-        restored.load_state_dict(state, strict=True)
-        optimizer = torch.optim.AdamW(restored.parameters(), lr=1e-3)
-        input_ids = torch.randint(0, 64, (2, 8))
-        targets = torch.randint(0, 64, (2, 8))
-        loss = restored(input_ids, targets)
-        loss.backward()
-        optimizer.step()
-        self.assertTrue(torch.isfinite(loss).item())
-
     def test_qk_diagnostic_keys(self):
         model = Transformer(
             dim=32,

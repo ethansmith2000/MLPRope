@@ -21,9 +21,7 @@ from position import (
     build_qk_position_channel,
     exp_with_identity_grad,
     interleaved_fourier_basis,
-    normalize_attention_write_config,
     normalize_position_config_v2,
-    normalize_residual_stream_config,
 )
 from train_gpt import RechunkedTokenDataset, evaluate, load_config, make_model
 from transformer import (
@@ -52,9 +50,6 @@ def qk_config(
     conditioning_input_mode: str = "content",
     conditioning_input_normalization: str = "none",
     conditioning_learnable_input_gains: bool = False,
-    conditioning_temporal: str = "pointwise",
-    conditioning_ema_decay_init: float = 0.9,
-    conditioning_ema_decay_coupling: str = "per_dim",
     conditioning_network: str = "linear",
     conditioning_components: str = "phase",
     conditioning_head_coupling: str = "per_head_independent",
@@ -110,9 +105,6 @@ def qk_config(
                 "input_mode": conditioning_input_mode,
                 "input_normalization": conditioning_input_normalization,
                 "learnable_input_gains": conditioning_learnable_input_gains,
-                "temporal": conditioning_temporal,
-                "ema_decay_init": conditioning_ema_decay_init,
-                "ema_decay_coupling": conditioning_ema_decay_coupling,
                 "network": conditioning_network,
                 "components": conditioning_components,
                 "head_coupling": conditioning_head_coupling,
@@ -219,27 +211,6 @@ class GeometryAndContentTest(unittest.TestCase):
             rope_theta=10_000.0,
         )
 
-    def test_carrier_hypernetwork_rotary_phase_is_an_exact_null(self):
-        config = qk_config(
-            "rotary",
-            "phase",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_coupling="shared",
-            conditioning_input_mode="content",
-            conditioning_network="linear",
-            conditioning_components="phase",
-            conditioning_head_coupling="shared_head",
-            learn_phase=False,
-        )
-        channel = self._channel(config)
-        self.assertIsNone(channel.pipeline)
-        content = torch.randn(2, 4, 9, 8)
-        output = channel(9, q_content=content, k_content=content)
-        torch.testing.assert_close(output.q, torch.zeros_like(output.q))
-        torch.testing.assert_close(output.k, output.q)
-        self.assertIsNone(output.q_scale)
-        self.assertEqual(output.q.shape, (2, 4, 9, 4))
 
     def test_carrier_hypernetwork_axes_and_asymmetric_targets(self):
         for input_mode in ("content", "position", "content_position"):
@@ -276,155 +247,14 @@ class GeometryAndContentTest(unittest.TestCase):
                         0,
                     )
 
-    def test_ema_carrier_is_prefix_causal_and_has_learned_decay(self):
-        config = qk_config(
-            "additive",
-            "amplitude_phase",
-            conditioning="carrier_hypernetwork",
-            conditioning_input_mode="content_position",
-            conditioning_network="silu_mlp",
-            conditioning_components="amplitude_phase",
-            conditioning_temporal="ema",
-            conditioning_ema_decay_init=0.85,
-            learn_amplitude=False,
-            learn_phase=False,
-            amplitude_init=1.0,
-        )
-        channel = self._channel(config)
-        hyper = channel.carrier_hypernetwork
-        torch.nn.init.normal_(hyper.q_readout.weight, std=0.1)
-        torch.nn.init.normal_(hyper.k_readout.weight, std=0.1)
-        content = torch.randn(2, 4, 11, 8, requires_grad=True)
-        altered = content.detach().clone()
-        altered[:, :, 6:] = torch.randn_like(altered[:, :, 6:])
-        original = channel(11, q_content=content, k_content=content)
-        changed = channel(11, q_content=altered, k_content=altered)
-        torch.testing.assert_close(original.q[:, :, :6], changed.q[:, :, :6])
-        torch.testing.assert_close(original.k[:, :, :6], changed.k[:, :, :6])
-        original.q.square().sum().backward()
-        self.assertGreater(hyper.content_ema.decay_logit.grad.abs().sum().item(), 0)
-        diagnostics = hyper.temporal_diagnostics()
-        self.assertAlmostEqual(diagnostics["ema_decay_mean"], 0.85, places=6)
 
-    def test_ema_decay_couplings_have_expected_parameter_axes(self):
-        expected = {
-            "scalar": ((1,), 1),
-            "per_head": ((4,), 4),
-            "per_dim": ((8,), 1),
-        }
-        for coupling, (parameter_shape, groups) in expected.items():
-            with self.subTest(coupling=coupling):
-                config = qk_config(
-                    "additive",
-                    "amplitude_phase",
-                    conditioning="carrier_hypernetwork",
-                    conditioning_input_mode="content_position",
-                    conditioning_network="silu_mlp",
-                    conditioning_components="amplitude_phase",
-                    conditioning_temporal="ema",
-                    conditioning_ema_decay_coupling=coupling,
-                    learn_amplitude=False,
-                    learn_phase=False,
-                    amplitude_init=1.0,
-                )
-                channel = self._channel(config)
-                ema = channel.carrier_hypernetwork.content_ema
-                self.assertEqual(tuple(ema.decay_logit.shape), parameter_shape)
-                self.assertEqual(ema.groups, groups)
-                content = torch.randn(2, 1, 11, 8, requires_grad=True)
-                altered = content.detach().clone()
-                altered[:, :, 6:] = torch.randn_like(altered[:, :, 6:])
-                original = channel(11, q_content=content, k_content=content)
-                changed = channel(11, q_content=altered, k_content=altered)
-                torch.testing.assert_close(
-                    original.q[:, :, :6],
-                    changed.q[:, :, :6],
-                )
-                torch.nn.init.normal_(
-                    channel.carrier_hypernetwork.q_readout.weight,
-                    std=0.1,
-                )
-                channel(
-                    11,
-                    q_content=content,
-                    k_content=content,
-                ).q.square().sum().backward()
-                self.assertGreater(ema.decay_logit.grad.abs().sum().item(), 0)
 
-    def test_compact_shared_ema_matches_repeated_head_inputs(self):
-        config = qk_config(
-            "additive",
-            "amplitude_phase",
-            conditioning="carrier_hypernetwork",
-            conditioning_input_mode="content_position",
-            conditioning_network="silu_mlp",
-            conditioning_components="amplitude_phase",
-            conditioning_temporal="ema",
-            learn_amplitude=False,
-            learn_phase=False,
-            amplitude_init=1.0,
-        )
-        channel = self._channel(config)
-        hyper = channel.carrier_hypernetwork
-        torch.nn.init.normal_(hyper.q_readout.weight, std=0.1)
-        torch.nn.init.normal_(hyper.k_readout.weight, std=0.1)
-        compact = torch.randn(2, 1, 11, 8)
-        repeated = compact.expand(-1, 4, -1, -1).contiguous()
-        optimized = channel(11, q_content=compact, k_content=compact)
-        reference = channel(11, q_content=repeated, k_content=repeated)
-        torch.testing.assert_close(optimized.q, reference.q)
-        torch.testing.assert_close(optimized.k, reference.k)
 
-        attention = Attention(
-            32,
-            4,
-            qk_config=config,
-            position_content_coupling="shared",
-            qk_norm_mode="method_aware_rms",
-            attn_impl="sdpa",
-        )
-        q_content, k_content = attention.position_content(
-            torch.randn(2, 11, 32)
-        )
-        self.assertEqual(
-            q_content.shape,
-            (2, 1, 11, attention.position_content_config["dim"]),
-        )
-        self.assertIs(q_content, k_content)
-
-    def test_ema_carrier_requires_content_input(self):
-        with self.assertRaisesRegex(ValueError, "content-input"):
-            qk_config(
-                "additive",
-                "amplitude_phase",
-                conditioning="carrier_hypernetwork",
-                conditioning_input_mode="position",
-                conditioning_temporal="ema",
-                conditioning_components="amplitude_phase",
-                learn_amplitude=False,
-                learn_phase=False,
-                amplitude_init=1.0,
-            )
-
-        with self.assertRaisesRegex(ValueError, "per-head EMA"):
-            qk_config(
-                "additive",
-                "amplitude_phase",
-                conditioning="carrier_hypernetwork",
-                conditioning_input_mode="content",
-                conditioning_head_coupling="shared_head",
-                conditioning_temporal="ema",
-                conditioning_ema_decay_coupling="per_head",
-                conditioning_components="amplitude_phase",
-                learn_amplitude=False,
-                learn_phase=False,
-                amplitude_init=1.0,
-            )
 
     def test_shared_carrier_hypernetwork_requires_shared_content(self):
         config = qk_config(
-            "rotary",
-            "phase",
+            "additive",
+            "amplitude_phase",
             conditioning="carrier_hypernetwork",
             conditioning_source="dedicated",
             conditioning_coupling="shared",
@@ -451,8 +281,8 @@ class GeometryAndContentTest(unittest.TestCase):
 
     def test_position_only_carrier_hypernetwork_needs_no_content_projector(self):
         config = qk_config(
-            "rotary",
-            "phase",
+            "additive",
+            "amplitude_phase",
             conditioning="carrier_hypernetwork",
             conditioning_source="dedicated",
             conditioning_coupling="shared_trunk_separate_readouts",
@@ -566,312 +396,12 @@ class GeometryAndContentTest(unittest.TestCase):
                     atol=0,
                 )
 
-    def test_learned_rope_frequencies_are_exact_at_initialization(self):
-        fixed = Attention(
-            32,
-            4,
-            max_seq_len=64,
-            rope_frequency_mode="fixed",
-        )
-        shared = Attention(
-            32,
-            4,
-            max_seq_len=64,
-            rope_frequency_mode="layer_shared",
-        )
-        per_head = Attention(
-            32,
-            4,
-            max_seq_len=64,
-            rope_frequency_mode="layer_head",
-        )
-        q = torch.randn(2, 4, 64, 8)
-        fixed_q, fixed_k = fixed._apply_rope(q, q)
-        for attention, expected_shape in (
-            (shared, (1, 4)),
-            (per_head, (4, 4)),
-        ):
-            with self.subTest(mode=attention.rope_frequency_mode):
-                self.assertEqual(
-                    tuple(attention.rope_log_frequency_delta.shape),
-                    expected_shape,
-                )
-                learned_q, learned_k = attention._apply_rope(q, q)
-                torch.testing.assert_close(learned_q, fixed_q, rtol=0, atol=0)
-                torch.testing.assert_close(learned_k, fixed_k, rtol=0, atol=0)
 
-        with torch.no_grad():
-            per_head.rope_log_frequency_delta[2, 1] = torch.tensor(2.0).log()
-        frequencies = per_head.rope_frequencies()
-        base = fixed.rope_frequencies()
-        torch.testing.assert_close(frequencies[:2], base[:2])
-        torch.testing.assert_close(frequencies[3:], base[3:])
-        torch.testing.assert_close(frequencies[2, 1], 2.0 * base[2, 1])
 
-    def test_learned_rope_frequency_parameter_counts_and_gradients(self):
-        common = {
-            "dim": 32,
-            "depth": 3,
-            "heads": 4,
-            "ff_mult": 2,
-            "vocab_size": 64,
-            "max_seq_len": 16,
-            "qk_config": {"enabled": False},
-            "logit_bias_config": {"enabled": False},
-        }
-        shared = Transformer(**common, rope_frequency_mode="layer_shared")
-        per_head = Transformer(**common, rope_frequency_mode="layer_head")
-        self.assertEqual(count_parameters(shared)["rope_frequency_params"], 12)
-        self.assertEqual(count_parameters(per_head)["rope_frequency_params"], 48)
-        self.assertEqual(count_parameters(shared)["position_params"], 12)
-        self.assertEqual(count_parameters(per_head)["position_params"], 48)
 
-        loss = per_head(torch.randint(0, 64, (2, 16))).square().mean()
-        loss.backward()
-        for block in per_head.blocks:
-            gradient = block.attn.rope_log_frequency_delta.grad
-            self.assertIsNotNone(gradient)
-            self.assertTrue(torch.isfinite(gradient).all())
-            self.assertGreater(gradient.abs().sum().item(), 0.0)
 
-        with self.assertRaisesRegex(ValueError, "multiplicative RoPE"):
-            Attention(
-                32,
-                4,
-                use_rope=False,
-                rope_frequency_mode="layer_head",
-            )
 
-    def test_static_rope_frequency_parameterizations_anchor_and_gradients(self):
-        base_attention = Attention(32, 4, max_seq_len=16)
-        base = base_attention.rope_frequencies()[0]
-        softplus_slope = 1.0 - math.exp(-1.0)
-        expected_gradients = {
-            "exp": base,
-            "exp_full_ste": torch.ones_like(base),
-            "softplus": base * softplus_slope,
-            "additive": torch.ones_like(base),
-            "bounded_log": base,
-        }
-        for parameterization, expected_gradient in expected_gradients.items():
-            with self.subTest(parameterization=parameterization):
-                attention = Attention(
-                    32,
-                    4,
-                    max_seq_len=16,
-                    rope_frequency_config={
-                        "mode": "static",
-                        "head_coupling": "shared",
-                        "parameterization": parameterization,
-                        "log_bound": 1.0,
-                    },
-                )
-                frequencies = attention.rope_frequencies()[0]
-                torch.testing.assert_close(frequencies, base, rtol=0, atol=0)
-                frequencies.sum().backward()
-                torch.testing.assert_close(
-                    attention.rope_log_frequency_delta.grad[0],
-                    expected_gradient,
-                )
 
-        ordinary = Attention(
-            32,
-            4,
-            rope_frequency_config={
-                "mode": "static",
-                "head_coupling": "shared",
-                "parameterization": "exp",
-            },
-        )
-        identity_backward = Attention(
-            32,
-            4,
-            rope_frequency_config={
-                "mode": "static",
-                "head_coupling": "shared",
-                "parameterization": "exp_full_ste",
-            },
-        )
-        with torch.no_grad():
-            raw = torch.linspace(-0.5, 0.5, 4)[None]
-            ordinary.rope_log_frequency_delta.copy_(raw)
-            identity_backward.rope_log_frequency_delta.copy_(raw)
-        torch.testing.assert_close(
-            identity_backward.rope_frequencies(),
-            ordinary.rope_frequencies(),
-            rtol=0,
-            atol=0,
-        )
-
-    def test_additive_frequency_diagnostics_survive_frequency_reversal(self):
-        attention = Attention(
-            32,
-            4,
-            rope_frequency_config={
-                "mode": "static",
-                "head_coupling": "shared",
-                "parameterization": "additive",
-            },
-        )
-        with torch.no_grad():
-            attention.rope_log_frequency_delta.fill_(-2.0)
-        metrics, frequencies = attention.rope_frequency_diagnostics()
-        self.assertTrue(torch.isfinite(frequencies).all())
-        self.assertEqual(metrics["frequency_nonpositive_fraction"], 1.0)
-        self.assertTrue(all(math.isfinite(value) for value in metrics.values()))
-
-    def test_content_frequency_controllers_are_exact_nulls(self):
-        common = {
-            "dim": 32,
-            "depth": 2,
-            "heads": 4,
-            "ff_mult": 2,
-            "vocab_size": 64,
-            "max_seq_len": 16,
-            "qk_config": {"enabled": False},
-            "logit_bias_config": {"enabled": False},
-            "paired_initialization_seed": 123,
-        }
-        fixed = Transformer(**common)
-        tokens = torch.randint(0, 64, (2, 16))
-        fixed_logits = fixed(tokens)
-        for mapper in ("linear", "low_rank_linear", "low_rank_silu"):
-            with self.subTest(mapper=mapper):
-                candidate = Transformer(
-                    **common,
-                    rope_frequency_config={
-                        "mode": "content",
-                        "head_coupling": "per_head",
-                        "parameterization": "horizon_bounded",
-                        "mapper": mapper,
-                        "rank": 8,
-                        "phase_bound": 1.0,
-                        "reference_length": 16,
-                    },
-                )
-                logits = candidate(tokens)
-                torch.testing.assert_close(logits, fixed_logits, rtol=0, atol=0)
-                for block in candidate.blocks:
-                    controller = block.attn.rope_frequency_controller
-                    self.assertIsNotNone(controller)
-                    torch.testing.assert_close(
-                        controller.output.weight,
-                        torch.zeros_like(controller.output.weight),
-                        rtol=0,
-                        atol=0,
-                    )
-
-    def test_content_frequency_controller_shapes_bounds_and_gradients(self):
-        common_config = {
-            "mode": "content",
-            "head_coupling": "per_head",
-            "parameterization": "horizon_bounded",
-            "mapper": "low_rank_silu",
-            "rank": 8,
-            "phase_bound": 1.25,
-            "reference_length": 16,
-        }
-        attention = Attention(
-            32,
-            4,
-            max_seq_len=16,
-            rope_frequency_config=common_config,
-        )
-        controller = attention.rope_frequency_controller
-        normalized_residual = torch.randn(2, 16, 32)
-        with torch.no_grad():
-            controller.output.bias.fill_(100.0)
-        phase = controller.phase_delta(normalized_residual)
-        self.assertEqual(tuple(phase.shape), (2, 4, 16, 4))
-        self.assertEqual(phase.dtype, torch.float32)
-        self.assertLessEqual(phase.abs().max().item(), 1.25)
-        torch.testing.assert_close(
-            phase[:, :, 0],
-            torch.zeros_like(phase[:, :, 0]),
-            rtol=0,
-            atol=0,
-        )
-        self.assertAlmostEqual(
-            phase[:, :, -1].mean().item(),
-            1.25 * 15 / 16,
-            places=6,
-        )
-
-        phase_control = Attention(
-            32,
-            4,
-            max_seq_len=16,
-            rope_frequency_config={
-                **common_config,
-                "parameterization": "phase_residual",
-            },
-        ).rope_frequency_controller
-        with torch.no_grad():
-            phase_control.output.bias.fill_(100.0)
-        controlled_phase = phase_control.phase_delta(normalized_residual)
-        self.assertAlmostEqual(controlled_phase.mean().item(), 1.25, places=6)
-
-        model = Transformer(
-            dim=32,
-            depth=2,
-            heads=4,
-            ff_mult=2,
-            vocab_size=64,
-            max_seq_len=16,
-            qk_config={"enabled": False},
-            logit_bias_config={"enabled": False},
-            paired_initialization_seed=123,
-            rope_frequency_config=common_config,
-        )
-        loss = model(torch.randint(0, 64, (2, 16))).square().mean()
-        loss.backward()
-        for block in model.blocks:
-            controller = block.attn.rope_frequency_controller
-            self.assertIsNotNone(controller.output.weight.grad)
-            self.assertTrue(torch.isfinite(controller.output.weight.grad).all())
-            self.assertGreater(controller.output.weight.grad.abs().sum().item(), 0)
-            self.assertIsNotNone(controller.down.weight.grad)
-            torch.testing.assert_close(
-                controller.down.weight.grad,
-                torch.zeros_like(controller.down.weight.grad),
-                rtol=0,
-                atol=0,
-            )
-
-    def test_content_frequency_controller_parameter_counts(self):
-        common = {
-            "dim": 32,
-            "depth": 3,
-            "heads": 4,
-            "ff_mult": 2,
-            "vocab_size": 64,
-            "max_seq_len": 16,
-            "qk_config": {"enabled": False},
-            "logit_bias_config": {"enabled": False},
-        }
-        linear = Transformer(
-            **common,
-            rope_frequency_config={
-                "mode": "content",
-                "head_coupling": "per_head",
-                "parameterization": "horizon_bounded",
-                "mapper": "linear",
-            },
-        )
-        low_rank = Transformer(
-            **common,
-            rope_frequency_config={
-                "mode": "content",
-                "head_coupling": "per_head",
-                "parameterization": "horizon_bounded",
-                "mapper": "low_rank_linear",
-                "rank": 8,
-            },
-        )
-        self.assertEqual(count_parameters(linear)["rope_frequency_params"], 1584)
-        self.assertEqual(count_parameters(low_rank)["rope_frequency_params"], 1224)
-        self.assertEqual(count_parameters(linear)["position_params"], 1584)
-        self.assertEqual(count_parameters(low_rank)["position_params"], 1224)
 
     def test_layer_selective_ffn_widening(self):
         common = {
@@ -1342,29 +872,6 @@ class GeometryAndContentTest(unittest.TestCase):
             rtol=2e-5,
         )
 
-    def test_phase_only_hyperrope_starts_at_standard_rope_and_gets_gradient(self):
-        config = qk_config(
-            "rotary",
-            "phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_input_mode="content_position",
-            conditioning_network="silu_mlp",
-            conditioning_components="phase",
-            learn_phase=False,
-        )
-        channel = self._channel(config)
-        content = torch.randn(2, 4, 9, 8)
-        output = channel(9, q_content=content, k_content=content)
-        torch.testing.assert_close(output.q, torch.zeros_like(output.q))
-        torch.testing.assert_close(output.k, torch.zeros_like(output.k))
-        target = torch.randn_like(output.q)
-        (output.q * target).sum().backward()
-        self.assertGreater(
-            channel.carrier_hypernetwork.q_readout.weight.grad.abs().sum().item(),
-            0,
-        )
 
     def test_free_residual_additive_mapper_preserves_basis_skip(self):
         config = qk_config(
@@ -1516,24 +1023,12 @@ class GeometryAndContentTest(unittest.TestCase):
         actuator = channel.content_actuator
         self.assertGreater(actuator.q_up.grad.abs().sum().item(), 0)
 
-    def test_rope_content_phase_and_adaptive_gain_are_exact_nulls(self):
+    def test_additive_adaptive_gain_is_an_exact_null_at_initialization(self):
         content = torch.randn(2, 4, 9, 8)
-        phase_channel = self._channel(
-            qk_config(
-                "rotary",
-                "phase",
-                conditioning="rope_phase",
-                conditioning_source="dedicated",
-            )
-        )
-        phase = phase_channel(9, q_content=content, k_content=content)
-        self.assertEqual(torch.count_nonzero(phase.q).item(), 0)
-        self.assertEqual(torch.count_nonzero(phase.k).item(), 0)
-
         gain_channel = self._channel(
             qk_config(
-                "rotary",
-                "phase",
+                "additive",
+                "amplitude_phase",
                 conditioning="adaptive_gain",
                 conditioning_source="dedicated",
             )
@@ -1545,9 +1040,9 @@ class GeometryAndContentTest(unittest.TestCase):
     def test_dedicated_position_content_is_low_rank_and_configurable(self):
         torch.manual_seed(0)
         config = qk_config(
-            "rotary",
-            "phase",
-            conditioning="rope_phase",
+            "additive",
+            "amplitude_phase",
+            conditioning="additive_phase",
             conditioning_source="dedicated",
         )
         for coupling in ("shared", "separate"):
@@ -1845,52 +1340,9 @@ class ResidualAndWriteTest(unittest.TestCase):
             logit_bias_config={"enabled": False},
         )
 
-    def test_zero_gated_residual_stream_is_exact_null(self):
-        config = normalize_residual_stream_config(
-            {
-                "enabled": True,
-                "placement": "both",
-                "source": "position_basis",
-                "gate_init": 0.0,
-            },
-            model_dim=32,
-            heads=4,
-            rope_theta=10_000.0,
-        )
-        torch.manual_seed(11)
-        baseline = Transformer(**self._common()).eval()
-        torch.manual_seed(11)
-        candidate = Transformer(
-            **self._common(),
-            residual_stream_config=config,
-        ).eval()
-        candidate.load_state_dict(baseline.state_dict(), strict=False)
-        ids = torch.randint(0, 64, (2, 8))
-        torch.testing.assert_close(baseline(ids), candidate(ids))
 
-    def test_learned_absolute_and_functional_streams(self):
-        for source in ("learned_absolute", "position_basis"):
-            with self.subTest(source=source):
-                config = normalize_residual_stream_config(
-                    {
-                        "enabled": True,
-                        "placement": "per_layer",
-                        "source": source,
-                        "gate_init": 0.1,
-                        "layer_shared": True,
-                    },
-                    model_dim=32,
-                    heads=4,
-                    rope_theta=10_000.0,
-                )
-                model = Transformer(
-                    **self._common(),
-                    residual_stream_config=config,
-                )
-                output = model(torch.randint(0, 64, (2, 8)))
-                self.assertEqual(output.shape, (2, 8, 64))
 
-    def test_rope_can_be_disabled_for_residual_only_and_no_pe_controls(self):
+    def test_rope_can_be_disabled_for_no_explicit_position_control(self):
         ids = torch.randint(0, 64, (2, 8))
         no_position = Transformer(
             **self._common(),
@@ -1898,25 +1350,6 @@ class ResidualAndWriteTest(unittest.TestCase):
         ).eval()
         self.assertFalse(no_position.blocks[0].attn.multiplicative_rope)
         self.assertEqual(no_position(ids).shape, (2, 8, 64))
-
-        residual_config = normalize_residual_stream_config(
-            {
-                "enabled": True,
-                "placement": "input",
-                "source": "position_basis",
-                "gate_init": 1.0,
-            },
-            model_dim=32,
-            heads=4,
-            rope_theta=10_000.0,
-        )
-        residual_only = Transformer(
-            **self._common(),
-            use_rope=False,
-            residual_stream_config=residual_config,
-        ).eval()
-        self.assertFalse(residual_only.blocks[0].attn.multiplicative_rope)
-        self.assertEqual(residual_only(ids).shape, (2, 8, 64))
 
     def test_post_position_qk_norm_is_parameter_free_unit_rms(self):
         attention = Attention(
@@ -1960,14 +1393,6 @@ class ResidualAndWriteTest(unittest.TestCase):
         output = attention(torch.randn(2, 8, 32))
         self.assertEqual(output.shape, (2, 8, 32))
 
-    def test_rope_disable_rejects_rotary_qk_channel(self):
-        common = self._common()
-        common["qk_config"] = qk_config("rotary", "phase")
-        with self.assertRaisesRegex(ValueError, "rotary Q/K"):
-            Transformer(
-                **common,
-                use_rope=False,
-            )
 
     def test_method_aware_rms_normalizes_after_additive_position(self):
         config = qk_config(
@@ -2024,63 +1449,7 @@ class ResidualAndWriteTest(unittest.TestCase):
             places=5,
         )
 
-    def test_attention_write_modes_and_zero_gate(self):
-        ids = torch.randint(0, 64, (2, 8))
-        for mode in ("key_position", "relative_offset"):
-            with self.subTest(mode=mode):
-                config = normalize_attention_write_config(
-                    {
-                        "enabled": True,
-                        "mode": mode,
-                        "gate_init": 0.0,
-                    },
-                    model_dim=32,
-                    heads=4,
-                    rope_theta=10_000.0,
-                )
-                torch.manual_seed(13)
-                baseline = Transformer(**self._common()).eval()
-                torch.manual_seed(13)
-                candidate = Transformer(
-                    **self._common(),
-                    attention_write_config=config,
-                ).eval()
-                candidate.load_state_dict(baseline.state_dict(), strict=False)
-                torch.testing.assert_close(
-                    baseline(ids),
-                    candidate(ids),
-                    atol=1e-6,
-                    rtol=1e-5,
-                )
 
-    def test_query_position_write_is_exact_null_with_live_final_gradient(self):
-        config = normalize_attention_write_config(
-            {
-                "enabled": True,
-                "mode": "query_position",
-            },
-            model_dim=32,
-            heads=4,
-            rope_theta=10_000.0,
-        )
-        torch.manual_seed(17)
-        baseline = Transformer(**self._common()).eval()
-        torch.manual_seed(17)
-        candidate = Transformer(
-            **self._common(),
-            attention_write_config=config,
-        ).eval()
-        candidate.load_state_dict(baseline.state_dict(), strict=False)
-        ids = torch.randint(0, 64, (2, 8))
-        torch.testing.assert_close(baseline(ids), candidate(ids))
-
-        candidate(ids).sum().backward()
-        channel = candidate.blocks[0].attn.position_write
-        self.assertIsNone(channel.gate)
-        self.assertGreater(
-            channel.query_projection.weight.grad.abs().sum().item(),
-            0,
-        )
 
 
 class EvaluationProtocolTest(unittest.TestCase):
@@ -2198,7 +1567,6 @@ class InklingAndConfigTest(unittest.TestCase):
                 "resume_from_checkpoint": "auto",
                 "save_final_model": True,
                 "paired_initialization_seed": 77,
-                "rope_frequency_mode": "layer_head",
                 "ff_widened_hidden_dim": 128,
                 "ff_widened_layers": [0, 2],
                 "num_final_validation_batches": 128,
@@ -2221,7 +1589,6 @@ class InklingAndConfigTest(unittest.TestCase):
         self.assertEqual(config.resume_from_checkpoint, "auto")
         self.assertTrue(config.save_final_model)
         self.assertEqual(config.paired_initialization_seed, 77)
-        self.assertEqual(config.rope_frequency_mode, "layer_head")
         self.assertEqual(config.ff_widened_hidden_dim, 128)
         self.assertEqual(config.ff_widened_layers, [0, 2])
         self.assertEqual(config.num_final_validation_batches, 128)
@@ -2249,84 +1616,6 @@ class InklingAndConfigTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "must be positive"):
                     self._load_payload({key: 0})
 
-    def test_structured_rope_frequency_config_round_trips_and_validates(self):
-        config = self._load_payload(
-            {
-                "rope_frequency": {
-                    "mode": "static",
-                    "head_coupling": "shared",
-                    "parameterization": "softplus",
-                }
-            }
-        )
-        self.assertEqual(config.rope_frequency_mode, "layer_shared")
-        self.assertEqual(config.rope_frequency["parameterization"], "softplus")
-        model = make_model(config, 64)
-        self.assertEqual(
-            model.blocks[0].attn.rope_frequency_config,
-            config.rope_frequency,
-        )
-
-        content = self._load_payload(
-            {
-                "rope_frequency": {
-                    "mode": "content",
-                    "head_coupling": "per_head",
-                    "parameterization": "horizon_bounded",
-                    "source": "normalized_residual",
-                    "mapper": "low_rank_silu",
-                    "rank": 16,
-                    "qk_coupling": "shared",
-                    "phase_bound": 1.0,
-                    "reference_length": 1024,
-                }
-            }
-        )
-        self.assertEqual(content.rope_frequency_mode, "content")
-        self.assertEqual(content.rope_frequency["mapper"], "low_rank_silu")
-        self.assertEqual(content.rope_frequency["rank"], 16)
-        content_model = make_model(content, 64)
-        self.assertIsNotNone(
-            content_model.blocks[0].attn.rope_frequency_controller
-        )
-
-        with self.assertRaisesRegex(ValueError, "conflicts"):
-            self._load_payload(
-                {
-                    "rope_frequency_mode": "layer_head",
-                    "rope_frequency": {
-                        "mode": "static",
-                        "head_coupling": "shared",
-                    },
-                }
-            )
-        with self.assertRaisesRegex(ValueError, "fixed rope_frequency"):
-            self._load_payload(
-                {
-                    "rope_frequency": {
-                        "mode": "fixed",
-                        "parameterization": "softplus",
-                    }
-                }
-            )
-        with self.assertRaisesRegex(ValueError, "Unknown rope_frequency keys"):
-            self._load_payload(
-                {
-                    "rope_frequency": {
-                        "mode": "static",
-                        "mystery": 1,
-                    }
-                }
-            )
-        with self.assertRaisesRegex(ValueError, "content rope_frequency"):
-            self._load_payload(
-                {
-                    "rope_frequency": {
-                        "mode": "content",
-                        "parameterization": "additive",
-                    }
-                }
-            )
 
     def test_50k_scale_configuration_round_trips(self):
         config = self._load_payload(
@@ -2425,40 +1714,11 @@ class InklingAndConfigTest(unittest.TestCase):
                 }
             )
 
-    def test_aux_configs_round_trip_through_training_loader(self):
-        payload = {
-            "hidden_size": 32,
-            "n_head": 4,
-            "depth": 1,
-            "block_size": 16,
-            "residual_stream": {
-                "enabled": True,
-                "placement": "per_layer",
-                "source": "learned_absolute",
-                "gate_init": 0.0,
-            },
-            "attention_write": {
-                "enabled": True,
-                "mode": "relative_offset",
-                "gate_init": 0.0,
-            },
-        }
-        with tempfile.NamedTemporaryFile("w", suffix=".json") as file:
-            json.dump(payload, file)
-            file.flush()
-            config = load_config(
-                Namespace(
-                    override_json=file.name,
-                    pos_variant=None,
-                    attn_impl=None,
-                    max_train_steps=None,
-                    dry_run=False,
-                    print_model=False,
-                )
-            )
-        self.assertTrue(config.residual_stream["enabled"])
-        self.assertTrue(config.attention_write["enabled"])
-        self.assertEqual(config.position_source_schema, 2)
+    def test_removed_aux_configs_fail_with_migration_message(self):
+        for key in ("residual_stream", "attention_write"):
+            with self.subTest(key=key):
+                with self.assertRaisesRegex(ValueError, "removed"):
+                    self._load_payload({key: {"enabled": True}})
 
     def test_parameter_matched_ffn_recommendation(self):
         result = suggest_matched_baselines(
@@ -2474,26 +1734,6 @@ class InklingAndConfigTest(unittest.TestCase):
         self.assertGreater(result["matched_ff_hidden_dim"], 64)
         self.assertGreaterEqual(result["matched_ff_added_params"], 10_000)
 
-    def test_every_historical_and_phase2_config_loads(self):
-        paths = sorted(
-            Path(__file__).resolve().parent.joinpath("sweep_configs").glob(
-                "**/*.json"
-            )
-        )
-        self.assertGreaterEqual(len(paths), 24)
-        for path in paths:
-            with self.subTest(path=path.name):
-                config = load_config(
-                    Namespace(
-                        override_json=str(path),
-                        pos_variant=None,
-                        attn_impl=None,
-                        max_train_steps=None,
-                        dry_run=False,
-                        print_model=False,
-                    )
-                )
-                self.assertEqual(config.position_schema_version, 2)
 
 
 class PositionalApiCompatibilityTest(unittest.TestCase):

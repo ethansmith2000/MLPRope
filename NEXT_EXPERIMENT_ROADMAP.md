@@ -5,18 +5,22 @@ _Revised 2026-09-03. This roadmap implements the decision in
 
 ## Stage 0 — preserve and simplify
 
-1. Record the completed Phase 29-32 implementation, configs, compact results,
-   and analyses in git.
-2. Verify retained result artifacts before any storage deletion.
-3. Remove intermediate `step_*` checkpoints only after deciding where final
-   weights will be retained.
-4. Remove closed dynamic-RoPE, rotary-clock, and EMA code in a separate commit.
-5. Remove already-retired residual-stream and attention-write channels; remove
-   position-gain runtime support after retaining its result report.
-6. Keep a disabled/fixed compatibility parser only where it materially helps
-   old resolved configs remain understandable.
-7. Run the complete CPU suite and a focused compiled bf16 CUDA smoke after each
-   removal tranche.
+Completed:
+
+- Phase 29-32 implementation, configs, compact results, and analyses were
+  recorded in provenance commit `c8362c3`.
+- Closed dynamic-RoPE, rotary-clock, EMA, residual/write, and position-gain
+  paths were removed from the runtime and dedicated scripts/configs.
+- Disabled/fixed compatibility validators remain for understandable failures
+  from archived resolved configs.
+- The retained config corpus, CPU suite, and eager/compiled bf16 CUDA smoke all
+  pass.
+
+Remaining storage work:
+
+1. Verify retained result artifacts before any storage deletion.
+2. Remove intermediate `step_*` checkpoints after confirming final weights are
+   untouched and every run retains compact scientific evidence.
 
 Do not combine the provenance commit and removal commit. A bisectable boundary
 is more valuable than preserving dormant compatibility in the active runtime.

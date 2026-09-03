@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Claimed-GPU smoke for position v2: eager + compiled forward/backward steps."""
+"""Claimed-GPU smoke for the consolidated position mechanisms."""
 
 from __future__ import annotations
 
@@ -17,82 +17,61 @@ from position import normalize_position_config_v2
 from transformer import Transformer
 
 
-def _qk(
+def additive_qk(
     *,
-    application: str,
-    qk_coupling: str,
-    mapper_kind: str = "mlp",
-    head_coupling: str = "per_head_independent",
-    geometry: str | None = None,
-    basis_kind: str = "frozen_fourier",
+    geometry: str = "amplitude_phase",
     conditioning: str = "none",
-    conditioning_source: str = "dedicated",
-    conditioning_target: str = "both",
-    conditioning_coupling: str = "shared_trunk_separate_readouts",
-    conditioning_static_complement: bool = False,
-    conditioning_input_mode: str = "content",
-    conditioning_input_normalization: str = "none",
-    conditioning_learnable_input_gains: bool = False,
-    conditioning_network: str = "linear",
-    conditioning_components: str = "phase",
-    conditioning_head_coupling: str = "per_head_independent",
-    phase_bound: float = 0.25,
-    scalars: list[str] | None = None,
-    mapper_residual: bool | None = None,
-    amplitude_init: float = 0.1,
-    amplitude_parameterization: str = "signed",
-    parameter_source: str = "mapped",
+    input_mode: str = "content",
     learn_amplitude: bool = True,
     learn_phase: bool = True,
 ) -> dict:
-    residual = (
-        mapper_kind in {"low_rank", "bottleneck_mlp", "mlp"}
-        if mapper_residual is None
-        else mapper_residual
-    )
+    """Build a small canonical additive Q/K configuration."""
     return normalize_position_config_v2(
         "qk",
         {
             "enabled": True,
-            "application": application,
-            "geometry": geometry
-            or ("free" if application == "additive" else "phase"),
+            "application": "additive",
+            "geometry": geometry,
             "input": {
-                "kind": basis_kind,
-                "basis_dim": None,
+                "kind": "frozen_fourier",
+                "basis_dim": 8,
                 "theta": None,
-                "scalars": list(scalars or []),
+                "scalars": ["normalized_position", "log_position"],
             },
             "mapper": {
-                "kind": mapper_kind,
-                "residual": residual,
+                "kind": "linear",
+                "residual": False,
                 "rank": 4,
-                "hidden_dim": 12,
-            },
-            "qk_coupling": qk_coupling,
-            "head_coupling": head_coupling,
-            "conditioning": {
-                "kind": conditioning,
-                "source": conditioning_source,
-                "target": conditioning_target,
-                "coupling": conditioning_coupling,
-                "static_complement": conditioning_static_complement,
-                "input_mode": conditioning_input_mode,
-                "input_normalization": conditioning_input_normalization,
-                "learnable_input_gains": conditioning_learnable_input_gains,
-                "network": conditioning_network,
-                "components": conditioning_components,
-                "head_coupling": conditioning_head_coupling,
-                "phase_bound": phase_bound,
-                "hidden_dim": 12,
+                "hidden_dim": 16,
             },
             "output": {
-                "parameter_source": parameter_source,
-                "amplitude_init": amplitude_init,
-                "amplitude_parameterization": amplitude_parameterization,
+                "parameter_source": "direct"
+                if geometry == "amplitude_phase"
+                else "mapped",
+                "amplitude_init": 1.0,
+                "amplitude_parameterization": "signed",
                 "learn_amplitude": learn_amplitude,
                 "learn_phase": learn_phase,
             },
+            "conditioning": {
+                "kind": conditioning,
+                "source": "dedicated",
+                "target": "both",
+                "coupling": "shared_trunk_separate_readouts",
+                "static_complement": False,
+                "input_mode": input_mode,
+                "input_normalization": "modality_rms"
+                if conditioning == "carrier_hypernetwork"
+                else "none",
+                "learnable_input_gains": conditioning == "carrier_hypernetwork",
+                "network": "silu_mlp",
+                "components": "amplitude_phase",
+                "head_coupling": "per_head_independent",
+                "phase_bound": 0.25,
+                "hidden_dim": 16,
+            },
+            "qk_coupling": "shared_trunk_separate_readouts",
+            "head_coupling": "per_head_independent",
         },
         model_dim=64,
         heads=4,
@@ -100,587 +79,98 @@ def _qk(
     )
 
 
-CASES = [
-    ("rope_baseline", {"enabled": False}, {"enabled": False}, "sdpa"),
-    ("additive_shared", _qk(application="additive", qk_coupling="shared"), {"enabled": False}, "sdpa"),
-    ("phase_shared", _qk(application="rotary", qk_coupling="shared"), {"enabled": False}, "sdpa"),
-    (
-        "additive_separate_readout",
-        _qk(application="additive", qk_coupling="shared_trunk_separate_readouts"),
-        {"enabled": False},
-        "sdpa",
-    ),
-    (
-        "additive_free_residual",
-        _qk(
-            application="additive",
-            qk_coupling="shared_trunk_separate_readouts",
-            mapper_kind="linear",
-            mapper_residual=True,
+CASES = {
+    "fixed_rope": {},
+    "no_explicit_position": {"use_rope": False},
+    "addrope_static_qk_adapter": {
+        "qk_config": additive_qk(),
+        "qk_norm_mode": "method_aware_rms",
+    },
+    "addrope_dynamic_pointwise": {
+        "qk_config": additive_qk(
+            conditioning="carrier_hypernetwork",
+            input_mode="content_position",
+            learn_amplitude=False,
+            learn_phase=False,
         ),
-        {"enabled": False},
-        "sdpa",
-    ),
-    (
-        "additive_pair_normalized",
-        _qk(
-            application="additive",
-            geometry="pair_normalized",
-            qk_coupling="shared_trunk_separate_readouts",
-            mapper_kind="linear",
-            amplitude_init=0.3,
-        ),
-        {"enabled": False},
-        "sdpa",
-    ),
-    (
-        "additive_content_phase_rotation",
-        _qk(
-            application="additive",
-            geometry="pair_normalized",
-            qk_coupling="shared_trunk_separate_readouts",
-            mapper_kind="linear",
-            conditioning="phase_rotation",
-            conditioning_source="dedicated",
-            amplitude_init=0.3,
-        ),
-        {"enabled": False},
-        "sdpa",
-    ),
-    (
-        "phase_separate_readout",
-        _qk(application="rotary", qk_coupling="shared_trunk_separate_readouts"),
-        {"enabled": False},
-        "sdpa",
-    ),
-    (
-        "additive_separate",
-        _qk(application="additive", qk_coupling="separate"),
-        {"enabled": False},
-        "sdpa",
-    ),
-    (
-        "phase_separate",
-        _qk(application="rotary", qk_coupling="separate"),
-        {"enabled": False},
-        "sdpa",
-    ),
-    ("rope_flex", {"enabled": False}, {"enabled": False}, "flex"),
-    (
-        "qk_rotary_flex",
-        _qk(application="rotary", qk_coupling="shared", mapper_kind="linear"),
-        {"enabled": False},
-        "flex",
-    ),
-]
-
-NEW_CASES = [
-    (
-        "canonical_addrope",
-        _qk(
-            application="additive",
-            geometry="amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "canonical_addrope_content",
-        _qk(
-            application="additive",
-            geometry="amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="local_residual",
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "content_local_qk",
-        _qk(
-            application="additive",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="local_residual",
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "scalar_input_qk",
-        _qk(
-            application="additive",
-            qk_coupling="shared_trunk_separate_readouts",
-            mapper_kind="linear",
-            scalars=["normalized_position", "log_position"],
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "residual_stream",
-        {"enabled": False},
-        {"enabled": False},
-        "sdpa",
-        {
+        "qk_norm_mode": "method_aware_rms",
+    },
+    "preprojection_rope": {
+        "qk_preprojection_config": {
             "enabled": True,
-            "placement": "both",
-            "source": "position_basis",
-            "gate_init": 0.0,
+            "basis_dim": 64,
+            "gate_init": 1.0,
+            "learnable_gate": True,
         },
-        None,
-    ),
-    (
-        "key_position_write",
-        {"enabled": False},
-        {"enabled": False},
-        "sdpa",
-        None,
-        {
+    },
+    "preprojection_addrope": {
+        "qk_config": additive_qk(),
+        "qk_preprojection_config": {
             "enabled": True,
-            "mode": "key_position",
-            "gate_init": 0.0,
+            "basis_dim": 64,
+            "gate_init": 1.0,
+            "learnable_gate": True,
         },
-    ),
-    (
-        "relative_offset_write",
-        {"enabled": False},
-        {"enabled": False},
-        "sdpa",
-        None,
-        {
-            "enabled": True,
-            "mode": "relative_offset",
-            "gate_init": 0.0,
-        },
-    ),
-    (
-        "all_channels_flex",
-        _qk(
-            application="additive",
-            qk_coupling="shared_trunk_separate_readouts",
-            mapper_kind="linear",
-            conditioning="content_gate",
-        ),
-        {"enabled": False},
-        "flex",
-        {
-            "enabled": True,
-            "placement": "per_layer",
-            "source": "learned_absolute",
-            "gate_init": 0.0,
-            "layer_shared": True,
-        },
-        {
-            "enabled": True,
-            "mode": "relative_offset",
-            "gate_init": 0.0,
-        },
-    ),
-]
-
-NULL_CONDITIONING_CASES = [
-    (
-        "asymmetric_dynamic_q_static_k_addrope",
-        _qk(
-            application="additive",
-            geometry="amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_target="q",
-            conditioning_coupling="shared_trunk_separate_readouts",
-            conditioning_static_complement=True,
-            conditioning_input_mode="content_position",
-            conditioning_network="silu_mlp",
-            conditioning_components="amplitude_phase",
-            amplitude_init=1.0,
-            amplitude_parameterization="signed",
-            parameter_source="direct",
-            learn_amplitude=False,
-            learn_phase=False,
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "phase_only_content_position_hyperrope",
-        _qk(
-            application="rotary",
-            geometry="phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_coupling="shared_trunk_separate_readouts",
-            conditioning_input_mode="content_position",
-            conditioning_network="silu_mlp",
-            conditioning_components="phase",
-            learn_phase=False,
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "direct_unit_addrope",
-        _qk(
-            application="additive",
-            geometry="amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            parameter_source="direct",
-            amplitude_parameterization="signed",
-            amplitude_init=1.0,
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "unit_hyperaddrope_content_position_silu",
-        _qk(
-            application="additive",
-            geometry="amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_coupling="shared_trunk_separate_readouts",
-            conditioning_input_mode="content_position",
-            conditioning_network="silu_mlp",
-            conditioning_components="amplitude_phase",
-            amplitude_init=1.0,
-            amplitude_parameterization="signed",
-            learn_amplitude=False,
-            learn_phase=False,
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "unit_hyperaddrope_modality_rms_gains",
-        _qk(
-            application="additive",
-            geometry="amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_coupling="shared_trunk_separate_readouts",
-            conditioning_input_mode="content_position",
-            conditioning_input_normalization="modality_rms",
-            conditioning_learnable_input_gains=True,
-            conditioning_network="silu_mlp",
-            conditioning_components="amplitude_phase",
-            amplitude_init=1.0,
-            amplitude_parameterization="signed",
-            parameter_source="direct",
-            learn_amplitude=False,
-            learn_phase=False,
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "unit_hyperaddrope_cartesian",
-        _qk(
-            application="additive",
-            geometry="amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_coupling="shared_trunk_separate_readouts",
-            conditioning_input_mode="content_position",
-            conditioning_network="silu_mlp",
-            conditioning_components="cartesian",
-            amplitude_init=1.0,
-            amplitude_parameterization="signed",
-            parameter_source="direct",
-            learn_amplitude=False,
-            learn_phase=False,
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "unit_hyperaddrope_amplitude_slope",
-        _qk(
-            application="additive",
-            geometry="amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_coupling="shared_trunk_separate_readouts",
-            conditioning_input_mode="content_position",
-            conditioning_network="silu_mlp",
-            conditioning_components="amplitude_slope",
-            amplitude_init=1.0,
-            amplitude_parameterization="signed",
-            parameter_source="direct",
-            learn_amplitude=False,
-            learn_phase=False,
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "unit_hyperaddrope_position_offset",
-        _qk(
-            application="additive",
-            geometry="amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_coupling="shared_trunk_separate_readouts",
-            conditioning_input_mode="content_position",
-            conditioning_network="silu_mlp",
-            conditioning_components="position_offset",
-            amplitude_init=1.0,
-            amplitude_parameterization="signed",
-            parameter_source="direct",
-            learn_amplitude=False,
-            learn_phase=False,
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "unit_hyperaddrope_slope_offset",
-        _qk(
-            application="additive",
-            geometry="amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_coupling="shared_trunk_separate_readouts",
-            conditioning_input_mode="content_position",
-            conditioning_network="silu_mlp",
-            conditioning_components="slope_offset",
-            amplitude_init=1.0,
-            amplitude_parameterization="signed",
-            parameter_source="direct",
-            learn_amplitude=False,
-            learn_phase=False,
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    # "unit_hyperaddrope_frequency" removed 2026-08-17: it exercised
-    # conditioning_components="amplitude_phase_frequency", which was removed
-    # from the schema on 2026-07-31 (content-conditioned frequency multipliers,
-    # see POSITION_CONFIG.md). The stale case made this module crash at import.
-    (
-        "direct_canonical_addrope",
-        _qk(
-            application="additive",
-            geometry="amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            parameter_source="direct",
-            amplitude_parameterization="softplus",
-            amplitude_init=0.3,
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "dynamic_softplus_addrope",
-        _qk(
-            application="additive",
-            geometry="amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="carrier_hypernetwork",
-            conditioning_source="dedicated",
-            conditioning_coupling="shared_trunk_separate_readouts",
-            conditioning_input_mode="content",
-            conditioning_network="linear",
-            conditioning_components="amplitude_phase",
-            amplitude_init=0.3,
-            amplitude_parameterization="softplus",
-            learn_amplitude=False,
-            learn_phase=False,
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "adaptive_qk_gain",
-        _qk(
-            application="rotary",
-            geometry="phase",
-            qk_coupling="shared",
-            conditioning="adaptive_gain",
-            conditioning_source="dedicated",
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "additive_carrier_content_phase",
-        _qk(
-            application="additive",
-            geometry="amplitude_phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="additive_phase",
-            conditioning_source="dedicated",
-            amplitude_init=0.3,
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "rope_content_phase",
-        _qk(
-            application="rotary",
-            geometry="phase",
-            qk_coupling="shared_trunk_separate_readouts",
-            conditioning="rope_phase",
-            conditioning_source="dedicated",
-        ),
-        {"enabled": False},
-        "sdpa",
-        None,
-        None,
-    ),
-    (
-        "query_position_write",
-        {"enabled": False},
-        {"enabled": False},
-        "sdpa",
-        None,
-        {
-            "enabled": True,
-            "mode": "query_position",
-        },
-    ),
-]
+        "qk_norm_mode": "method_aware_rms",
+    },
+}
 
 
-def run_case(
-    name: str,
-    qk: dict,
-    logit: dict,
-    attn_impl: str,
-    residual: dict | None = None,
-    write: dict | None = None,
-    *,
-    compile_model: bool,
-    qk_norm_mode: str = "legacy_layernorm",
-) -> None:
+def run_case(name: str, overrides: dict, *, compile_model: bool) -> None:
     device = torch.device("cuda")
-    model = Transformer(
-        dim=64,
-        depth=2,
-        heads=4,
-        ff_mult=2,
-        vocab_size=128,
-        max_seq_len=64,
-        qk_config=qk,
-        logit_bias_config=logit,
-        residual_stream_config=residual,
-        attention_write_config=write,
-        attn_impl=attn_impl,
-        rel_extent=64,
-        qk_norm_mode=qk_norm_mode,
-    ).to(device=device, dtype=torch.bfloat16)
-    model.train()
-    if attn_impl == "flex":
-        # Training uses a causal shift: queries see length-1 vs full block.
-        model.prepare_flex_masks(query_length=31, device=device)
+    kwargs = {
+        "dim": 64,
+        "depth": 2,
+        "heads": 4,
+        "ff_mult": 2,
+        "vocab_size": 128,
+        "max_seq_len": 64,
+        "qk_config": {"enabled": False},
+        "logit_bias_config": {"enabled": False},
+        "attn_impl": "sdpa",
+    }
+    kwargs.update(overrides)
+    model = Transformer(**kwargs).to(device=device, dtype=torch.bfloat16).train()
     if compile_model:
         model = torch.compile(model, mode="default", fullgraph=False)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)
     input_ids = torch.randint(0, 128, (2, 32), device=device)
     targets = torch.randint(0, 128, (2, 32), device=device)
-    for step in range(2):
+    for _ in range(2):
         optimizer.zero_grad(set_to_none=True)
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             loss = model(input_ids=input_ids, targets=targets)
         if not torch.isfinite(loss).item():
-            raise RuntimeError(f"{name}: non-finite loss under compile={compile_model}")
+            raise RuntimeError(f"{name}: non-finite loss")
         loss.backward()
         for parameter in model.parameters():
             if parameter.grad is not None and not torch.isfinite(parameter.grad).all():
-                raise RuntimeError(
-                    f"{name}: non-finite grad under compile={compile_model}"
-                )
+                raise RuntimeError(f"{name}: non-finite gradient")
         optimizer.step()
-    print(f"OK {name} compile={compile_model} loss={float(loss.detach().float()):.4f}")
+    print(
+        f"OK {name} compile={compile_model} "
+        f"loss={float(loss.detach().float()):.4f}"
+    )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--eager-only", action="store_true")
-    parser.add_argument(
-        "--case",
-        action="append",
-        default=[],
-        help="Run only the named smoke case (repeatable).",
-    )
+    parser.add_argument("--case", action="append", default=[])
     args = parser.parse_args()
     if not torch.cuda.is_available():
         raise SystemExit("CUDA is required for position_v2_cuda_smoke")
 
-    modes = [False] if args.eager_only else [False, True]
+    selected = set(args.case) if args.case else set(CASES)
+    unknown = selected.difference(CASES)
+    if unknown:
+        raise SystemExit(f"Unknown cases: {sorted(unknown)}")
+    modes = (False,) if args.eager_only else (False, True)
     for compile_model in modes:
-        for name, qk, logit, attn_impl in CASES:
-            if args.case and name not in args.case:
-                continue
-            run_case(name, qk, logit, attn_impl, compile_model=compile_model)
-        for name, qk, logit, attn_impl, residual, write in NEW_CASES:
-            if args.case and name not in args.case:
-                continue
-            run_case(
-                name,
-                qk,
-                logit,
-                attn_impl,
-                residual,
-                write,
-                compile_model=compile_model,
-            )
-        for name, qk, logit, attn_impl, residual, write in NULL_CONDITIONING_CASES:
-            if args.case and name not in args.case:
-                continue
-            run_case(
-                name,
-                qk,
-                logit,
-                attn_impl,
-                residual,
-                write,
-                compile_model=compile_model,
-                qk_norm_mode="method_aware_rms",
-            )
+        for name, overrides in CASES.items():
+            if name in selected:
+                run_case(name, overrides, compile_model=compile_model)
     print("ALL_SMOKE_OK")
 
 

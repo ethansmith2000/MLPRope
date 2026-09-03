@@ -1,5 +1,4 @@
 {
-  "attention_write": {"enabled": false},
   "attn_impl": "sdpa",
   "hidden_size": 768,
   "depth": 8,
@@ -14,8 +13,6 @@
     "gate_init": 1.0,
     "learnable_gate": true
   },
-  "residual_stream": {"enabled": false},
-  "rotary_clock": {"enabled": false},
   "run_name": "example-qk-preprojection-only-h768d8",
   "use_rope": false
 }

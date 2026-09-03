@@ -77,12 +77,15 @@ run.
 
 ## Repository state
 
-- The working tree contains completed but partly uncommitted Phase 29-32 code,
-  configs, and results. Preserve that state in git before removing mechanisms.
-- The active runtime should retain fixed RoPE, AddRoPE, Fourier bases, and the
-  pre-Q/K carrier. It should shed learned/dynamic RoPE frequencies, rotary
-  clocks, EMA, retired residual/write channels, and eventually the completed
-  position-gain attribution path.
+- Phase 29-32 code, configs, compact results, and analyses are preserved in
+  provenance commit `c8362c3`.
+- The active runtime has been consolidated around fixed RoPE, NoPE, AddRoPE,
+  frozen Fourier bases, and the pre-Q/K carrier. Learned/dynamic multiplicative
+  RoPE frequencies, rotary phase residuals/clocks, EMA, residual/write
+  channels, and the completed position-gain attribution path have been removed.
+- All 172 retained sweep JSONs load. The CPU suite passes 94 tests with one
+  explicitly CUDA-gated skip, and all six consolidated bf16 CUDA cases pass
+  eager and compiled forward/backward.
 - The checkout is about 97GB. Roughly 87GB is intermediate checkpoints and
   10.37GB is final weights. Small scientific evidence is only a few megabytes.
 - `/workspace` is not a persistent Vast volume. Copy irreplaceable weights

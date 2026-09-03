@@ -16,11 +16,8 @@ from position.precision import PreserveFP32BuffersMixin
 from position.config import (
     channel_theta,
     ensure_channel_v2,
-    normalize_attention_write_config,
-    normalize_residual_stream_config,
 )
 from position.mappers import FeatureMapper, build_mapper
-from position.temporal import CausalEMA
 
 
 class PositionChannel(torch.nn.Module):
@@ -32,11 +29,9 @@ class PositionChannel(torch.nn.Module):
 
 @dataclass
 class QKPositionOutput:
-    application: Literal["additive", "rotary"]
+    application: Literal["additive"]
     q: torch.Tensor
     k: torch.Tensor
-    q_scale: torch.Tensor | None = None
-    k_scale: torch.Tensor | None = None
     q_gain: torch.Tensor | None = None
     k_gain: torch.Tensor | None = None
     q_amplitude_delta: torch.Tensor | None = None
@@ -495,7 +490,7 @@ class _MixedReadout(torch.nn.Module):
 
 
 class CarrierHypernetwork(PreserveFP32BuffersMixin, torch.nn.Module):
-    """Anchor-relative token-local gain/phase deltas for additive or rotary Q/K."""
+    """Anchor-relative token-local carrier deltas for additive Q/K."""
 
     _fp32_buffer_names = ("spectral_tilt", "spectral_omega")
 
@@ -517,8 +512,6 @@ class CarrierHypernetwork(PreserveFP32BuffersMixin, torch.nn.Module):
         self.input_mode = config["input_mode"]
         self.input_normalization = config["input_normalization"]
         self.learnable_input_gains = config["learnable_input_gains"]
-        self.temporal = config["temporal"]
-        self.ema_decay_coupling = config["ema_decay_coupling"]
         self.network = config["network"]
         self.components = config["components"]
         self.target = config["target"]
@@ -597,20 +590,6 @@ class CarrierHypernetwork(PreserveFP32BuffersMixin, torch.nn.Module):
         )
         self.position_input_gain = (
             torch.nn.Parameter(torch.ones(())) if learn_position_gain else None
-        )
-        self.content_ema = (
-            CausalEMA(
-                content_dim,
-                decay_init=float(config["ema_decay_init"]),
-                groups=(heads if self.ema_decay_coupling == "per_head" else 1),
-                decay_coupling=(
-                    "per_group"
-                    if self.ema_decay_coupling == "per_head"
-                    else self.ema_decay_coupling
-                ),
-            )
-            if self.temporal == "ema"
-            else None
         )
 
         def make_trunk() -> _GroupedHyperTrunk:
@@ -702,42 +681,16 @@ class CarrierHypernetwork(PreserveFP32BuffersMixin, torch.nn.Module):
         length = position.shape[0]
         pieces = []
         if needs_content:
-            if content.ndim != 4 or content.shape[1] not in {1, self.heads}:
+            if content.ndim != 4 or content.shape[1] != self.heads:
                 raise ValueError(
-                    "Hypernetwork content must be [batch, 1|heads, sequence, dim]"
+                    "Hypernetwork content must be [batch, heads, sequence, dim]"
                 )
             if content.shape[2] != length:
                 raise ValueError("Hypernetwork content/position lengths differ")
             content_values = content[:, :1] if self.groups == 1 else content
-            content_values = self._prepare_modality(
-                content_values,
-                self.content_input_gain,
+            pieces.append(
+                self._prepare_modality(content_values, self.content_input_gain)
             )
-            if self.content_ema is not None:
-                content_shape = content_values.shape
-                if self.ema_decay_coupling == "per_head":
-                    if content_shape[1] == 1:
-                        content_values = content_values.expand(
-                            -1, self.heads, -1, -1
-                        )
-                    content_values = self.content_ema(content_values)
-                elif content_shape[1] == 1:
-                    content_values = self.content_ema(content_values[:, 0])[:, None]
-                else:
-                    # Preserve the standalone channel API when callers provide
-                    # genuinely head-specific content. The Transformer uses the
-                    # compact single-head form above and therefore takes the
-                    # optimized shared scan path.
-                    content_values = self.content_ema(
-                        content_values.reshape(
-                            content_shape[0] * content_shape[1],
-                            content_shape[2],
-                            content_shape[3],
-                        )
-                    ).reshape(content_shape)
-            if self.groups > 1 and content_values.shape[1] == 1:
-                content_values = content_values.expand(-1, self.groups, -1, -1)
-            pieces.append(content_values)
         if self.input_mode in {"position", "content_position"}:
             position_values = position.to(
                 dtype=(
@@ -756,12 +709,6 @@ class CarrierHypernetwork(PreserveFP32BuffersMixin, torch.nn.Module):
                 )
             )
         return pieces[0] if len(pieces) == 1 else torch.cat(pieces, dim=-1)
-
-    @torch.no_grad()
-    def temporal_diagnostics(self) -> dict[str, float]:
-        if self.content_ema is None:
-            return {}
-        return self.content_ema.diagnostics()
 
     def _read(
         self,
@@ -845,11 +792,7 @@ class CarrierHypernetwork(PreserveFP32BuffersMixin, torch.nn.Module):
         position: torch.Tensor,
     ) -> tuple[CarrierDeltas, CarrierDeltas]:
         q_values = self._inputs(q_content, position)
-        k_values = (
-            q_values
-            if k_content is q_content
-            else self._inputs(k_content, position)
-        )
+        k_values = self._inputs(k_content, position)
         if self.coupling == "shared" and self.target == "both":
             q_raw = self._branch(q_values, "q")
             k_raw = q_raw
@@ -1007,14 +950,8 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
             and not self.learn_amplitude
             and not self.learn_phase
         )
-        self.fixed_rotary_phase = (
-            self.application == "rotary"
-            and self.geometry == "phase"
-            and not self.learn_phase
-        )
         self.fixed_position_pipeline = (
             self.fixed_amplitude_phase
-            or self.fixed_rotary_phase
             or self.parameter_source == "direct"
         )
         mapper_cfg = config["mapper"]
@@ -1191,38 +1128,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                         readout_groups, head_dim, head_dim // 2, init="zeros"
                     )
                     self.k_phase_head = copy.deepcopy(self.q_phase_head)
-        elif self.application == "rotary" and self.geometry == "phase":
-            if not self.learn_phase:
-                pass
-            elif self.qk_coupling == "shared":
-                self.phase_head = GroupedLinearReadout(
-                    readout_groups,
-                    head_dim,
-                    head_dim // 2,
-                    init="zeros",
-                )
-            elif self.qk_coupling == "shared_trunk_separate_readouts":
-                self.q_phase_head = GroupedLinearReadout(
-                    readout_groups,
-                    head_dim,
-                    head_dim // 2,
-                    init="zeros",
-                )
-                self.k_phase_head = GroupedLinearReadout(
-                    readout_groups,
-                    head_dim,
-                    head_dim // 2,
-                    init="zeros",
-                )
-            else:
-                self.q_phase_head = GroupedLinearReadout(
-                    readout_groups,
-                    head_dim,
-                    head_dim // 2,
-                    init="zeros",
-                )
-                # Identical initialization without shared storage.
-                self.k_phase_head = copy.deepcopy(self.q_phase_head)
         else:
             raise ValueError(
                 f"Unsupported Q/K application/geometry: "
@@ -1243,7 +1148,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
         elif conditioning_kind in {
             "adaptive_gain",
             "additive_phase",
-            "rope_phase",
         }:
             output_dim = (
                 1 if conditioning_kind == "adaptive_gain" else head_dim // 2
@@ -1324,10 +1228,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     self.k_amplitude_conditioner = copy.deepcopy(
                         self.q_amplitude_conditioner
                     )
-
-    @property
-    def uses_multiplicative_rope(self) -> bool:
-        return self.application == "rotary"
 
     def _hyper_position_features(
         self,
@@ -1577,7 +1477,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
             "phase_rotation",
             "adaptive_gain",
             "additive_phase",
-            "rope_phase",
             "carrier_hypernetwork",
         }:
             return q_output, k_output
@@ -1703,9 +1602,7 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     dtype=target_dtype,
                 )
 
-        q_scale = None
-        k_scale = None
-        if self.application == "additive" and self.geometry in {
+        if self.geometry in {
             "free",
             "pair_normalized",
         }:
@@ -1720,7 +1617,7 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                 )
             else:
                 q_output, k_output = q_features, k_features
-        elif self.application == "additive":
+        else:
             if self.qk_coupling == "shared":
                 q_output = self._amplitude_phase_addend(
                     q_features,
@@ -1795,49 +1692,13 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     phase_override=k_direct_phase,
                     branch="k",
                 )
-        else:
-            if not self.learn_phase:
-                zero = self.base_cos[:sequence_length].to(
-                    dtype=dtype or self.base_cos.dtype
-                )[None].expand(self.heads, -1, -1)
-                q_output = zero.new_zeros(zero.shape)
-                k_output = q_output
-            elif self.qk_coupling == "shared":
-                phase = self._apply_phase_head(q_features, self.phase_head)
-                q_output, k_output = phase, phase
-            else:
-                q_output = self._apply_phase_head(
-                    q_features, self.q_phase_head
-                )
-                k_output = self._apply_phase_head(
-                    k_features, self.k_phase_head
-                )
-
-        if (
-            self.application == "rotary"
-            and self.carrier_hypernetwork is not None
-        ):
-            q_output = q_output + q_hyper_phase_delta
-            k_output = k_output + k_hyper_phase_delta
-
-        q_output = q_output * self.output_config["phase_scale"] if (
-            self.application == "rotary"
-        ) else q_output
-        k_output = k_output * self.output_config["phase_scale"] if (
-            self.application == "rotary"
-        ) else k_output
-        if self.conditioning_config["kind"] == "rope_phase":
-            if q_content is None or k_content is None:
-                raise ValueError("rope_phase conditioning requires dedicated content")
-            q_output = q_output + self.content_actuator(q_content, "q")
-            k_output = k_output + self.content_actuator(k_content, "k")
         q_output, k_output = self._condition_outputs(
             q_output,
             k_output,
             q_content,
             k_content,
         )
-        if self.application == "additive" and self.geometry == "pair_normalized":
+        if self.geometry == "pair_normalized":
             q_output = self._normalize_additive_pairs(q_output)
             k_output = self._normalize_additive_pairs(k_output)
         if self.conditioning_config["kind"] == "phase_rotation":
@@ -1847,10 +1708,7 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                 q_content,
                 k_content,
             )
-        if (
-            self.application == "additive"
-            and self.output_config["additive_normalization"] == "rms"
-        ):
+        if self.output_config["additive_normalization"] == "rms":
             if self.qk_coupling == "shared":
                 q_output = self._normalize_additive_output(
                     q_output, self.additive_gain
@@ -1877,11 +1735,9 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                 self.content_actuator(k_content, "k")
             )
         return QKPositionOutput(
-            self.application,
+            "additive",
             q_output,
             k_output,
-            q_scale=q_scale,
-            k_scale=k_scale,
             q_gain=q_gain,
             k_gain=k_gain,
             q_amplitude_delta=q_amplitude_delta,
@@ -2025,10 +1881,7 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     "content_phase_k",
                     self.phase_rotation_conditioner.phase(k_content, "k"),
                 )
-        if self.conditioning_config["kind"] in {
-            "additive_phase",
-            "rope_phase",
-        }:
+        if self.conditioning_config["kind"] == "additive_phase":
             _stats("content_phase_q", self.content_actuator(q_content, "q"))
             _stats("content_phase_k", self.content_actuator(k_content, "k"))
         if output.q_gain is not None:
@@ -2096,413 +1949,76 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                 )
                 if gain is not None:
                     metrics[f"hyper_{name}_input_gain"] = gain.detach().item()
-            for name, value in (
-                self.carrier_hypernetwork.temporal_diagnostics().items()
-            ):
-                metrics[f"hyper_{name}"] = value
         diff = (output.q - output.k).detach().float()
         metrics["qk_diff_rms"] = diff.pow(2).mean().sqrt().item()
-        if output.application == "rotary":
-            _stats("phase_q", output.q)
-            _stats("phase_k", output.k)
-            if output.q_scale is not None:
-                _stats("scale_q", output.q_scale)
-                _stats("scale_k", output.k_scale)
-        else:
-            _stats("addend_q", output.q)
-            _stats("addend_k", output.k)
-            if self.output_config["additive_normalization"] == "rms":
-                if self.qk_coupling == "shared":
-                    q_gain = k_gain = self.additive_gain
-                else:
-                    q_gain = self.q_additive_gain
-                    k_gain = self.k_additive_gain
-                gain_max = self.output_config["additive_gain_max"]
-                metrics["additive_gain_q_mean"] = (
-                    gain_max * torch.sigmoid(q_gain.detach().float())
-                ).mean().item()
-                metrics["additive_gain_k_mean"] = (
-                    gain_max * torch.sigmoid(k_gain.detach().float())
-                ).mean().item()
-            if q_ref is not None:
-                q_values = q_ref.detach().float()
-                q_addend = output.q.detach().float()
-                if q_addend.ndim == 3:
-                    q_addend = q_addend.unsqueeze(0)
-                q_rms_per_token = q_values.square().mean(dim=-1).sqrt().clamp_min(
-                    1e-12
+        _stats("addend_q", output.q)
+        _stats("addend_k", output.k)
+        if self.output_config["additive_normalization"] == "rms":
+            if self.qk_coupling == "shared":
+                q_gain = k_gain = self.additive_gain
+            else:
+                q_gain = self.q_additive_gain
+                k_gain = self.k_additive_gain
+            gain_max = self.output_config["additive_gain_max"]
+            metrics["additive_gain_q_mean"] = (
+                gain_max * torch.sigmoid(q_gain.detach().float())
+            ).mean().item()
+            metrics["additive_gain_k_mean"] = (
+                gain_max * torch.sigmoid(k_gain.detach().float())
+            ).mean().item()
+        if q_ref is not None:
+            q_values = q_ref.detach().float()
+            q_addend = output.q.detach().float()
+            if q_addend.ndim == 3:
+                q_addend = q_addend.unsqueeze(0)
+            q_rms_per_token = q_values.square().mean(dim=-1).sqrt().clamp_min(
+                1e-12
+            )
+            q_addend_rms_per_token = q_addend.square().mean(dim=-1).sqrt()
+            q_ratio = q_addend_rms_per_token / q_rms_per_token
+            q_rms = q_values.pow(2).mean().sqrt().clamp_min(1e-12)
+            metrics["addend_q_to_q_rms_ratio"] = (
+                q_addend.pow(2).mean().sqrt() / q_rms
+            ).item()
+            metrics["addend_q_to_q_ratio_p95"] = torch.quantile(
+                q_ratio, 0.95
+            ).item()
+            metrics["q_content_combined_cosine_mean"] = (
+                torch.nn.functional.cosine_similarity(
+                    q_values,
+                    q_values + q_addend,
+                    dim=-1,
                 )
-                q_addend_rms_per_token = q_addend.square().mean(dim=-1).sqrt()
-                q_ratio = q_addend_rms_per_token / q_rms_per_token
-                q_rms = q_values.pow(2).mean().sqrt().clamp_min(1e-12)
-                metrics["addend_q_to_q_rms_ratio"] = (
-                    q_addend.pow(2).mean().sqrt() / q_rms
-                ).item()
-                metrics["addend_q_to_q_ratio_p95"] = torch.quantile(
-                    q_ratio, 0.95
-                ).item()
-                metrics["q_content_combined_cosine_mean"] = (
-                    torch.nn.functional.cosine_similarity(
-                        q_values,
-                        q_values + q_addend,
-                        dim=-1,
-                    )
-                    .mean()
-                    .item()
+                .mean()
+                .item()
+            )
+        if k_ref is not None:
+            k_values = k_ref.detach().float()
+            k_addend = output.k.detach().float()
+            if k_addend.ndim == 3:
+                k_addend = k_addend.unsqueeze(0)
+            k_rms_per_token = k_values.square().mean(dim=-1).sqrt().clamp_min(
+                1e-12
+            )
+            k_addend_rms_per_token = k_addend.square().mean(dim=-1).sqrt()
+            k_ratio = k_addend_rms_per_token / k_rms_per_token
+            k_rms = k_values.pow(2).mean().sqrt().clamp_min(1e-12)
+            metrics["addend_k_to_k_rms_ratio"] = (
+                k_addend.pow(2).mean().sqrt() / k_rms
+            ).item()
+            metrics["addend_k_to_k_ratio_p95"] = torch.quantile(
+                k_ratio, 0.95
+            ).item()
+            metrics["k_content_combined_cosine_mean"] = (
+                torch.nn.functional.cosine_similarity(
+                    k_values,
+                    k_values + k_addend,
+                    dim=-1,
                 )
-            if k_ref is not None:
-                k_values = k_ref.detach().float()
-                k_addend = output.k.detach().float()
-                if k_addend.ndim == 3:
-                    k_addend = k_addend.unsqueeze(0)
-                k_rms_per_token = k_values.square().mean(dim=-1).sqrt().clamp_min(
-                    1e-12
-                )
-                k_addend_rms_per_token = k_addend.square().mean(dim=-1).sqrt()
-                k_ratio = k_addend_rms_per_token / k_rms_per_token
-                k_rms = k_values.pow(2).mean().sqrt().clamp_min(1e-12)
-                metrics["addend_k_to_k_rms_ratio"] = (
-                    k_addend.pow(2).mean().sqrt() / k_rms
-                ).item()
-                metrics["addend_k_to_k_ratio_p95"] = torch.quantile(
-                    k_ratio, 0.95
-                ).item()
-                metrics["k_content_combined_cosine_mean"] = (
-                    torch.nn.functional.cosine_similarity(
-                        k_values,
-                        k_values + k_addend,
-                        dim=-1,
-                    )
-                    .mean()
-                    .item()
-                )
+                .mean()
+                .item()
+            )
         return metrics
-
-
-class ResidualPositionChannel(PositionChannel):
-    """Absolute-position writes into the model residual stream."""
-
-    def __init__(
-        self,
-        config: dict,
-        *,
-        model_dim: int,
-        heads: int,
-        extent: int,
-        rope_theta: float,
-    ):
-        super().__init__()
-        self.config = copy.deepcopy(config)
-        self.model_dim = model_dim
-        self.extent = extent
-        self.source = config["source"]
-        self.gate = torch.nn.Parameter(
-            torch.tensor(float(config["gate_init"]))
-        )
-        if self.source == "learned_absolute":
-            self.embedding = torch.nn.Parameter(torch.empty(extent, model_dim))
-            torch.nn.init.normal_(self.embedding, std=model_dim ** -0.5)
-            self.pipeline = None
-        else:
-            self.register_parameter("embedding", None)
-            self.pipeline = HeadCoupledFeaturePipeline(
-                heads=heads,
-                head_dim=model_dim // heads,
-                model_dim=model_dim,
-                extent=extent,
-                rope_theta=rope_theta,
-                head_coupling="per_head_joint",
-                mapper_cfg=config["mapper"],
-                input_cfg=config["input"],
-            )
-
-    def forward(
-        self,
-        length: int,
-        *,
-        dtype: torch.dtype,
-    ) -> torch.Tensor:
-        if length > self.extent:
-            raise ValueError(
-                f"Residual position length {length} exceeds extent {self.extent}."
-            )
-        if self.source == "learned_absolute":
-            position = self.embedding[:length].to(dtype=dtype)
-        else:
-            by_head = self.pipeline(length, dtype=dtype)
-            position = by_head.permute(1, 0, 2).reshape(length, self.model_dim)
-        return position * self.gate.to(dtype=dtype)
-
-    def reset_output_parameters(self) -> None:
-        # The configured gate is the explicit initialization contract.
-        with torch.no_grad():
-            self.gate.fill_(float(self.config["gate_init"]))
-
-
-def _map_batched_features(
-    mapper: FeatureMapper,
-    features: torch.Tensor,
-    *,
-    head_coupling: str,
-) -> torch.Tensor:
-    """Apply a grouped mapper to ``[B,H,L,I]`` without Python loops."""
-    if head_coupling == "per_head_joint":
-        batch, heads, length, width = features.shape
-        joined = features.permute(0, 2, 1, 3).reshape(
-            batch, length, heads * width
-        )
-        grouped = joined[:, None, :, :]
-    else:
-        grouped = features
-
-    if mapper.kind == "identity":
-        mapped = grouped
-    elif mapper.kind == "euclidean_affine":
-        scale = mapper.scale
-        offset = mapper.offset
-        if mapper.groups == 1:
-            scale = scale[None, :, None, :]
-            offset = offset[None, :, None, :]
-        else:
-            scale = scale[None, :, None, :]
-            offset = offset[None, :, None, :]
-        mapped = grouped * (1.0 + scale) + offset
-    elif mapper.kind == "linear":
-        if head_coupling == "shared_head":
-            mapped = torch.einsum(
-                "bhli,io->bhlo",
-                grouped,
-                mapper.weight[0],
-            )
-        elif mapper.groups == 1:
-            mapped = torch.einsum(
-                "bgli,gio->bglo",
-                grouped,
-                mapper.weight,
-            )
-        else:
-            mapped = torch.einsum(
-                "bhli,hio->bhlo",
-                grouped,
-                mapper.weight,
-            )
-        bias = (
-            mapper.bias[0][None, None, None, :]
-            if head_coupling == "shared_head"
-            else mapper.bias[None, :, None, :]
-        )
-        mapped = mapped + bias
-    else:
-        if head_coupling == "shared_head":
-            hidden = torch.einsum(
-                "bhli,ik->bhlk",
-                grouped,
-                mapper.down[0],
-            )
-        elif mapper.groups == 1:
-            hidden = torch.einsum(
-                "bgli,gik->bglk",
-                grouped,
-                mapper.down,
-            )
-        else:
-            hidden = torch.einsum(
-                "bhli,hik->bhlk",
-                grouped,
-                mapper.down,
-            )
-        down_bias = (
-            mapper.down_bias[0][None, None, None, :]
-            if head_coupling == "shared_head"
-            else mapper.down_bias[None, :, None, :]
-        )
-        hidden = hidden + down_bias
-        if mapper.kind in {"bottleneck_mlp", "mlp"}:
-            hidden = torch.nn.functional.gelu(hidden)
-        if head_coupling == "shared_head":
-            branch = torch.einsum(
-                "bhlk,ko->bhlo",
-                hidden,
-                mapper.up[0],
-            )
-        elif mapper.groups == 1:
-            branch = torch.einsum(
-                "bglk,gko->bglo",
-                hidden,
-                mapper.up,
-            )
-        else:
-            branch = torch.einsum(
-                "bhlk,hko->bhlo",
-                hidden,
-                mapper.up,
-            )
-        up_bias = (
-            mapper.up_bias[0][None, None, None, :]
-            if head_coupling == "shared_head"
-            else mapper.up_bias[None, :, None, :]
-        )
-        branch = branch + up_bias
-        mapped = grouped + branch if mapper.residual else branch
-
-    if head_coupling == "per_head_joint":
-        batch, _, length, _ = mapped.shape
-        output_dim = mapper.output_dim
-        heads = features.shape[1]
-        return (
-            mapped[:, 0]
-            .reshape(batch, length, heads, output_dim // heads)
-            .permute(0, 2, 1, 3)
-            .contiguous()
-        )
-    if head_coupling == "shared_head" and mapped.shape[1] == 1:
-        return mapped.expand(-1, features.shape[1], -1, -1)
-    return mapped
-
-
-class AttentionPositionWriteChannel(PositionChannel):
-    """Write attended or query-local position features to the residual stream."""
-
-    def __init__(
-        self,
-        config: dict,
-        *,
-        heads: int,
-        head_dim: int,
-        model_dim: int,
-        extent: int,
-        rope_theta: float,
-    ):
-        super().__init__()
-        self.config = copy.deepcopy(config)
-        self.heads = heads
-        self.head_dim = head_dim
-        self.model_dim = model_dim
-        self.extent = extent
-        self.mode = config["mode"]
-        self.head_coupling = config["head_coupling"]
-        self.pipeline = HeadCoupledFeaturePipeline(
-            heads=heads,
-            head_dim=head_dim,
-            model_dim=model_dim,
-            extent=extent,
-            rope_theta=rope_theta,
-            head_coupling=self.head_coupling,
-            mapper_cfg=config["mapper"],
-            input_cfg=config["input"],
-        )
-        input_width = self.pipeline.basis.output_dim
-        if self.mode == "key_position":
-            # g(position_j) is mapped before attention, then summed by A_ij.
-            self.value_dim = head_dim
-        elif self.head_coupling == "per_head_joint":
-            if input_width % heads != 0:
-                raise ValueError(
-                    "per_head_joint attention_write input width must divide heads"
-                )
-            self.value_dim = input_width // heads
-        else:
-            self.value_dim = input_width
-        if self.mode == "relative_offset" and self.value_dim % 2 != 0:
-            raise ValueError(
-                "relative_offset attention writes require an even per-head value width"
-            )
-        self.query_projection = None
-        if self.mode == "query_position":
-            self.register_parameter("gate", None)
-            self.query_projection = torch.nn.Linear(
-                model_dim,
-                model_dim,
-                bias=True,
-            )
-            torch.nn.init.zeros_(self.query_projection.weight)
-            torch.nn.init.zeros_(self.query_projection.bias)
-        else:
-            gate_groups = _readout_groups(self.head_coupling, heads)
-            self.gate = torch.nn.Parameter(
-                torch.full((gate_groups,), float(config["gate_init"]))
-            )
-
-    def position_values(
-        self,
-        length: int,
-        *,
-        dtype: torch.dtype,
-    ) -> torch.Tensor:
-        if self.mode == "key_position":
-            return self.pipeline(length, dtype=dtype)
-        raw = self.pipeline.basis(length, dtype=dtype)
-        if self.head_coupling == "per_head_joint":
-            return (
-                raw.reshape(length, self.heads, self.value_dim)
-                .permute(1, 0, 2)
-                .contiguous()
-            )
-        return raw[None, :, :].expand(self.heads, -1, -1)
-
-    def _relative(
-        self,
-        summary: torch.Tensor,
-        *,
-        query_length: int,
-    ) -> torch.Tensor:
-        query = self.position_values(
-            query_length,
-            dtype=summary.dtype,
-        )[None, :, :, :]
-        q_cos, q_sin = query[..., 0::2], query[..., 1::2]
-        k_cos, k_sin = summary[..., 0::2], summary[..., 1::2]
-        relative_cos = q_cos * k_cos + q_sin * k_sin
-        relative_sin = q_sin * k_cos - q_cos * k_sin
-        return torch.stack(
-            (relative_cos, relative_sin),
-            dim=-1,
-        ).flatten(-2)
-
-    def query_output(
-        self,
-        length: int,
-        *,
-        dtype: torch.dtype,
-    ) -> torch.Tensor:
-        if self.mode != "query_position" or self.query_projection is None:
-            raise ValueError("query_output is only valid for query_position mode")
-        by_head = self.pipeline(length, dtype=dtype)
-        merged = by_head.permute(1, 0, 2).reshape(length, self.model_dim)
-        return self.query_projection(merged)
-
-    def forward(self, summary: torch.Tensor) -> torch.Tensor:
-        if self.mode == "query_position":
-            raise ValueError("query_position writes do not consume attention summaries")
-        if self.mode == "relative_offset":
-            summary = self._relative(
-                summary,
-                query_length=summary.shape[-2],
-            )
-            mapped = _map_batched_features(
-                self.pipeline.mapper,
-                summary,
-                head_coupling=self.head_coupling,
-            )
-        else:
-            mapped = summary
-        if self.gate.numel() == 1:
-            mapped = mapped * self.gate[0]
-        else:
-            mapped = mapped * self.gate[None, :, None, None]
-        return mapped.transpose(1, 2).reshape(
-            mapped.shape[0],
-            mapped.shape[2],
-            self.model_dim,
-        )
-
-    def reset_output_parameters(self) -> None:
-        if self.query_projection is not None:
-            torch.nn.init.zeros_(self.query_projection.weight)
-            torch.nn.init.zeros_(self.query_projection.bias)
-        else:
-            with torch.no_grad():
-                self.gate.fill_(float(self.config["gate_init"]))
 
 
 def build_qk_position_channel(
@@ -2530,58 +2046,6 @@ def build_qk_position_channel(
         head_dim=head_dim,
         model_dim=model_dim,
         content_dim=content_dim if content_dim is not None else head_dim,
-        extent=extent,
-        rope_theta=rope_theta,
-    )
-
-
-def build_residual_position_channel(
-    config: dict | None,
-    *,
-    model_dim: int,
-    heads: int,
-    extent: int,
-    rope_theta: float,
-) -> ResidualPositionChannel | None:
-    resolved = normalize_residual_stream_config(
-        config,
-        model_dim=model_dim,
-        heads=heads,
-        rope_theta=rope_theta,
-    )
-    if not resolved["enabled"]:
-        return None
-    return ResidualPositionChannel(
-        resolved,
-        model_dim=model_dim,
-        heads=heads,
-        extent=extent,
-        rope_theta=rope_theta,
-    )
-
-
-def build_attention_position_write_channel(
-    config: dict | None,
-    *,
-    heads: int,
-    head_dim: int,
-    model_dim: int,
-    extent: int,
-    rope_theta: float,
-) -> AttentionPositionWriteChannel | None:
-    resolved = normalize_attention_write_config(
-        config,
-        model_dim=model_dim,
-        heads=heads,
-        rope_theta=rope_theta,
-    )
-    if not resolved["enabled"]:
-        return None
-    return AttentionPositionWriteChannel(
-        resolved,
-        heads=heads,
-        head_dim=head_dim,
-        model_dim=model_dim,
         extent=extent,
         rope_theta=rope_theta,
     )
@@ -2658,19 +2122,9 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
         return total
 
     qk_total = 0
-    rope_frequency_total = 0
-    rotary_clock_total = 0
     qk_preprojection_total = 0
-    position_gain_total = 0
     logit_total = 0
     content_total = 0
-    attention_write_total = 0
-    residual_stream_total = _unique_numel(
-        getattr(model, "residual_position_input", None)
-    )
-    residual_layers = getattr(model, "residual_position_layers", None)
-    if residual_layers is not None:
-        residual_stream_total += _unique_numel(residual_layers)
     blocks = getattr(model, "blocks", None)
     if blocks is not None:
         for block in blocks:
@@ -2681,45 +2135,20 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
             qk_preprojection_total += _unique_numel(
                 getattr(attn, "qk_preprojection", None)
             )
-            position_gain_total += _unique_numel(
-                getattr(attn, "position_gain", None)
-            )
-            rope_parameter = getattr(attn, "rope_log_frequency_delta", None)
-            if rope_parameter is not None:
-                rope_frequency_total += rope_parameter.numel()
-            rope_frequency_total += _unique_numel(
-                getattr(attn, "rope_frequency_controller", None)
-            )
-            rotary_clock_total += _unique_numel(
-                getattr(attn, "rotary_clock", None)
-            )
             logit_total += _unique_numel(getattr(attn, "logit_bias", None))
             content_total += _unique_numel(
                 getattr(attn, "position_content", None)
             )
-            attention_write_total += _unique_numel(
-                getattr(attn, "position_write", None)
-            )
     position_total = (
         qk_total
         + qk_preprojection_total
-        + position_gain_total
-        + rope_frequency_total
-        + rotary_clock_total
         + logit_total
         + content_total
-        + attention_write_total
-        + residual_stream_total
     )
     return {
         "qk_position_params": qk_total,
         "qk_preprojection_params": qk_preprojection_total,
-        "position_gain_params": position_gain_total,
-        "rope_frequency_params": rope_frequency_total,
-        "rotary_clock_params": rotary_clock_total,
         "logit_bias_params": logit_total,
         "position_content_params": content_total,
-        "attention_write_params": attention_write_total,
-        "residual_stream_params": residual_stream_total,
         "position_params": position_total,
     }
