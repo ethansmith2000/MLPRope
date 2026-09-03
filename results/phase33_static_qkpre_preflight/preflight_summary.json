@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "protocol": {
+    "source_commit": "6aa859dafad44dfca38d3c347bb0ea3dc91ad04f",
+    "steps": 50,
+    "throughput_warmup_steps": 20,
+    "measured_steps": 30,
+    "model": "h768/d8, 8 heads",
+    "context": 1024,
+    "microbatch": 8,
+    "seed": 123,
+    "compile": true,
+    "mixed_precision": "bf16",
+    "gpu": "NVIDIA GeForce RTX 5090",
+    "compute_capability": [12, 0],
+    "torch": "2.11.0+cu128",
+    "cuda": "12.8",
+    "driver": "595.84",
+    "dataset_path": "/workspace/data/tokenized/openwebtext_gpt2_bs1024",
+    "dataset_rows": {
+      "train": 8372843,
+      "validation": 443501
+    }
+  },
+  "arms": {
+    "rope_fixed": {
+      "tokens_per_second": 190783.3781155777,
+      "target_tokens_per_second": 190597.06622288673,
+      "throughput_delta_percent_vs_rope": 0.0,
+      "peak_allocated_mib": 5066.0224609375,
+      "peak_reserved_mib": 5076.0,
+      "eval_loss": 8.482300281524658,
+      "eval_loss_batch_se": 0.01983007380719459,
+      "parameters": 153495936,
+      "qk_preprojection_parameters": 0
+    },
+    "qkpre_tied_nope": {
+      "tokens_per_second": 190789.90163131282,
+      "target_tokens_per_second": 190603.583368001,
+      "throughput_delta_percent_vs_rope": 0.0034193312853370017,
+      "peak_allocated_mib": 5190.4326171875,
+      "peak_reserved_mib": 5220.0,
+      "eval_loss": 8.477988719940186,
+      "eval_loss_batch_se": 0.02036884245033121,
+      "parameters": 153495944,
+      "qk_preprojection_parameters": 8
+    },
+    "qkpre_tied_rope": {
+      "tokens_per_second": 189837.93928430125,
+      "target_tokens_per_second": 189652.55067171893,
+      "throughput_delta_percent_vs_rope": -0.49555618556230696,
+      "peak_allocated_mib": 5190.4326171875,
+      "peak_reserved_mib": 5220.0,
+      "eval_loss": 8.482257843017578,
+      "eval_loss_batch_se": 0.019340474189342514,
+      "parameters": 153495944,
+      "qk_preprojection_parameters": 8
+    },
+    "qkpre_split_scalar_rope": {
+      "tokens_per_second": 189160.7567579268,
+      "target_tokens_per_second": 188976.0294564054,
+      "throughput_delta_percent_vs_rope": -0.8505045741814654,
+      "peak_allocated_mib": 5286.3544921875,
+      "peak_reserved_mib": 5300.0,
+      "eval_loss": 8.482370138168335,
+      "eval_loss_batch_se": 0.019303941538383797,
+      "parameters": 153495952,
+      "qk_preprojection_parameters": 16
+    },
+    "qkpre_pair_amplitude_rope": {
+      "tokens_per_second": 186771.28193906788,
+      "target_tokens_per_second": 186588.88810904927,
+      "throughput_delta_percent_vs_rope": -2.1029589768974954,
+      "peak_allocated_mib": 5310.4326171875,
+      "peak_reserved_mib": 5340.0,
+      "eval_loss": 8.482288837432861,
+      "eval_loss_batch_se": 0.019313819023137793,
+      "parameters": 153502080,
+      "qk_preprojection_parameters": 6144
+    },
+    "qkpre_pair_polar_rope": {
+      "tokens_per_second": 185639.41721119938,
+      "target_tokens_per_second": 185458.12871782907,
+      "throughput_delta_percent_vs_rope": -2.6962311681377638,
+      "peak_allocated_mib": 5334.4873046875,
+      "peak_reserved_mib": 5360.0,
+      "eval_loss": 8.482337236404419,
+      "eval_loss_batch_se": 0.019342492379081942,
+      "parameters": 153508224,
+      "qk_preprojection_parameters": 12288
+    }
+  },
+  "estimated_compute_hours_per_200k_arm_at_mean_throughput": 2.41,
+  "checkpoint_integration": {
+    "status": "passed",
+    "saved_steps": [1, 2, 3],
+    "retained_after_training": [3],
+    "automatic_resume_step": 3,
+    "accelerator_state_loaded": true
+  },
+  "notes": [
+    "Every arm completed eager training under torch.compile with finite loss and gradients.",
+    "Every run recorded a clean source tree, exact commit, environment, GPU, resolved config, parameter counts, and both shared dataset manifests.",
+    "All arms emitted the same PyTorch compile-time mixed-dtype LayerNorm fusion warning; it did not prevent compilation and is not arm-specific.",
+    "The 50-step losses are health checks only and must not be interpreted as scientific rankings."
+  ]
+}

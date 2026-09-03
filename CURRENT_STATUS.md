@@ -82,9 +82,12 @@ All runs must begin with the same 200k learning-rate horizon. A short run whose
 linear schedule has decayed to zero cannot be treated as the prefix of a long
 run.
 
-Before generating those configs, add rolling checkpoint retention and record
-the dataset manifest, source commit, resolved config, hardware/software
-versions, and dirty-tree state for every run.
+The six resolved long-run configs are frozen under
+`sweep_configs/phase33_static_qkpre_200k/`. Rolling completion-marked
+checkpoint retention, periodic paired-loss persistence, and per-launch source,
+config, package/GPU, and dataset provenance are implemented. All six 50-step
+full-size preflights passed; their mean throughput implies roughly 2.41
+compute hours per 200k arm before validation, compilation, and checkpoint I/O.
 
 ## Repository state
 
@@ -94,9 +97,12 @@ versions, and dirty-tree state for every run.
   frozen Fourier bases, and the pre-Q/K carrier. Learned/dynamic multiplicative
   RoPE frequencies, rotary phase residuals/clocks, EMA, residual/write
   channels, and the completed position-gain attribution path have been removed.
-- All 172 retained sweep JSONs load. The CPU suite passes 104 tests with one
+- All 184 retained sweep JSONs load. The CPU suite passes 109 tests with one
   explicitly CUDA-gated skip, and all nine consolidated bf16 CUDA cases pass
   eager and compiled forward/backward.
+- Phase 33 operational preflights passed on all six h768/d8 arms at
+  185.6k-190.8k tokens/s and 5.08-5.36 GiB reserved memory. The real
+  Accelerate checkpoint save/prune/resume integration also passed.
 - The 50 intermediate `step_*` checkpoints were removed after validating all
   18 parent runs. This freed 92.8GB (87GiB). The 18 final weights, completion
   markers, configs, metrics, summaries, final evaluation details, position

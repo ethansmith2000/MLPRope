@@ -56,7 +56,7 @@ eager/compiled bf16 smoke. The implementation uses `P-1` orthonormal zero-sum
 coordinates for `P` log-amplitude deltas, so global and spectral amplitude are
 identifiable rather than merely mean-centered in the forward pass.
 
-## Stage 2 — add long-run operational safeguards
+## Stage 2 — long-run operational safeguards (completed)
 
 Before launching long runs:
 
@@ -69,7 +69,20 @@ Before launching long runs:
 4. Preflight all arms for 20-50 full-size steps through `gpu-claim`.
 5. Measure stable throughput and peak memory after compilation warmup.
 
+Completed at source commit `6aa859d`. All six separate 50-step h768/d8
+preflights passed through `gpu-claim` with clean provenance. Throughput ranged
+from 190.8k tokens/s for fixed RoPE to 185.6k for the pair-polar adapter;
+reserved memory ranged from 5.08 to 5.36 GiB. A real Accelerate save/prune/
+resume smoke retained only the newest marked checkpoint and restored model,
+optimizer, scheduler, sampler, and RNG state. Compact evidence is in
+`results/phase33_static_qkpre_preflight/`.
+
 ## Stage 3 — one-seed 200k consolidation screen
+
+The six resolved long-run configs are frozen under
+`sweep_configs/phase33_static_qkpre_200k/`. At measured mean throughput, one
+arm requires about 2.41 compute hours before validation, compilation, and
+checkpoint overhead.
 
 All runs use h768/d8, eight heads, context 1024, microbatch 8, paired seed 123,
 the same data order, and a learning-rate scheduler configured for 200k from

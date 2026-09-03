@@ -3163,3 +3163,40 @@ carrier; remove learned/dynamic multiplicative RoPE, rotary phase special
 cases, clocks, EMA, retired residual/write channels, and the completed
 position-gain control from the active runtime after the Phase 29-32 state is
 committed. The exact plan is `CONSOLIDATION_PLAN.md`.
+
+## 2026-09-03 — Static adapter and Phase 33 launch gate complete
+
+The static pre-Q/K adapter now supports four nested per-layer modes: a tied
+global gain, separate Q/K gains, separate zero-sum pairwise log-amplitudes,
+and separate pairwise log-amplitudes plus phases. Pair amplitudes use `P-1`
+coordinates in an orthonormal zero-sum basis, so their geometric-mean factor
+is exactly one and cannot duplicate the global gain. Every mode has the old
+carrier as its exact `g=1, delta=0, phi=0` anchor. The implementation and
+tests are commit `58c4e9d`.
+
+Long-run safeguards and the frozen Phase 33 protocol are commit `6aa859d`.
+Checkpoints receive a completion marker only after Accelerate finishes writing
+state; pruning happens afterward and keeps the newest state plus explicit
+milestones. A policy file makes automatic resume ignore partial directories.
+Every launch now appends its exact resolved config, Git commit/dirty state,
+package and CUDA versions, GPU identity, dataset manifests/fingerprints, and
+parameter counts to `run_provenance.json`. Development evaluations now retain
+paired per-example losses at periodic milestones as well as at final holdout.
+
+All 184 retained and new configs load, and the CPU suite passes 109 tests with
+one CUDA-gated skip. The canonical cache validated at 8,372,843 train and
+443,501 validation blocks. All six separate 50-step h768/d8/context-1024
+preflights completed through `gpu-claim` from a clean tree on RTX 5090 GPUs.
+Post-warmup throughput ranged from 185,639 to 190,790 nominal tokens/s, and
+reserved memory ranged from 5,076 to 5,360 MiB. The pair-polar endpoint was
+2.70% slower than fixed RoPE in this short measurement. At the six-arm mean,
+200k steps are about 2.41 compute hours per arm before validation, compile,
+and checkpoint overhead.
+
+A real Accelerate integration smoke saved steps 1/2/3 with keep-latest=1,
+left only marked step 3, and then restored model, optimizer, scheduler,
+sampler, and RNG state in a fresh process. All preflights emitted the same
+compile-time bf16-input/fp32-LayerNorm-weight fusion warning; training and
+compilation succeeded, so it is a possible common kernel optimization rather
+than an arm-specific blocker. The 50-step losses are health checks only.
+Compact evidence is under `results/phase33_static_qkpre_preflight/`.
