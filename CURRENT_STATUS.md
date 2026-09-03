@@ -86,8 +86,10 @@ run.
 - All 172 retained sweep JSONs load. The CPU suite passes 94 tests with one
   explicitly CUDA-gated skip, and all six consolidated bf16 CUDA cases pass
   eager and compiled forward/backward.
-- The checkout is about 97GB. Roughly 87GB is intermediate checkpoints and
-  10.37GB is final weights. Small scientific evidence is only a few megabytes.
+- The 50 intermediate `step_*` checkpoints were removed after validating all
+  18 parent runs. This freed 92.8GB (87GiB). The 18 final weights, completion
+  markers, configs, metrics, summaries, final evaluation details, position
+  profiles, and compact phase reports remain.
 - `/workspace` is not a persistent Vast volume. Copy irreplaceable weights
   off-box before deleting them or destroying/recycling this instance.
 

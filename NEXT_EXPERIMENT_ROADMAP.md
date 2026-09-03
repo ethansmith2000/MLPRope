@@ -16,11 +16,10 @@ Completed:
 - The retained config corpus, CPU suite, and eager/compiled bf16 CUDA smoke all
   pass.
 
-Remaining storage work:
-
-1. Verify retained result artifacts before any storage deletion.
-2. Remove intermediate `step_*` checkpoints after confirming final weights are
-   untouched and every run retains compact scientific evidence.
+- All 18 affected parent runs were checked for completion markers, configs,
+  metrics, summaries, final evaluation details, and final weights. The 50
+  intermediate `step_*` directories were then removed; final weights and
+  compact evidence were left untouched.
 
 Do not combine the provenance commit and removal commit. A bisectable boundary
 is more valuable than preserving dormant compatibility in the active runtime.

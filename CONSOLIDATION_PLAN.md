@@ -190,10 +190,14 @@ best historical mechanisms.
 
 ## Storage cleanup
 
-The current checkout is about 97GB. Approximately 87GB is in 50 intermediate
-`step_*` checkpoint directories; 18 final model files use another 10.37GB,
-while configs, metrics, position profiles, summaries, and per-example evidence
-use only a few megabytes.
+_Completed 2026-09-03: all 50 intermediate `step_*` directories were removed
+after the checks below, freeing 92.8GB (87GiB). All 18 final model weights and
+compact evidence artifacts remain._
+
+Before cleanup, the checkout was about 97GB. Approximately 87GiB was in 50
+intermediate checkpoint directories; 18 final model files used another
+10.37GB, while configs, metrics, position profiles, summaries, and per-example
+evidence used only a few megabytes.
 
 This workspace is not a persistent Vast volume. Before deleting model states:
 
