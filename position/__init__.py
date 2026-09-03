@@ -35,7 +35,9 @@ from position.config import (
 from position.mappers import FeatureMapper, build_mapper
 from position.preprojection import (
     QK_PREPROJECTION_DEFAULTS,
+    QK_PREPROJECTION_MODES,
     QKPreprojectionPosition,
+    QKPreprojectionOutput,
     normalize_qk_preprojection_config,
 )
 from position.rotary import (
@@ -57,7 +59,9 @@ __all__ = [
     "V1_CHANNEL_DEFAULTS",
     "V2_CHANNEL_DEFAULTS",
     "QK_PREPROJECTION_DEFAULTS",
+    "QK_PREPROJECTION_MODES",
     "QKPreprojectionPosition",
+    "QKPreprojectionOutput",
     "adapt_legacy_position_state_dict",
     "apply_rotary",
     "build_mapper",

@@ -12,9 +12,9 @@ Two attention-local additive mechanisms have earned longer evaluation:
 2. **pre-Q/K sinusoidal injection**: add a sinusoid only to the inputs of the Q
    and K projections, usually followed by fixed RoPE.
 
-The next extension is static and constrained: learn separate Q/K amplitudes
-and phases on the sinusoidal carrier itself. Dynamic RoPE, cumulative clocks,
-and EMA are no longer active research priorities.
+The static, constrained extension is now implemented: separate Q/K amplitudes
+and phases can act on the sinusoidal carrier itself. Dynamic RoPE, cumulative
+clocks, and EMA are no longer active research priorities.
 
 ## Strongest completed evidence
 
@@ -48,7 +48,7 @@ the current comparisons establishes the mature-model ranking. The 5k
 pre-Q/K-without-RoPE result especially does not answer whether RoPE remains
 necessary.
 
-## Active implementation target
+## Implemented static adapter
 
 For Fourier pair `i`:
 
@@ -63,6 +63,13 @@ Test a nested ladder: tied scalar, separate Q/K scalars, separate Q/K pairwise
 amplitudes, then separate pairwise amplitudes and phases. Initialize at
 `a=1, phi=0` so every new variant exactly matches the current pre-Q/K carrier.
 
+This ladder is now implemented as `qk_preprojection.mode`. Pairwise amplitudes
+use an orthonormal zero-sum log-amplitude basis, making their geometric-mean
+scale exactly one and leaving the separate global Q/K gains identifiable. At
+model width 64 the four modes use 1, 2, 64, and 128 parameters per layer.
+All adapter state with angular or scale meaning stays fp32 under bf16/fp16
+module conversion.
+
 ## Next execution
 
 Run one paired seed of six arms to a common 200k-step horizon: fixed RoPE,
@@ -75,6 +82,10 @@ All runs must begin with the same 200k learning-rate horizon. A short run whose
 linear schedule has decayed to zero cannot be treated as the prefix of a long
 run.
 
+Before generating those configs, add rolling checkpoint retention and record
+the dataset manifest, source commit, resolved config, hardware/software
+versions, and dirty-tree state for every run.
+
 ## Repository state
 
 - Phase 29-32 code, configs, compact results, and analyses are preserved in
@@ -83,8 +94,8 @@ run.
   frozen Fourier bases, and the pre-Q/K carrier. Learned/dynamic multiplicative
   RoPE frequencies, rotary phase residuals/clocks, EMA, residual/write
   channels, and the completed position-gain attribution path have been removed.
-- All 172 retained sweep JSONs load. The CPU suite passes 94 tests with one
-  explicitly CUDA-gated skip, and all six consolidated bf16 CUDA cases pass
+- All 172 retained sweep JSONs load. The CPU suite passes 104 tests with one
+  explicitly CUDA-gated skip, and all nine consolidated bf16 CUDA cases pass
   eager and compiled forward/backward.
 - The 50 intermediate `step_*` checkpoints were removed after validating all
   18 parent runs. This freed 92.8GB (87GiB). The 18 final weights, completion

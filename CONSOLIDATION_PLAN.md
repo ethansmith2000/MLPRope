@@ -25,7 +25,10 @@ Dynamic RoPE frequency, tokenwise rotary phase, cumulative rotary clocks, and
 EMA controllers are closed as active directions. Their results remain useful
 negative or attribution evidence, but they should not define the active API.
 
-## Proposed preprojection adapter
+## Implemented preprojection adapter
+
+_Implemented 2026-09-03. The configuration modes are `tied_scalar`,
+`split_scalar`, `split_pair_amplitude`, and `split_pair_polar`._
 
 For Fourier pair `i`, let
 
@@ -45,7 +48,7 @@ unrestricted independent positional projection.
 The exact current pre-Q/K anchor is `a_i^q=a_i^k=1` and
 `phi_i^q=phi_i^k=0`. Use nested variants:
 
-1. one gate tied across Q/K (current implementation);
+1. one gate tied across Q/K (the original anchor);
 2. separate scalar Q/K amplitudes;
 3. separate Q/K amplitudes per Fourier pair; and
 4. separate Q/K amplitude and phase per Fourier pair.
@@ -54,16 +57,16 @@ Keep these parameters per layer. Do not add a per-head axis at this injection
 site: heads are defined only after the Q/K projections. A per-head carrier is a
 different, post-projection mechanism and should not be folded into this test.
 
-If both an overall gain and pairwise amplitudes are exposed, remove their scale
-redundancy. One suitable factorization is
+The implementation removes global/spectral scale redundancy with an
+orthonormal basis for the zero-sum subspace:
 
 ```text
-a_i = g * exp(delta_i - mean(delta)).
+a_i = g * exp(delta_i),  sum_i delta_i = 0.
 ```
 
-Here `g` controls total carrier strength and the centered `delta_i` values
-redistribute strength across the spectrum. Initialize `g=1`, `delta=0`, and
-`phi=0`.
+Here `g` controls total carrier strength and `P-1` independent coordinates
+generate the centered `delta_i` values that redistribute strength across the
+spectrum. The initialization is `g=1`, `delta=0`, and `phi=0`.
 
 ## Evidence motivating the focus
 

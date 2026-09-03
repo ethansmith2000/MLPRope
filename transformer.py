@@ -333,14 +333,17 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         return _flex_attention_call(q, k, v, block_mask=self._block_mask(q))
 
     def forward(self, x):
-        qk_input = x
         if self.qk_preprojection is not None:
-            qk_input = x + self.qk_preprojection(
+            preprojection = self.qk_preprojection(
                 x.shape[1],
                 dtype=x.dtype,
-            )[None, :, :]
-        q_projected = self._split_heads(self.to_q(qk_input))
-        k_projected = self._split_heads(self.to_k(qk_input))
+            )
+            q_input = x + preprojection.q[None, :, :]
+            k_input = x + preprojection.k[None, :, :]
+        else:
+            q_input = k_input = x
+        q_projected = self._split_heads(self.to_q(q_input))
+        k_projected = self._split_heads(self.to_k(k_input))
         v = self._split_heads(self.to_v(x))
         q_normed = self.q_norm(q_projected)
         k_normed = self.k_norm(k_projected)
@@ -770,18 +773,60 @@ class Transformer(torch.nn.Module):
             if block.attn.qk_preprojection is not None:
                 preprojection = block.attn.qk_preprojection
                 pre_prefix = f"position/layer_{layer_idx:02d}/qk_preprojection"
-                gate = preprojection.gate_value().detach().float()
-                metrics[f"{pre_prefix}/gate"] = gate.item()
+                q_gate, k_gate = preprojection.gate_values()
+                metrics[f"{pre_prefix}/gate_q"] = q_gate.detach().float().item()
+                metrics[f"{pre_prefix}/gate_k"] = k_gate.detach().float().item()
+                if preprojection.mode == "tied_scalar":
+                    metrics[f"{pre_prefix}/gate"] = q_gate.detach().float().item()
+                q_log_amplitude, k_log_amplitude = (
+                    preprojection.log_amplitude_deltas()
+                )
+                q_phase, k_phase = preprojection.phase_values()
+                for branch, log_amplitude, phase in (
+                    ("q", q_log_amplitude, q_phase),
+                    ("k", k_log_amplitude, k_phase),
+                ):
+                    log_amplitude = log_amplitude.detach().float()
+                    phase = phase.detach().float()
+                    metrics[f"{pre_prefix}/log_amplitude_{branch}_rms"] = (
+                        log_amplitude.square().mean().sqrt().item()
+                    )
+                    metrics[f"{pre_prefix}/phase_{branch}_rms"] = (
+                        phase.square().mean().sqrt().item()
+                    )
+                    metrics[f"{pre_prefix}/phase_{branch}_abs_max"] = (
+                        phase.abs().max().item()
+                    )
                 if seq_len is not None:
                     positional_input = preprojection(
                         seq_len,
                         dtype=torch.float32,
-                    ).detach()
-                    metrics[f"{pre_prefix}/input_rms"] = (
-                        positional_input.square().mean().sqrt().item()
                     )
-                    q_branch = block.attn.to_q(positional_input).detach().float()
-                    k_branch = block.attn.to_k(positional_input).detach().float()
+                    q_positional_input = positional_input.q.detach()
+                    k_positional_input = positional_input.k.detach()
+                    metrics[f"{pre_prefix}/input_q_rms"] = (
+                        q_positional_input.square().mean().sqrt().item()
+                    )
+                    metrics[f"{pre_prefix}/input_k_rms"] = (
+                        k_positional_input.square().mean().sqrt().item()
+                    )
+                    metrics[f"{pre_prefix}/input_qk_diff_rms"] = (
+                        (q_positional_input - k_positional_input)
+                        .square()
+                        .mean()
+                        .sqrt()
+                        .item()
+                    )
+                    if preprojection.mode == "tied_scalar":
+                        metrics[f"{pre_prefix}/input_rms"] = metrics[
+                            f"{pre_prefix}/input_q_rms"
+                        ]
+                    q_branch = block.attn.to_q(
+                        q_positional_input
+                    ).detach().float()
+                    k_branch = block.attn.to_k(
+                        k_positional_input
+                    ).detach().float()
                     metrics[f"{pre_prefix}/projected_q_rms"] = (
                         q_branch.square().mean().sqrt().item()
                     )

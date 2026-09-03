@@ -279,7 +279,8 @@ def position_run_tag(cfg: dict) -> str:
     extras = []
     preprojection = cfg.get("qk_preprojection", {})
     if preprojection.get("enabled", False):
-        extras.append("qkpre-fourier")
+        mode = preprojection.get("mode", "tied_scalar").replace("_", "-")
+        extras.append(f"qkpre-{mode}")
     tag = base if not extras else "+".join((base, *extras))
     if source == 2:
         canonical = {
@@ -550,15 +551,6 @@ def load_config(cli_args):
 
     cfg["qk"] = qk_config
     cfg["logit_bias"] = logit_config
-    if (
-        cfg["qk_preprojection"]["enabled"]
-        and qk_config["enabled"]
-        and qk_config["application"] != "additive"
-    ):
-        raise ValueError(
-            "qk_preprojection can only be combined with an additive qk "
-            "position channel; rotary channels remain isolated"
-        )
     if qk_config["enabled"] and qk_config["input"]["scalars"]:
         qk_config["input"][
             "normalization_extent"

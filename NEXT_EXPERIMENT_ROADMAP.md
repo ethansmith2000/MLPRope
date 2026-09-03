@@ -24,7 +24,7 @@ Completed:
 Do not combine the provenance commit and removal commit. A bisectable boundary
 is more valuable than preserving dormant compatibility in the active runtime.
 
-## Stage 1 — implement the static pre-Q/K spectral adapter
+## Stage 1 — static pre-Q/K spectral adapter (completed)
 
 Extend `qk_preprojection` without introducing a separate mechanism family.
 Required modes are:
@@ -50,6 +50,11 @@ Required tests:
 - eager and compiled forward/backward;
 - unchanged V and no residual-stream write;
 - parameter-count assertions for every granularity.
+
+All four modes and the listed invariants now pass the CPU suite and claimed-GPU
+eager/compiled bf16 smoke. The implementation uses `P-1` orthonormal zero-sum
+coordinates for `P` log-amplitude deltas, so global and spectral amplitude are
+identifiable rather than merely mean-centered in the forward pass.
 
 ## Stage 2 — add long-run operational safeguards
 

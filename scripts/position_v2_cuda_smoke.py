@@ -79,6 +79,16 @@ def additive_qk(
     )
 
 
+def preprojection(mode: str) -> dict:
+    return {
+        "enabled": True,
+        "mode": mode,
+        "basis_dim": 64,
+        "gate_init": 1.0,
+        "learnable_gate": True,
+    }
+
+
 CASES = {
     "fixed_rope": {},
     "no_explicit_position": {"use_rope": False},
@@ -96,21 +106,20 @@ CASES = {
         "qk_norm_mode": "method_aware_rms",
     },
     "preprojection_rope": {
-        "qk_preprojection_config": {
-            "enabled": True,
-            "basis_dim": 64,
-            "gate_init": 1.0,
-            "learnable_gate": True,
-        },
+        "qk_preprojection_config": preprojection("tied_scalar"),
+    },
+    "preprojection_split_scalar_rope": {
+        "qk_preprojection_config": preprojection("split_scalar"),
+    },
+    "preprojection_pair_amplitude_rope": {
+        "qk_preprojection_config": preprojection("split_pair_amplitude"),
+    },
+    "preprojection_pair_polar_rope": {
+        "qk_preprojection_config": preprojection("split_pair_polar"),
     },
     "preprojection_addrope": {
         "qk_config": additive_qk(),
-        "qk_preprojection_config": {
-            "enabled": True,
-            "basis_dim": 64,
-            "gate_init": 1.0,
-            "learnable_gate": True,
-        },
+        "qk_preprojection_config": preprojection("split_pair_polar"),
         "qk_norm_mode": "method_aware_rms",
     },
 }
@@ -132,6 +141,10 @@ def run_case(name: str, overrides: dict, *, compile_model: bool) -> None:
     kwargs.update(overrides)
     model = Transformer(**kwargs).to(device=device, dtype=torch.bfloat16).train()
     if compile_model:
+        # Each case intentionally changes module structure. Reset Dynamo so the
+        # suite tests every structure instead of hitting the per-code-object
+        # recompile limit and silently falling back on later cases.
+        torch.compiler.reset()
         model = torch.compile(model, mode="default", fullgraph=False)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3)

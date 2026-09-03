@@ -7,7 +7,7 @@ construction. The active runtime deliberately supports three families:
 2. additive Fourier features on projected Q/K (AddRoPE); and
 3. a frozen sinusoid added immediately before the Q/K projections.
 
-The research rationale and next extension are in
+The research rationale and experiment plan are in
 [`CONSOLIDATION_PLAN.md`](CONSOLIDATION_PLAN.md). Historical implementations
 remain recoverable from git; their compact result reports remain in `results/`.
 
@@ -66,6 +66,8 @@ migration error.
 ```yaml
 qk_preprojection:
   enabled: false
+  mode: tied_scalar     # tied_scalar | split_scalar |
+                        # split_pair_amplitude | split_pair_polar
   basis_dim: null       # resolves to model width; other widths are rejected
   theta: null           # resolves to rope_theta
   gate_init: 1.0
@@ -73,7 +75,7 @@ qk_preprojection:
 ```
 
 For the normalized block input `x_p` and frozen full-width Fourier vector
-`z_p`, the mechanism computes
+`z_p`, the original tied mode computes
 
 ```text
 q_p = W_q(x_p + alpha z_p)
@@ -86,8 +88,34 @@ and the residual stream are untouched. It may be used alone, with fixed RoPE,
 or together with AddRoPE. The latter combination is supported for controlled
 factorials even though Phase 30 found the two additive routes sub-additive.
 
-The planned static Q/K-specific amplitude/phase adapter is not yet part of the
-schema. Its nested design is specified in `CONSOLIDATION_PLAN.md`.
+The modes form a nested static adapter ladder:
+
+| Mode | Global gains | Pair amplitudes | Pair phases |
+| --- | ---: | ---: | ---: |
+| `tied_scalar` | one shared | fixed | fixed |
+| `split_scalar` | separate Q/K | fixed | fixed |
+| `split_pair_amplitude` | separate Q/K | separate Q/K | fixed |
+| `split_pair_polar` | separate Q/K | separate Q/K | separate Q/K |
+
+For branch `b` and Fourier pair `i`, the pairwise modes apply
+
+```text
+A_i^b = g_b exp(delta_i^b) R(phi_i^b).
+```
+
+The spectral log-amplitude vector is represented with `P-1` coordinates in an
+orthonormal zero-sum basis. Consequently
+`sum_i delta_i=0` and the spectral factor has geometric mean one: `g_b`
+controls global carrier strength without a scale gauge, while `delta_i`
+redistributes it across frequencies. All modes initialize at `g=gate_init`,
+`delta=0`, and `phi=0`; with the default `gate_init=1`, every rung is exactly
+the original carrier.
+
+The small gain, log-amplitude, phase, and zero-sum-basis state remains fp32
+under module-wide bf16/fp16 conversion. The completed carrier is cast to the
+activation dtype before addition to `x`. `learnable_gate=false` freezes only
+the global gain; pair amplitude/phase parameters implied by the selected mode
+remain trainable.
 
 ## Additive Q/K channel
 

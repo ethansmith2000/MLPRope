@@ -8,6 +8,7 @@
   "qk_norm_mode": "method_aware_rms",
   "qk_preprojection": {
     "enabled": true,
+    "mode": "tied_scalar",
     "basis_dim": 768,
     "theta": 10000.0,
     "gate_init": 1.0,
