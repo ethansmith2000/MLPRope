@@ -1,0 +1,12 @@
+{
+  "base_config": "../arm-rope-split-smooth-polar.json",
+  "run_name": "phase35-preflight-rope-split-smooth-polar-r4-seed123-s50-h768d8",
+  "base_output_dir": "/workspace/MLPRope/model-output/position_bias_phase35_smooth_carrier_preflight",
+  "max_train_steps": 50,
+  "num_warmup_steps": 5,
+  "validate_every": 10000,
+  "num_validation_batches": 4,
+  "num_final_validation_batches": 4,
+  "final_validation_start_batch": 256,
+  "save_evaluation_details": false
+}

@@ -108,11 +108,14 @@ training and its forward value does not read the sequence.
 qk_preprojection:
   enabled: false
   mode: tied_scalar     # tied_scalar | split_scalar |
+                        # tied_smooth_amplitude | tied_smooth_polar |
+                        # split_smooth_polar |
                         # split_pair_amplitude | split_pair_polar
   basis_dim: null       # resolves to model width; other widths are rejected
   theta: null           # resolves to rope_theta
   gate_init: 1.0
   learnable_gate: true
+  smooth_rank: 4        # low-order DCT modes for smooth variants
   frequency:
     mode: fixed               # fixed | learned_log | learned_horizon
     reference_length: null
@@ -133,12 +136,16 @@ and the residual stream are untouched. It may be used alone, with fixed RoPE,
 or together with AddRoPE. The latter combination is supported for controlled
 factorials even though Phase 30 found the two additive routes sub-additive.
 
-The modes form a nested static adapter ladder:
+The modes include a low-rank smooth ladder and the historical free-pair
+controls:
 
 | Mode | Global gains | Pair amplitudes | Pair phases |
 | --- | ---: | ---: | ---: |
 | `tied_scalar` | one shared | fixed | fixed |
+| `tied_smooth_amplitude` | one shared | tied smooth | fixed |
+| `tied_smooth_polar` | one shared | tied smooth | tied smooth |
 | `split_scalar` | separate Q/K | fixed | fixed |
+| `split_smooth_polar` | separate Q/K | separate smooth | separate smooth |
 | `split_pair_amplitude` | separate Q/K | separate Q/K | fixed |
 | `split_pair_polar` | separate Q/K | separate Q/K | separate Q/K |
 
@@ -155,6 +162,17 @@ controls global carrier strength without a scale gauge, while `delta_i`
 redistributes it across frequencies. All modes initialize at `g=gate_init`,
 `delta=0`, and `phi=0`; with the default `gate_init=1`, every rung is exactly
 the original carrier.
+
+Smooth modes instead use `smooth_rank` orthogonal, unit-RMS DCT-II modes over Fourier
+pair index, which is uniformly spaced in log frequency. Amplitude omits the
+constant DCT mode, preserving the same zero-mean/no-scale-gauge invariant;
+phase includes the constant and lowest varying modes. Unit-RMS scaling makes a
+coordinate's per-band functional effect independent of model width; an
+L2-normalized basis would silently shrink it by `1/sqrt(P)`, which Adam does
+not repair in the forward pass. `tied_smooth_*` applies
+one transform to both branches, while `split_smooth_polar` gives Q and K
+separate coordinates. At the default rank 4 this adds only 5, 9, or 18
+parameters per layer including global gains.
 
 The small gain, log-amplitude, phase, and zero-sum-basis state remains fp32
 under module-wide bf16/fp16 conversion. The completed carrier is cast to the

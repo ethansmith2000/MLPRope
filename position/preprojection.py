@@ -19,13 +19,19 @@ from position.precision import PreserveFP32BuffersMixin
 
 QKPreprojectionMode = Literal[
     "tied_scalar",
+    "tied_smooth_amplitude",
+    "tied_smooth_polar",
     "split_scalar",
+    "split_smooth_polar",
     "split_pair_amplitude",
     "split_pair_polar",
 ]
 QK_PREPROJECTION_MODES = {
     "tied_scalar",
+    "tied_smooth_amplitude",
+    "tied_smooth_polar",
     "split_scalar",
+    "split_smooth_polar",
     "split_pair_amplitude",
     "split_pair_polar",
 }
@@ -37,6 +43,8 @@ QK_PREPROJECTION_DEFAULTS = {
     "theta": None,
     "gate_init": 1.0,
     "learnable_gate": True,
+    # Number of low-order DCT modes for smooth spectral amplitude/phase.
+    "smooth_rank": 4,
     # The parameterized bank itself lives once on Transformer and is shared by
     # all of these per-layer carrier adapters.
     "frequency": copy.deepcopy(SINUSOID_FREQUENCY_DEFAULTS),
@@ -97,6 +105,17 @@ def normalize_qk_preprojection_config(
         raise ValueError("qk_preprojection.gate_init must be finite")
     if not isinstance(normalized["learnable_gate"], bool):
         raise TypeError("qk_preprojection.learnable_gate must be a boolean")
+    smooth_rank = normalized["smooth_rank"]
+    if isinstance(smooth_rank, bool) or not isinstance(smooth_rank, int):
+        raise TypeError("qk_preprojection.smooth_rank must be an integer")
+    if smooth_rank <= 0:
+        raise ValueError("qk_preprojection.smooth_rank must be positive")
+    if "smooth" in mode and smooth_rank >= basis_dim // 2:
+        raise ValueError(
+            "qk_preprojection.smooth_rank must be smaller than the number "
+            "of Fourier pairs"
+        )
+    normalized["smooth_rank"] = smooth_rank
     normalized["frequency"] = normalize_sinusoid_frequency_config(
         normalized["frequency"],
         default_reference_length=frequency_reference_length,
@@ -122,13 +141,43 @@ def _orthonormal_zero_sum_basis(size: int) -> torch.Tensor:
     return basis
 
 
+def _unit_rms_cosine_basis(
+    size: int,
+    *,
+    start_mode: int,
+    count: int,
+) -> torch.Tensor:
+    """Return orthogonal, unit-RMS DCT-II modes over log-frequency index.
+
+    Unit-RMS scaling gives each coordinate a width-independent functional
+    meaning. An L2-normalized column would shrink its per-band forward effect
+    as ``1/sqrt(pair_dim)``; Adam's gradient normalization would not undo that
+    forward Jacobian.
+    """
+    if count <= 0:
+        return torch.empty((size, 0), dtype=torch.float32)
+    index = torch.arange(size, dtype=torch.float32)[:, None] + 0.5
+    modes = torch.arange(
+        start_mode,
+        start_mode + count,
+        dtype=torch.float32,
+    )[None, :]
+    basis = torch.cos(math.pi * index * modes / size)
+    scale = torch.full((count,), math.sqrt(2.0), dtype=torch.float32)
+    if start_mode == 0:
+        scale[0] = 1.0
+    return basis * scale
+
+
 class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
     """Produce sinusoidal inputs added only before the Q and K projections.
 
-    The four modes form a nested ladder. ``tied_scalar`` is the original
-    implementation. Split modes give Q and K separate global gains. Pairwise
-    modes add zero-mean log-amplitude coordinates, and ``split_pair_polar``
-    additionally gives each branch a static phase per Fourier pair.
+    ``tied_scalar`` is the original implementation. Smooth modes use a few
+    low-order DCT modes over the uniformly spaced log-frequency index. The
+    amplitude basis excludes the constant mode so the global gate remains
+    identifiable; the phase basis includes it. Split modes give Q and K
+    separate transforms. Pairwise modes retain the historical fully free
+    spectral controls.
 
     For pair ``i`` and branch ``b`` the pairwise modes apply
 
@@ -140,6 +189,8 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
 
     _fp32_buffer_names = (
         "zero_sum_basis",
+        "smooth_amplitude_basis",
+        "smooth_phase_basis",
         "fixed_gate",
         "fixed_q_gate",
         "fixed_k_gate",
@@ -148,8 +199,10 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
         "gate",
         "q_gate",
         "k_gate",
+        "log_amplitude_coordinates",
         "q_log_amplitude_coordinates",
         "k_log_amplitude_coordinates",
+        "phase_coordinates",
         "q_phase",
         "k_phase",
     )
@@ -161,6 +214,7 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
         self.pair_dim = model_dim // 2
         self.extent = extent
         self.mode: QKPreprojectionMode = config["mode"]
+        self.smooth_rank = int(config["smooth_rank"])
         self.basis = FrozenFourierBasis(
             extent=extent,
             basis_dim=model_dim,
@@ -171,6 +225,24 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
             _orthonormal_zero_sum_basis(self.pair_dim),
             persistent=False,
         )
+        self.register_buffer(
+            "smooth_amplitude_basis",
+            _unit_rms_cosine_basis(
+                self.pair_dim,
+                start_mode=1,
+                count=self.smooth_rank,
+            ),
+            persistent=False,
+        )
+        self.register_buffer(
+            "smooth_phase_basis",
+            _unit_rms_cosine_basis(
+                self.pair_dim,
+                start_mode=0,
+                count=self.smooth_rank,
+            ),
+            persistent=False,
+        )
 
         gate = torch.tensor(float(config["gate_init"]), dtype=torch.float32)
         self.register_parameter("gate", None)
@@ -179,7 +251,7 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
         self.register_buffer("fixed_gate", None)
         self.register_buffer("fixed_q_gate", None)
         self.register_buffer("fixed_k_gate", None)
-        if self.mode == "tied_scalar":
+        if self.mode.startswith("tied_"):
             if config["learnable_gate"]:
                 self.gate = torch.nn.Parameter(gate)
             else:
@@ -191,28 +263,50 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
             self.fixed_q_gate = gate.clone()
             self.fixed_k_gate = gate.clone()
 
-        coordinate_dim = max(self.pair_dim - 1, 0)
-        if self.mode in {"split_pair_amplitude", "split_pair_polar"}:
+        self.register_parameter("log_amplitude_coordinates", None)
+        self.register_parameter("q_log_amplitude_coordinates", None)
+        self.register_parameter("k_log_amplitude_coordinates", None)
+        if self.mode in {"tied_smooth_amplitude", "tied_smooth_polar"}:
+            self.log_amplitude_coordinates = torch.nn.Parameter(
+                torch.zeros(self.smooth_rank, dtype=torch.float32)
+            )
+        elif self.mode in {"split_pair_amplitude", "split_pair_polar"}:
+            coordinate_dim = max(self.pair_dim - 1, 0)
             self.q_log_amplitude_coordinates = torch.nn.Parameter(
                 torch.zeros(coordinate_dim, dtype=torch.float32)
             )
             self.k_log_amplitude_coordinates = torch.nn.Parameter(
                 torch.zeros(coordinate_dim, dtype=torch.float32)
             )
-        else:
-            self.register_parameter("q_log_amplitude_coordinates", None)
-            self.register_parameter("k_log_amplitude_coordinates", None)
+        elif self.mode == "split_smooth_polar":
+            self.q_log_amplitude_coordinates = torch.nn.Parameter(
+                torch.zeros(self.smooth_rank, dtype=torch.float32)
+            )
+            self.k_log_amplitude_coordinates = torch.nn.Parameter(
+                torch.zeros(self.smooth_rank, dtype=torch.float32)
+            )
 
-        if self.mode == "split_pair_polar":
+        self.register_parameter("phase_coordinates", None)
+        self.register_parameter("q_phase", None)
+        self.register_parameter("k_phase", None)
+        if self.mode == "tied_smooth_polar":
+            self.phase_coordinates = torch.nn.Parameter(
+                torch.zeros(self.smooth_rank, dtype=torch.float32)
+            )
+        elif self.mode == "split_pair_polar":
             self.q_phase = torch.nn.Parameter(
                 torch.zeros(self.pair_dim, dtype=torch.float32)
             )
             self.k_phase = torch.nn.Parameter(
                 torch.zeros(self.pair_dim, dtype=torch.float32)
             )
-        else:
-            self.register_parameter("q_phase", None)
-            self.register_parameter("k_phase", None)
+        elif self.mode == "split_smooth_polar":
+            self.q_phase = torch.nn.Parameter(
+                torch.zeros(self.smooth_rank, dtype=torch.float32)
+            )
+            self.k_phase = torch.nn.Parameter(
+                torch.zeros(self.smooth_rank, dtype=torch.float32)
+            )
 
     def _apply(self, fn, recurse: bool = True):
         # Static phase and log-amplitude are tiny parameter sets whose numerical
@@ -239,7 +333,7 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
         return module
 
     def gate_values(self) -> tuple[torch.Tensor, torch.Tensor]:
-        if self.mode == "tied_scalar":
+        if self.mode.startswith("tied_"):
             value = self.gate if self.gate is not None else self.fixed_gate
             return value, value
         q_value = self.q_gate if self.q_gate is not None else self.fixed_q_gate
@@ -253,18 +347,37 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
         return self.gate_values()[0]
 
     def log_amplitude_deltas(self) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.log_amplitude_coordinates is not None:
+            delta = (
+                self.smooth_amplitude_basis
+                @ self.log_amplitude_coordinates.float()
+            )
+            return delta, delta
         if self.q_log_amplitude_coordinates is None:
             zero = self.zero_sum_basis.new_zeros(self.pair_dim)
             return zero, zero
+        basis = (
+            self.smooth_amplitude_basis
+            if self.mode == "split_smooth_polar"
+            else self.zero_sum_basis
+        )
         return (
-            self.zero_sum_basis @ self.q_log_amplitude_coordinates.float(),
-            self.zero_sum_basis @ self.k_log_amplitude_coordinates.float(),
+            basis @ self.q_log_amplitude_coordinates.float(),
+            basis @ self.k_log_amplitude_coordinates.float(),
         )
 
     def phase_values(self) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.phase_coordinates is not None:
+            phase = self.smooth_phase_basis @ self.phase_coordinates.float()
+            return phase, phase
         if self.q_phase is None:
             zero = self.zero_sum_basis.new_zeros(self.pair_dim)
             return zero, zero
+        if self.mode == "split_smooth_polar":
+            return (
+                self.smooth_phase_basis @ self.q_phase.float(),
+                self.smooth_phase_basis @ self.k_phase.float(),
+            )
         return self.q_phase.float(), self.k_phase.float()
 
     @staticmethod
@@ -350,8 +463,10 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
             for parameter in (
                 self.q_log_amplitude_coordinates,
                 self.k_log_amplitude_coordinates,
+                self.log_amplitude_coordinates,
                 self.q_phase,
                 self.k_phase,
+                self.phase_coordinates,
             ):
                 if parameter is not None:
                     parameter.zero_()

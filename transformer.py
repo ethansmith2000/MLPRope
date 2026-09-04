@@ -817,6 +817,18 @@ class Transformer(torch.nn.Module):
                     preprojection.log_amplitude_deltas()
                 )
                 q_phase, k_phase = preprojection.phase_values()
+                profiles[f"{pre_prefix}/log_amplitude_q"] = (
+                    q_log_amplitude.detach().float().cpu()
+                )
+                profiles[f"{pre_prefix}/log_amplitude_k"] = (
+                    k_log_amplitude.detach().float().cpu()
+                )
+                profiles[f"{pre_prefix}/phase_q"] = (
+                    q_phase.detach().float().cpu()
+                )
+                profiles[f"{pre_prefix}/phase_k"] = (
+                    k_phase.detach().float().cpu()
+                )
                 for branch, log_amplitude, phase in (
                     ("q", q_log_amplitude, q_phase),
                     ("k", k_log_amplitude, k_phase),

@@ -2,6 +2,7 @@
 
 - [Current status and decisions](CURRENT_STATUS.md)
 - [Active sinusoidal intervention policy](SINUSOID_INTERVENTION_POLICY.md)
+- [Phase-35 smooth carrier protocol](SMOOTH_CARRIER_PLAN.md)
 - [Next experiment roadmap](NEXT_EXPERIMENT_ROADMAP.md)
 - [Active research and repository consolidation plan](CONSOLIDATION_PLAN.md)
 - [Globally shared frequency experiment](SHARED_FREQUENCY_PLAN.md)

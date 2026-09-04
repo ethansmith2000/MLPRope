@@ -164,6 +164,11 @@ optimization. A durable claim requires:
 
 Only after this gate consider model-width transfer or longer-context testing.
 
+The current Stage-6 screen is Phase 35: rank-4 smooth pre-Q/K carrier
+amplitude/phase under both fixed RoPE and NoPE. Its frozen eight-arm protocol
+and direct-parent contrasts are in
+[`SMOOTH_CARRIER_PLAN.md`](SMOOTH_CARRIER_PLAN.md).
+
 ## Explicitly deferred
 
 - any learned or content-dependent RoPE frequencies or frequency multipliers;

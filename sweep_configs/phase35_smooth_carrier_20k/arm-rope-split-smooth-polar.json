@@ -1,0 +1,6 @@
+{
+  "base_config": "_base.json",
+  "run_name": "phase35-rope-split-smooth-polar-r4-seed123-s20000-h768d8",
+  "use_rope": true,
+  "qk_preprojection": {"enabled": true, "mode": "split_smooth_polar", "smooth_rank": 4}
+}

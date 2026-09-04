@@ -139,6 +139,7 @@ Do not reopen a broad sweep immediately. New ideas should first satisfy:
 6. longer or repeated runs only for a materially favorable, non-collapsing
    candidate.
 
-The most defensible optional follow-up is a low-dimensional, smooth static
-amplitude/phase deformation of the carrier. It is lower priority than fully
-validating and simplifying the fixed tied carrier implementation.
+The active follow-up is a rank-4 smooth static amplitude/phase deformation of
+the pre-Q/K carrier, implemented with low-order DCT modes over log-frequency
+index. It is screened as a tied amplitude ladder, a tied polar ladder, and an
+untied Q/K polar rung under both fixed RoPE and NoPE.

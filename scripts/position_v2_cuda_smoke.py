@@ -79,13 +79,14 @@ def additive_qk(
     )
 
 
-def preprojection(mode: str) -> dict:
+def preprojection(mode: str, *, smooth_rank: int = 4) -> dict:
     return {
         "enabled": True,
         "mode": mode,
         "basis_dim": 64,
         "gate_init": 1.0,
         "learnable_gate": True,
+        "smooth_rank": smooth_rank,
     }
 
 
@@ -119,6 +120,15 @@ CASES = {
     },
     "preprojection_split_scalar_rope": {
         "qk_preprojection_config": preprojection("split_scalar"),
+    },
+    "preprojection_tied_smooth_amplitude_rope": {
+        "qk_preprojection_config": preprojection("tied_smooth_amplitude"),
+    },
+    "preprojection_tied_smooth_polar_rope": {
+        "qk_preprojection_config": preprojection("tied_smooth_polar"),
+    },
+    "preprojection_split_smooth_polar_rope": {
+        "qk_preprojection_config": preprojection("split_smooth_polar"),
     },
     "preprojection_pair_amplitude_rope": {
         "qk_preprojection_config": preprojection("split_pair_amplitude"),

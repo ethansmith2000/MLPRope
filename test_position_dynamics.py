@@ -45,6 +45,7 @@ def _config(
     model_dim: int = 8,
     gate_init: float = 1.0,
     learnable_gate: bool = True,
+    smooth_rank: int = 2,
 ) -> dict:
     return normalize_qk_preprojection_config(
         {
@@ -52,6 +53,7 @@ def _config(
             "mode": mode,
             "gate_init": gate_init,
             "learnable_gate": learnable_gate,
+            "smooth_rank": smooth_rank,
         },
         model_dim=model_dim,
         rope_theta=10_000.0,
@@ -268,6 +270,79 @@ class QKPreprojectionTest(unittest.TestCase):
             rtol=1e-6,
         )
 
+    def test_smooth_bases_are_orthogonal_unit_rms_and_have_no_scale_gauge(self):
+        module = QKPreprojectionPosition(
+            _config("tied_smooth_polar", smooth_rank=2),
+            model_dim=8,
+            extent=16,
+        )
+        torch.testing.assert_close(
+            module.smooth_amplitude_basis.T @ module.smooth_amplitude_basis,
+            4 * torch.eye(2),
+            atol=1e-6,
+            rtol=1e-6,
+        )
+        torch.testing.assert_close(
+            module.smooth_phase_basis.T @ module.smooth_phase_basis,
+            4 * torch.eye(2),
+            atol=1e-6,
+            rtol=1e-6,
+        )
+        torch.testing.assert_close(
+            module.smooth_amplitude_basis.sum(dim=0),
+            torch.zeros(2),
+            atol=1e-6,
+            rtol=0,
+        )
+        torch.testing.assert_close(
+            module.smooth_amplitude_basis.square().mean(dim=0),
+            torch.ones(2),
+            atol=1e-6,
+            rtol=1e-6,
+        )
+        torch.testing.assert_close(
+            module.smooth_phase_basis.square().mean(dim=0),
+            torch.ones(2),
+            atol=1e-6,
+            rtol=1e-6,
+        )
+        with torch.no_grad():
+            module.log_amplitude_coordinates.copy_(torch.tensor([0.4, -0.2]))
+            module.phase_coordinates.copy_(torch.tensor([0.3, 0.1]))
+        q_delta, k_delta = module.log_amplitude_deltas()
+        q_phase, k_phase = module.phase_values()
+        torch.testing.assert_close(q_delta, k_delta, rtol=0, atol=0)
+        torch.testing.assert_close(q_phase, k_phase, rtol=0, atol=0)
+        torch.testing.assert_close(
+            q_delta.mean(),
+            torch.tensor(0.0),
+            atol=1e-7,
+            rtol=0,
+        )
+
+    def test_split_smooth_polar_receives_distinct_qk_gradients(self):
+        torch.manual_seed(4)
+        module = QKPreprojectionPosition(
+            _config("split_smooth_polar", smooth_rank=2),
+            model_dim=8,
+            extent=16,
+        )
+        output = module(9, dtype=torch.float32)
+        loss = (
+            (output.q * torch.randn_like(output.q)).sum()
+            + (output.k * torch.randn_like(output.k)).sum()
+        )
+        loss.backward()
+        for parameter in (
+            module.q_log_amplitude_coordinates,
+            module.k_log_amplitude_coordinates,
+            module.q_phase,
+            module.k_phase,
+        ):
+            self.assertIsNotNone(parameter.grad)
+            self.assertGreater(parameter.grad.abs().sum().item(), 0)
+        self.assertFalse(torch.allclose(module.q_phase.grad, module.k_phase.grad))
+
     def test_pair_parameters_receive_distinct_qk_gradients(self):
         torch.manual_seed(0)
         module = QKPreprojectionPosition(
@@ -297,7 +372,10 @@ class QKPreprojectionTest(unittest.TestCase):
     def test_mode_parameter_counts_are_nested_and_exact(self):
         expected = {
             "tied_scalar": 1,
+            "tied_smooth_amplitude": 3,
+            "tied_smooth_polar": 5,
             "split_scalar": 2,
+            "split_smooth_polar": 10,
             "split_pair_amplitude": 8,
             "split_pair_polar": 16,
         }
@@ -401,6 +479,8 @@ class QKPreprojectionTest(unittest.TestCase):
                 model_dim=8,
                 rope_theta=10_000.0,
             )
+        with self.assertRaisesRegex(ValueError, "smooth_rank"):
+            _config("tied_smooth_amplitude", smooth_rank=4)
         with self.assertRaisesRegex(ValueError, "even model_dim"):
             normalize_qk_preprojection_config(
                 {},

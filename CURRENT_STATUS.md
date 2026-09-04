@@ -100,11 +100,11 @@ It is preserved as historical evidence, not retained as active machinery. See
 
 ## Next execution
 
-First validate the carrier-only refactor and its optimizer-health trace. Any
-new learned carrier parameterization should use a one-seed 10k--20k screen
-before replication and should report both loss and functional update health.
-There is no automatic Phase-34 seed expansion because no candidate cleared its
-gate.
+Phase 35 is a one-seed 20k screen of rank-4 smooth carrier amplitude/phase.
+It crosses a nested tied-amplitude, tied-polar, and split-Q/K-polar ladder with
+fixed RoPE and NoPE. It reports both loss and functional optimization health.
+There is no Phase-34 seed expansion because no frequency candidate cleared its
+gate. See [`SMOOTH_CARRIER_PLAN.md`](SMOOTH_CARRIER_PLAN.md).
 
 ## Repository state
 

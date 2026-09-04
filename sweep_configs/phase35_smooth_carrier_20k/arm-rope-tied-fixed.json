@@ -1,0 +1,6 @@
+{
+  "base_config": "_base.json",
+  "run_name": "phase35-rope-tied-fixed-seed123-s20000-h768d8",
+  "use_rope": true,
+  "qk_preprojection": {"enabled": true, "mode": "tied_scalar", "smooth_rank": 4}
+}
