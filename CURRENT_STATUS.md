@@ -104,7 +104,10 @@ Phase 35 is a one-seed 20k screen of rank-4 smooth carrier amplitude/phase.
 It crosses a nested tied-amplitude, tied-polar, and split-Q/K-polar ladder with
 fixed RoPE and NoPE. It reports both loss and functional optimization health.
 There is no Phase-34 seed expansion because no frequency candidate cleared its
-gate. See [`SMOOTH_CARRIER_PLAN.md`](SMOOTH_CARRIER_PLAN.md).
+gate. All eight full-size 50-step preflights passed at 177k--187k target
+tokens/s with finite, active optimizer traces and no gradient clipping. See
+[`SMOOTH_CARRIER_PLAN.md`](SMOOTH_CARRIER_PLAN.md) and the
+[`preflight report`](results/phase35_smooth_carrier_preflight/PREFLIGHT_RESULTS.md).
 
 ## Repository state
 
@@ -118,7 +121,7 @@ gate. See [`SMOOTH_CARRIER_PLAN.md`](SMOOTH_CARRIER_PLAN.md).
   it scaled complete Q/K tensors rather than the sinusoidal carrier.
 - Sparse intervention diagnostics distinguish raw/clipped gradients, Adam
   moment behavior, actual parameter updates, and functional carrier movement.
-- The consolidated CPU suite passes 122 tests with one explicitly CUDA-gated
+- The consolidated CPU suite passes 124 tests with one explicitly CUDA-gated
   skip. A 12-step compiled-bf16 optimizer-monitor smoke passed on an RTX 5090;
   all five scheduled traces were finite. All eleven retained carrier/backbone
   cases also pass eager and compiled bf16 forward/backward. Compact evidence is in
