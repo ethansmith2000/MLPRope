@@ -11,6 +11,9 @@ Completed:
   recorded in provenance commit `c8362c3`.
 - Closed dynamic-RoPE, rotary-clock, EMA, residual/write, and position-gain
   paths were removed from the runtime and dedicated scripts/configs.
+- After the Phase 33/35 provenance commits, the pre-Q/K split-Q/K, phase, and
+  free per-pair modes were also removed. The active adapter is now
+  `tied_scalar` or `tied_smooth_amplitude`.
 - Disabled/fixed compatibility validators remain for understandable failures
   from archived resolved configs.
 - The retained config corpus, CPU suite, and eager/compiled bf16 CUDA smoke all
@@ -24,10 +27,10 @@ Completed:
 Do not combine the provenance commit and removal commit. A bisectable boundary
 is more valuable than preserving dormant compatibility in the active runtime.
 
-## Stage 1 — static pre-Q/K spectral adapter (completed)
+## Stage 1 — historical static pre-Q/K spectral adapter (completed)
 
-Extend `qk_preprojection` without introducing a separate mechanism family.
-Required modes are:
+Phase 33 extended `qk_preprojection` without introducing a separate mechanism
+family. The evaluated modes were:
 
 | Mode | Q/K coupling | Spectral granularity | Learned geometry |
 | --- | --- | --- | --- |
@@ -55,6 +58,10 @@ All four modes and the listed invariants now pass the CPU suite and claimed-GPU
 eager/compiled bf16 smoke. The implementation uses `P-1` orthonormal zero-sum
 coordinates for `P` log-amplitude deltas, so global and spectral amplitude are
 identifiable rather than merely mean-centered in the forward pass.
+
+These implementation details describe the historical test surface. After the
+null long-horizon results and the Phase 35 smooth follow-up, only the tied scalar
+and tied smooth-amplitude modes remain executable.
 
 ## Stage 2 — long-run operational safeguards (completed)
 

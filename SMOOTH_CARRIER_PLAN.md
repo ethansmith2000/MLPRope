@@ -2,6 +2,10 @@
 
 _Completed protocol and result, 2026-09-04._
 
+_Historical implementation note: phase and Q/K-split modes were removed from
+the active runtime after this screen. The configs and result report remain the
+durable record._
+
 ## Question
 
 Can a few coherent spectral degrees of freedom improve the tied pre-Q/K

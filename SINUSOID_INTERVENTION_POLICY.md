@@ -83,9 +83,9 @@ small endpoint advantage, but its late advantage was collapsing and learned
 RoPE is outside the active architectural boundary.
 
 Consequently the default anchor remains the fixed tied pre-Q/K carrier with
-standard RoPE. Free pairwise carrier amplitude/phase variants remain controlled
-ablations rather than established improvements. Dynamic frequency and
-arbitrary tokenwise warp remain closed.
+standard RoPE. Free pairwise carrier amplitude/phase variants are historical
+ablations rather than active modes. Dynamic frequency and arbitrary tokenwise
+warp remain closed.
 
 Phase 35 then tested a rank-4 smooth, zero-mean spectral transform while
 retaining the learned per-layer scalar gate. Smooth amplitude passed its
@@ -94,6 +94,13 @@ below the `0.003` practical threshold). Phase was null under both backbones;
 separate Q/K transforms were subthreshold. The NoPE amplitude arm remained
 `0.037168` worse than matched amplitude+RoPE, so it is a conditional result for
 RoPE-free work rather than a replacement for the default backbone.
+
+The active pre-Q/K runtime therefore contains only a shared scalar carrier and
+its tied rank-4 smooth-amplitude extension. Phase and Q/K-split implementations
+were removed after the Phase 35 provenance commit. This is an evidence-based
+implementation prune, not a claim that those taxonomy axes are impossible;
+their protocols and results remain available if a genuinely new hypothesis
+warrants recovering them from history.
 
 ## Optimization-aware evaluation
 

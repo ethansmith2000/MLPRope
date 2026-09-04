@@ -70,32 +70,21 @@ remains materially useful on top of the carrier for seed 123. That is strong
 long-horizon evidence for the mechanism comparison, but it is not yet a
 multi-seed or compute-optimal scaling result.
 
-## Implemented static adapter
+## Active pre-Q/K adapter
 
-For Fourier pair `i`:
+The runtime now exposes only `tied_scalar` and `tied_smooth_amplitude`. Both add
+one shared sinusoidal carrier before the Q and K projections; `W_q` and `W_k`
+still learn separate reads. The smooth mode adds rank-4, unit-RMS DCT
+log-amplitude coordinates over the frequency-pair axis. Its basis omits the
+constant mode, so the learned scalar gate controls global strength without a
+scale gauge. Its zero-coordinate state exactly equals `tied_scalar`.
 
-```text
-A_i^q = a_i^q R(phi_i^q)
-A_i^k = a_i^k R(phi_i^k)
-q = W_q(x + A_q z(p))
-k = W_k(x + A_k z(p))
-```
-
-Test a nested ladder: tied scalar, separate Q/K scalars, separate Q/K pairwise
-amplitudes, then separate pairwise amplitudes and phases. Initialize at
-`a=1, phi=0` so every new variant exactly matches the current pre-Q/K carrier.
-
-This ladder is now implemented as `qk_preprojection.mode`. Pairwise amplitudes
-use an orthonormal zero-sum log-amplitude basis, making their geometric-mean
-scale exactly one and leaving the separate global Q/K gains identifiable. At
-model width 64 the four modes use 1, 2, 64, and 128 parameters per layer.
-All adapter state with angular or scale meaning stays fp32 under bf16/fp16
-module conversion.
-
-The retained smooth modes add four unit-RMS DCT coordinates over log-frequency
-index for tied amplitude, tied amplitude+phase, or split-Q/K amplitude+phase.
-Their zero-coordinate state exactly matches the tied scalar carrier, and their
-amplitude basis omits the constant mode so it cannot duplicate the scalar gate.
+The Phase 33 split-scalar/free-pair ladder and Phase 35 phase/QK-split modes are
+preserved in configs and result reports but removed from active execution.
+Enabled historical modes fail with a direct migration message; disabled
+archival blocks canonicalize to `tied_scalar`. This removes separate Q/K gates,
+phase tensors, and full per-pair tables from the model while retaining the only
+shape variant with positive evidence.
 
 ## Phase 34 conclusion
 
@@ -133,9 +122,9 @@ material effect. See the
   it scaled complete Q/K tensors rather than the sinusoidal carrier.
 - Sparse intervention diagnostics distinguish raw/clipped gradients, Adam
   moment behavior, actual parameter updates, and functional carrier movement.
-- The consolidated CPU suite passes 124 tests with one explicitly CUDA-gated
+- The consolidated CPU suite passes 121 tests with one explicitly CUDA-gated
   skip. A 12-step compiled-bf16 optimizer-monitor smoke passed on an RTX 5090;
-  all five scheduled traces were finite. All eleven retained carrier/backbone
+  all five scheduled traces were finite. All ten retained carrier/backbone
   cases also pass eager and compiled bf16 forward/backward. Compact evidence is in
   `results/carrier_optimization_monitor_smoke/`.
 - Phase 33 operational preflights passed on all six h768/d8 arms at

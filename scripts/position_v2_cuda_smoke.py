@@ -118,27 +118,16 @@ CASES = {
         "use_rope": False,
         "qk_preprojection_config": preprojection("tied_scalar"),
     },
-    "preprojection_split_scalar_rope": {
-        "qk_preprojection_config": preprojection("split_scalar"),
-    },
     "preprojection_tied_smooth_amplitude_rope": {
         "qk_preprojection_config": preprojection("tied_smooth_amplitude"),
     },
-    "preprojection_tied_smooth_polar_rope": {
-        "qk_preprojection_config": preprojection("tied_smooth_polar"),
-    },
-    "preprojection_split_smooth_polar_rope": {
-        "qk_preprojection_config": preprojection("split_smooth_polar"),
-    },
-    "preprojection_pair_amplitude_rope": {
-        "qk_preprojection_config": preprojection("split_pair_amplitude"),
-    },
-    "preprojection_pair_polar_rope": {
-        "qk_preprojection_config": preprojection("split_pair_polar"),
+    "preprojection_tied_smooth_amplitude_no_rope": {
+        "use_rope": False,
+        "qk_preprojection_config": preprojection("tied_smooth_amplitude"),
     },
     "preprojection_addrope": {
         "qk_config": additive_qk(),
-        "qk_preprojection_config": preprojection("split_pair_polar"),
+        "qk_preprojection_config": preprojection("tied_scalar"),
         "qk_norm_mode": "method_aware_rms",
     },
 }

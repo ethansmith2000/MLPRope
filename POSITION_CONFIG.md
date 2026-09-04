@@ -107,10 +107,7 @@ training and its forward value does not read the sequence.
 ```yaml
 qk_preprojection:
   enabled: false
-  mode: tied_scalar     # tied_scalar | split_scalar |
-                        # tied_smooth_amplitude | tied_smooth_polar |
-                        # split_smooth_polar |
-                        # split_pair_amplitude | split_pair_polar
+  mode: tied_scalar     # tied_scalar | tied_smooth_amplitude
   basis_dim: null       # resolves to model width; other widths are rejected
   theta: null           # resolves to rope_theta
   gate_init: 1.0
@@ -136,49 +133,31 @@ and the residual stream are untouched. It may be used alone, with fixed RoPE,
 or together with AddRoPE. The latter combination is supported for controlled
 factorials even though Phase 30 found the two additive routes sub-additive.
 
-The modes include a low-rank smooth ladder and the historical free-pair
-controls:
+The active modes are deliberately small and tied across Q/K:
 
 | Mode | Global gains | Pair amplitudes | Pair phases |
 | --- | ---: | ---: | ---: |
 | `tied_scalar` | one shared | fixed | fixed |
 | `tied_smooth_amplitude` | one shared | tied smooth | fixed |
-| `tied_smooth_polar` | one shared | tied smooth | tied smooth |
-| `split_scalar` | separate Q/K | fixed | fixed |
-| `split_smooth_polar` | separate Q/K | separate smooth | separate smooth |
-| `split_pair_amplitude` | separate Q/K | separate Q/K | fixed |
-| `split_pair_polar` | separate Q/K | separate Q/K | separate Q/K |
 
-For branch `b` and Fourier pair `i`, the pairwise modes apply
+For Fourier pair `i`, the smooth mode applies
 
 ```text
-A_i^b = g_b exp(delta_i^b) R(phi_i^b).
+A_i = g exp(delta_i) I,  sum_i delta_i = 0.
 ```
 
-The spectral log-amplitude vector is represented with `P-1` coordinates in an
-orthonormal zero-sum basis. Consequently
-`sum_i delta_i=0` and the spectral factor has geometric mean one: `g_b`
-controls global carrier strength without a scale gauge, while `delta_i`
-redistributes it across frequencies. All modes initialize at `g=gate_init`,
-`delta=0`, and `phi=0`; with the default `gate_init=1`, every rung is exactly
-the original carrier.
+The `smooth_rank` coordinates use orthogonal, unit-RMS DCT-II modes over Fourier
+pair index, which is uniformly spaced in log frequency. Omitting the constant
+mode makes every column zero-mean: `g` controls global carrier strength and
+`delta_i` only redistributes it across frequencies. Unit-RMS scaling makes a
+coordinate's per-band functional effect independent of model width. At rank 4
+the smooth mode has five parameters per layer including the global gain, and
+its zero-coordinate initialization exactly equals `tied_scalar`.
 
-Smooth modes instead use `smooth_rank` orthogonal, unit-RMS DCT-II modes over Fourier
-pair index, which is uniformly spaced in log frequency. Amplitude omits the
-constant DCT mode, preserving the same zero-mean/no-scale-gauge invariant;
-phase includes the constant and lowest varying modes. Unit-RMS scaling makes a
-coordinate's per-band functional effect independent of model width; an
-L2-normalized basis would silently shrink it by `1/sqrt(P)`, which Adam does
-not repair in the forward pass. `tied_smooth_*` applies
-one transform to both branches, while `split_smooth_polar` gives Q and K
-separate coordinates. At the default rank 4 this adds only 5, 9, or 18
-parameters per layer including global gains.
-
-The small gain, log-amplitude, phase, and zero-sum-basis state remains fp32
-under module-wide bf16/fp16 conversion. The completed carrier is cast to the
-activation dtype before addition to `x`. `learnable_gate=false` freezes only
-the global gain; pair amplitude/phase parameters implied by the selected mode
-remain trainable.
+The gain, log-amplitude coordinates, and DCT basis remain fp32 under module-wide
+bf16/fp16 conversion. The completed carrier is cast to the activation dtype
+before addition to `x`. `learnable_gate=false` freezes only the global gain;
+the smooth amplitude coordinates remain trainable when that mode is selected.
 
 ## Additive Q/K channel
 
@@ -311,6 +290,13 @@ Historical top-level `rope_frequency` and `rope_frequency_mode` are accepted
 only when fixed, then removed from the resolved configuration. Any learned form
 fails with a migration message directing frequency experiments to
 `qk_preprojection.frequency`.
+
+The historical pre-Q/K modes `split_scalar`, `split_pair_amplitude`,
+`split_pair_polar`, `tied_smooth_polar`, and `split_smooth_polar` were removed
+after their Phase 33/35 increments were null or below the practical gate. An
+enabled block using one of them raises a migration error; a disabled archival
+block is accepted and canonicalized to `tied_scalar` because it has no model
+effect. The historical configs and result reports remain in the repository.
 
 The former `conditioning.kind=adaptive_gain` is also rejected: it multiplied
 the complete Q/K tensors rather than transforming the sinusoidal carrier.

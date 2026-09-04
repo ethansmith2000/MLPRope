@@ -1,6 +1,6 @@
 # MLPRope research and repository consolidation
 
-_Decision record, 2026-09-03; amended 2026-09-04 after Phases 33 and 34.
+_Decision record, 2026-09-03; amended 2026-09-04 after Phases 33--35.
 Historical protocols, configs, and the experiment journal remain evidence, not
 current priorities. The current architecture is defined in
 [`SINUSOID_INTERVENTION_POLICY.md`](SINUSOID_INTERVENTION_POLICY.md)._
@@ -20,17 +20,18 @@ The active mechanism families are:
    initialization;
 3. a sinusoidal signal injected only before the Q/K projections, optionally
    followed by fixed RoPE; and
-4. carrier-only amplitude, phase, or globally coherent frequency coordinates.
+4. tied carrier-only amplitude or globally coherent frequency coordinates.
 
 Dynamic and learned RoPE frequency, tokenwise rotary phase, cumulative rotary
 clocks, and EMA controllers are closed as active directions. The Phase-34
 carrier frequency bank remains only as a compact research coordinate and
 optimization diagnostic; it did not earn promotion.
 
-## Implemented preprojection adapter
+## Historical preprojection ladder
 
-_Implemented 2026-09-03. The configuration modes are `tied_scalar`,
-`split_scalar`, `split_pair_amplitude`, and `split_pair_polar`._
+_Implemented 2026-09-03 and evaluated in Phases 33/35. The split, free-pair,
+and phase variants were removed from active execution after their null or
+subthreshold results; this section records the tested design._
 
 For Fourier pair `i`, let
 
@@ -69,6 +70,12 @@ a_i = g * exp(delta_i),  sum_i delta_i = 0.
 Here `g` controls total carrier strength and `P-1` independent coordinates
 generate the centered `delta_i` values that redistribute strength across the
 spectrum. The initialization is `g=1`, `delta=0`, and `phi=0`.
+
+The active implementation is now only `tied_scalar` plus
+`tied_smooth_amplitude`. The latter uses a rank-4, zero-mean, unit-RMS DCT basis
+over log-frequency index and is retained because it materially helped the NoPE
+carrier in Phase 35. Both modes feed the same carrier to Q and K; their existing
+projection matrices provide separate learned reads.
 
 ## Evidence motivating the focus
 
@@ -156,7 +163,7 @@ runtime does not need to execute every historical configuration.
 - fixed RoPE and NoPE controls;
 - frozen Fourier basis utilities;
 - static AddRoPE and its promoted mapped-carrier reference;
-- the current pre-Q/K sinusoid and the new constrained Q/K spectral adapter;
+- the tied pre-Q/K sinusoid and its smooth spectral-amplitude adapter;
 - the narrowly scoped carrier-only static frequency bank used by Phase 34;
 - optimizer-health traces at parameter-gradient, Adam-state, realized-update,
   and functional-carrier levels;
@@ -178,6 +185,8 @@ not part of the next sweep. Reconsider it only after the static consolidation.
 - residual-stream positional channels and attention-output write channels,
   which were already retired experimentally;
 - position-only Q/K gain machinery after preserving its attribution result;
+- pre-Q/K split-Q/K, phase, and fully free per-pair adapters after preserving
+  the Phase 33/35 results;
 - launch, preparation, and smoke code used only by those removed mechanisms.
 
 For removed top-level config blocks, prefer a small compatibility validator

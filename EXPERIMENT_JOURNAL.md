@@ -3228,3 +3228,24 @@ results rather than inactive coordinates. No automatic seed or 200k expansion
 is planned; NoPE amplitude remains conditional on a specifically RoPE-free
 research objective. Durable results are in
 `results/phase35_smooth_carrier_20k/`.
+
+## 2026-09-04 — Post-Phase-35 pre-Q/K runtime consolidation
+
+The active pre-Q/K adapter was reduced to the two modes supported by the
+completed evidence: `tied_scalar` and `tied_smooth_amplitude`. The historical
+`split_scalar`, `split_pair_amplitude`, `split_pair_polar`,
+`tied_smooth_polar`, and `split_smooth_polar` implementations were removed.
+This deletes separate Q/K gates, phase coordinates, full per-pair tables, and
+their phase diagnostics while retaining the shared rank-4, zero-mean,
+unit-RMS DCT amplitude profile.
+
+Enabled configs naming a removed mode now fail with a migration message that
+points to the retained alternatives and git history. Disabled archival blocks
+canonicalize to `tied_scalar`, since their mode has no model effect. Historical
+sweep configs, analysis scripts, and durable result reports were not deleted.
+
+The four-module CPU suite passes 121 tests with one intentional CUDA-only skip.
+The ten-case retained matrix also passes two optimizer steps in both eager and
+compiled bf16 through `gpu-claim`, including scalar and smooth carriers with
+fixed RoPE and NoPE and the supported AddRoPE combination. All losses and
+gradients were finite, and the GPU claim was released normally.

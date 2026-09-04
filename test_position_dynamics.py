@@ -201,89 +201,14 @@ class QKPreprojectionTest(unittest.TestCase):
         torch.testing.assert_close(actual.q, expected.q, rtol=0, atol=0)
         torch.testing.assert_close(actual.k, expected.k, rtol=0, atol=0)
 
-    def test_split_scalar_can_separate_q_and_k(self):
+    def test_smooth_amplitude_is_tied_and_has_no_scale_gauge(self):
         module = QKPreprojectionPosition(
-            _config("split_scalar"),
-            model_dim=8,
-            extent=16,
-        )
-        with torch.no_grad():
-            module.q_gate.fill_(1.25)
-            module.k_gate.fill_(0.75)
-        output = module(9, dtype=torch.float32)
-        self.assertFalse(torch.allclose(output.q, output.k))
-        loss = output.q.square().sum() + 2.0 * output.k.square().sum()
-        loss.backward()
-        self.assertGreater(module.q_gate.grad.abs().item(), 0)
-        self.assertGreater(module.k_gate.grad.abs().item(), 0)
-        self.assertNotEqual(module.q_gate.grad.item(), module.k_gate.grad.item())
-
-    def test_pair_polar_rotation_matches_direct_trigonometry(self):
-        module = QKPreprojectionPosition(
-            _config("split_pair_polar"),
-            model_dim=8,
-            extent=16,
-        )
-        q_phase = torch.tensor([0.3, -0.2, 0.7, -0.5])
-        k_phase = torch.tensor([-0.1, 0.4, -0.6, 0.2])
-        with torch.no_grad():
-            module.q_gate.fill_(1.2)
-            module.k_gate.fill_(0.8)
-            module.q_phase.copy_(q_phase)
-            module.k_phase.copy_(k_phase)
-        output = module(7, dtype=torch.float32)
-        base = module.basis(7).reshape(7, 4, 2)
-
-        def expected(gain, phase):
-            real, imag = base.unbind(dim=-1)
-            return torch.stack(
-                (
-                    gain * (real * phase.cos() - imag * phase.sin()),
-                    gain * (real * phase.sin() + imag * phase.cos()),
-                ),
-                dim=-1,
-            ).flatten(-2)
-
-        torch.testing.assert_close(output.q, expected(1.2, q_phase))
-        torch.testing.assert_close(output.k, expected(0.8, k_phase))
-
-    def test_pairwise_amplitude_factorization_has_no_scale_gauge(self):
-        module = QKPreprojectionPosition(
-            _config("split_pair_amplitude"),
-            model_dim=8,
-            extent=16,
-        )
-        coordinates = torch.tensor([0.4, -0.7, 0.2])
-        with torch.no_grad():
-            module.q_gate.fill_(2.0)
-            module.q_log_amplitude_coordinates.copy_(coordinates)
-        q_delta, _ = module.log_amplitude_deltas()
-        torch.testing.assert_close(q_delta.sum(), torch.tensor(0.0), atol=1e-7, rtol=0)
-        gram = module.zero_sum_basis.T @ module.zero_sum_basis
-        torch.testing.assert_close(gram, torch.eye(3), atol=1e-6, rtol=1e-6)
-        effective_amplitude = module.q_gate.float() * q_delta.exp()
-        geometric_mean = effective_amplitude.log().mean().exp()
-        torch.testing.assert_close(
-            geometric_mean,
-            module.q_gate.float(),
-            atol=1e-6,
-            rtol=1e-6,
-        )
-
-    def test_smooth_bases_are_orthogonal_unit_rms_and_have_no_scale_gauge(self):
-        module = QKPreprojectionPosition(
-            _config("tied_smooth_polar", smooth_rank=2),
+            _config("tied_smooth_amplitude", smooth_rank=2),
             model_dim=8,
             extent=16,
         )
         torch.testing.assert_close(
             module.smooth_amplitude_basis.T @ module.smooth_amplitude_basis,
-            4 * torch.eye(2),
-            atol=1e-6,
-            rtol=1e-6,
-        )
-        torch.testing.assert_close(
-            module.smooth_phase_basis.T @ module.smooth_phase_basis,
             4 * torch.eye(2),
             atol=1e-6,
             rtol=1e-6,
@@ -300,19 +225,10 @@ class QKPreprojectionTest(unittest.TestCase):
             atol=1e-6,
             rtol=1e-6,
         )
-        torch.testing.assert_close(
-            module.smooth_phase_basis.square().mean(dim=0),
-            torch.ones(2),
-            atol=1e-6,
-            rtol=1e-6,
-        )
         with torch.no_grad():
             module.log_amplitude_coordinates.copy_(torch.tensor([0.4, -0.2]))
-            module.phase_coordinates.copy_(torch.tensor([0.3, 0.1]))
         q_delta, k_delta = module.log_amplitude_deltas()
-        q_phase, k_phase = module.phase_values()
         torch.testing.assert_close(q_delta, k_delta, rtol=0, atol=0)
-        torch.testing.assert_close(q_phase, k_phase, rtol=0, atol=0)
         torch.testing.assert_close(
             q_delta.mean(),
             torch.tensor(0.0),
@@ -320,64 +236,27 @@ class QKPreprojectionTest(unittest.TestCase):
             rtol=0,
         )
 
-    def test_split_smooth_polar_receives_distinct_qk_gradients(self):
+        output = module(9, dtype=torch.float32)
+        torch.testing.assert_close(output.q, output.k, rtol=0, atol=0)
+
+    def test_smooth_amplitude_coordinates_receive_gradients(self):
         torch.manual_seed(4)
         module = QKPreprojectionPosition(
-            _config("split_smooth_polar", smooth_rank=2),
+            _config("tied_smooth_amplitude", smooth_rank=2),
             model_dim=8,
             extent=16,
         )
         output = module(9, dtype=torch.float32)
-        loss = (
-            (output.q * torch.randn_like(output.q)).sum()
-            + (output.k * torch.randn_like(output.k)).sum()
-        )
+        loss = (output.q * torch.randn_like(output.q)).sum()
         loss.backward()
-        for parameter in (
-            module.q_log_amplitude_coordinates,
-            module.k_log_amplitude_coordinates,
-            module.q_phase,
-            module.k_phase,
-        ):
+        for parameter in (module.gate, module.log_amplitude_coordinates):
             self.assertIsNotNone(parameter.grad)
             self.assertGreater(parameter.grad.abs().sum().item(), 0)
-        self.assertFalse(torch.allclose(module.q_phase.grad, module.k_phase.grad))
-
-    def test_pair_parameters_receive_distinct_qk_gradients(self):
-        torch.manual_seed(0)
-        module = QKPreprojectionPosition(
-            _config("split_pair_polar"),
-            model_dim=8,
-            extent=16,
-        )
-        output = module(9, dtype=torch.float32)
-        q_probe = torch.randn_like(output.q)
-        k_probe = torch.randn_like(output.k)
-        loss = (output.q * q_probe).sum() + (output.k * k_probe).sum()
-        loss.backward()
-        for parameter in (
-            module.q_gate,
-            module.k_gate,
-            module.q_log_amplitude_coordinates,
-            module.k_log_amplitude_coordinates,
-            module.q_phase,
-            module.k_phase,
-        ):
-            self.assertIsNotNone(parameter.grad)
-            self.assertGreater(parameter.grad.abs().sum().item(), 0)
-        self.assertFalse(
-            torch.allclose(module.q_phase.grad, module.k_phase.grad)
-        )
 
     def test_mode_parameter_counts_are_nested_and_exact(self):
         expected = {
             "tied_scalar": 1,
             "tied_smooth_amplitude": 3,
-            "tied_smooth_polar": 5,
-            "split_scalar": 2,
-            "split_smooth_polar": 10,
-            "split_pair_amplitude": 8,
-            "split_pair_polar": 16,
         }
         for mode, count in expected.items():
             with self.subTest(mode=mode):
@@ -403,7 +282,7 @@ class QKPreprojectionTest(unittest.TestCase):
 
     def test_reset_restores_every_anchor_parameter(self):
         module = QKPreprojectionPosition(
-            _config("split_pair_polar", gate_init=0.25),
+            _config("tied_smooth_amplitude", gate_init=0.25),
             model_dim=8,
             extent=16,
         )
@@ -411,26 +290,22 @@ class QKPreprojectionTest(unittest.TestCase):
             for parameter in module.parameters():
                 parameter.fill_(4.0)
         module.reset_output_parameters()
-        self.assertEqual(module.q_gate.item(), 0.25)
-        self.assertEqual(module.k_gate.item(), 0.25)
-        self.assertEqual(module.q_log_amplitude_coordinates.count_nonzero(), 0)
-        self.assertEqual(module.k_log_amplitude_coordinates.count_nonzero(), 0)
-        self.assertEqual(module.q_phase.count_nonzero(), 0)
-        self.assertEqual(module.k_phase.count_nonzero(), 0)
+        self.assertEqual(module.gate.item(), 0.25)
+        self.assertEqual(module.log_amplitude_coordinates.count_nonzero(), 0)
 
-    def test_pairwise_fp32_carrier_survives_bf16_module_conversion(self):
+    def test_smooth_fp32_carrier_survives_bf16_module_conversion(self):
         module = QKPreprojectionPosition(
-            _config("split_pair_polar"),
+            _config("tied_smooth_amplitude"),
             model_dim=8,
             extent=1024,
         )
         with torch.no_grad():
-            module.q_phase.copy_(torch.tensor([0.1, -0.2, 0.3, -0.4]))
+            module.log_amplitude_coordinates.copy_(torch.tensor([0.1, -0.2]))
         reference = module(1024, dtype=torch.float32).q.to(torch.bfloat16)
         parameter_ids = {name: id(parameter) for name, parameter in module.named_parameters()}
         module.bfloat16()
         self.assertEqual(module.basis.basis.dtype, torch.float32)
-        self.assertEqual(module.zero_sum_basis.dtype, torch.float32)
+        self.assertEqual(module.smooth_amplitude_basis.dtype, torch.float32)
         self.assertEqual(
             {name: id(parameter) for name, parameter in module.named_parameters()},
             parameter_ids,
@@ -488,6 +363,25 @@ class QKPreprojectionTest(unittest.TestCase):
                 rope_theta=10_000.0,
             )
 
+    def test_removed_modes_reject_enabled_but_canonicalize_disabled(self):
+        removed_modes = {
+            "tied_smooth_polar",
+            "split_scalar",
+            "split_smooth_polar",
+            "split_pair_amplitude",
+            "split_pair_polar",
+        }
+        for mode in sorted(removed_modes):
+            with self.subTest(mode=mode):
+                with self.assertRaisesRegex(ValueError, "removed.*Phase 33/35"):
+                    _config(mode)
+                normalized = normalize_qk_preprojection_config(
+                    {"enabled": False, "mode": mode},
+                    model_dim=8,
+                    rope_theta=10_000.0,
+                )
+                self.assertEqual(normalized["mode"], "tied_scalar")
+
 
 class IntegratedPreprojectionTest(unittest.TestCase):
     @staticmethod
@@ -520,7 +414,8 @@ class IntegratedPreprojectionTest(unittest.TestCase):
             qk_config=additive,
             qk_preprojection_config={
                 "enabled": True,
-                "mode": "split_pair_polar",
+                "mode": "tied_smooth_amplitude",
+                "smooth_rank": 2,
             },
         ).eval()
         attention = combined.blocks[0].attn
@@ -531,14 +426,15 @@ class IntegratedPreprojectionTest(unittest.TestCase):
         output = combined(torch.randint(0, 32, (2, 10)))
         self.assertEqual(output.shape, (2, 10, 32))
         counts = count_parameters(combined)
-        self.assertEqual(counts["qk_preprojection_params"], 32)
+        self.assertEqual(counts["qk_preprojection_params"], 3)
         self.assertGreater(counts["qk_position_params"], 0)
 
     def test_diagnostics_report_adapter_health(self):
         model = self._model(
             qk_preprojection_config={
                 "enabled": True,
-                "mode": "split_pair_polar",
+                "mode": "tied_smooth_amplitude",
+                "smooth_rank": 2,
             }
         )
         metrics, _ = model.position_diagnostics(sequence_length=8)
@@ -547,7 +443,7 @@ class IntegratedPreprojectionTest(unittest.TestCase):
         self.assertEqual(metrics[f"{prefix}/gate_k"], 1.0)
         self.assertEqual(metrics[f"{prefix}/input_qk_diff_rms"], 0.0)
         self.assertEqual(metrics[f"{prefix}/log_amplitude_q_rms"], 0.0)
-        self.assertEqual(metrics[f"{prefix}/phase_q_rms"], 0.0)
+        self.assertNotIn(f"{prefix}/phase_q_rms", metrics)
 
     def test_modes_round_trip_and_receive_distinct_run_names(self):
         names = set()
@@ -794,6 +690,10 @@ class IntegratedPreprojectionTest(unittest.TestCase):
         removed = {
             "position_gain": {"enabled": True},
             "rotary_clock": {"enabled": True},
+            "qk_preprojection": {
+                "enabled": True,
+                "mode": "split_pair_polar",
+            },
         }
         with tempfile.TemporaryDirectory() as directory:
             for key, value in removed.items():
