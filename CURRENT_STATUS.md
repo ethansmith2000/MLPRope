@@ -23,6 +23,12 @@ intervention uses either immutable standard RoPE or NoPE, while learned
 amplitude, phase, or frequency acts only on the sinusoidal carrier. AddRoPE no
 longer implicitly replaces RoPE.
 
+Phase 35 is complete. Rank-4 smooth spectral amplitude helped the carrier
+materially under NoPE (`-0.010644`) but remained `0.037168` worse than its
+matched RoPE model. Under RoPE the amplitude gain was a smaller `-0.002604`,
+below the predeclared practical gate. Learned phase and separate Q/K transforms
+did not earn promotion. There is no automatic follow-up run queued.
+
 ## Strongest completed evidence
 
 | Result | Protocol | Finding |
@@ -39,6 +45,8 @@ longer implicitly replaces RoPE.
 | split/pair amplitude/pair phase ladder | 200k, 1 paired seed | all within about `0.001` |
 | shared log-frequency carrier vs fixed carrier | 200k, 1 paired seed | `+0.000861`, null |
 | horizon-frequency carrier vs fixed carrier | 200k, 1 paired seed | `+0.001341`, slightly worse |
+| smooth amplitude vs scalar carrier, NoPE | 20k, 1 paired seed | `-0.010644`, gate pass |
+| smooth amplitude vs scalar carrier, RoPE | 20k, 1 paired seed | `-0.002604`, below gate |
 
 The EMA result is not being promoted. Its estimated equal-wall-clock advantage
 is only about `-0.0015`, and per-head/per-dimension decays did not improve over
@@ -84,6 +92,11 @@ model width 64 the four modes use 1, 2, 64, and 128 parameters per layer.
 All adapter state with angular or scale meaning stays fp32 under bf16/fp16
 module conversion.
 
+The retained smooth modes add four unit-RMS DCT coordinates over log-frequency
+index for tied amplitude, tied amplitude+phase, or split-Q/K amplitude+phase.
+Their zero-coordinate state exactly matches the tied scalar carrier, and their
+amplitude basis omits the constant mode so it cannot duplicate the scalar gate.
+
 ## Phase 34 conclusion
 
 All five historical Phase-34 arms reached 200k. The fixed carrier finished at
@@ -100,14 +113,13 @@ It is preserved as historical evidence, not retained as active machinery. See
 
 ## Next execution
 
-Phase 35 is a one-seed 20k screen of rank-4 smooth carrier amplitude/phase.
-It crosses a nested tied-amplitude, tied-polar, and split-Q/K-polar ladder with
-fixed RoPE and NoPE. It reports both loss and functional optimization health.
-There is no Phase-34 seed expansion because no frequency candidate cleared its
-gate. All eight full-size 50-step preflights passed at 177k--187k target
-tokens/s with finite, active optimizer traces and no gradient clipping. See
-[`SMOOTH_CARRIER_PLAN.md`](SMOOTH_CARRIER_PLAN.md) and the
-[`preflight report`](results/phase35_smooth_carrier_preflight/PREFLIGHT_RESULTS.md).
+No GPU experiment is automatically next. The default remains the scalar
+pre-Q/K carrier with standard fixed RoPE. Phase and Q/K-untying variants can be
+shelved; smooth NoPE amplitude should be extended only for a deliberate
+RoPE-free research question. Otherwise the appropriate next step is repository
+consolidation or a new hypothesis with an independent reason to expect a
+material effect. See the
+[`Phase-35 result`](results/phase35_smooth_carrier_20k/PHASE35_RESULTS.md).
 
 ## Repository state
 
@@ -129,6 +141,10 @@ tokens/s with finite, active optimizer traces and no gradient clipping. See
 - Phase 33 operational preflights passed on all six h768/d8 arms at
   185.6k-190.8k tokens/s and 5.08-5.36 GiB reserved memory. The real
   Accelerate checkpoint save/prune/resume integration also passed.
+- All eight Phase-35 20k arms completed from clean source commit `cee3214`.
+  Throughput was 178.9k--184.5k target tokens/s and peak reserved memory was
+  5.22--5.36 GiB. Paired final losses, every development point, compact DCT
+  profiles, and optimizer-health summaries are preserved in `results/`.
 - The 50 intermediate `step_*` checkpoints were removed after validating all
   18 parent runs. This freed 92.8GB (87GiB). The 18 final weights, completion
   markers, configs, metrics, summaries, final evaluation details, position

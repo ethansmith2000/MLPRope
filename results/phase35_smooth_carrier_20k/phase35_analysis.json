@@ -1,0 +1,4225 @@
+{
+  "arms": {
+    "nope-amplitude": {
+      "carrier_profiles": {
+        "dct_coordinates_by_layer": {
+          "layer_00": {
+            "gate_k": 1.1693836450576782,
+            "gate_q": 1.1693836450576782,
+            "log_amplitude_k_dct_coordinates": [
+              -0.01852237619459629,
+              -0.17841780185699463,
+              0.0243560578674078,
+              0.0350835882127285
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.8403973579406738,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 0.8629590272903442,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.026846430603918,
+            "log_amplitude_q_dct_coordinates": [
+              -0.01852237619459629,
+              -0.17841780185699463,
+              0.0243560578674078,
+              0.0350835882127285
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.8403973579406738,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 0.8629590272903442,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.026846430603918,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_01": {
+            "gate_k": 0.9647513628005981,
+            "gate_q": 0.9647513628005981,
+            "log_amplitude_k_dct_coordinates": [
+              -0.11255355924367905,
+              -0.2827748656272888,
+              -0.1280083805322647,
+              0.154988095164299
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.6362094283103943,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 0.9446396827697754,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.4847935926986986,
+            "log_amplitude_q_dct_coordinates": [
+              -0.11255355924367905,
+              -0.2827748656272888,
+              -0.1280083805322647,
+              0.154988095164299
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.6362094283103943,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 0.9446396827697754,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.4847935926986986,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_02": {
+            "gate_k": 1.5951805114746094,
+            "gate_q": 1.5951805114746094,
+            "log_amplitude_k_dct_coordinates": [
+              0.5553911328315735,
+              -0.06880103051662445,
+              -0.2582121789455414,
+              0.02358367294073105
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.7084953784942627,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 0.5171099901199341,
+            "log_amplitude_k_low_to_high_frequency_ratio": 0.30266982084298955,
+            "log_amplitude_q_dct_coordinates": [
+              0.5553911328315735,
+              -0.06880103051662445,
+              -0.2582121789455414,
+              0.02358367294073105
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.7084953784942627,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 0.5171099901199341,
+            "log_amplitude_q_low_to_high_frequency_ratio": 0.30266982084298955,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_03": {
+            "gate_k": 1.8026583194732666,
+            "gate_q": 1.8026583194732666,
+            "log_amplitude_k_dct_coordinates": [
+              0.5860857367515564,
+              0.016680153086781502,
+              -0.16476128995418549,
+              0.12163858860731125
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.9963456392288208,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 0.5161885619163513,
+            "log_amplitude_k_low_to_high_frequency_ratio": 0.25856672901379574,
+            "log_amplitude_q_dct_coordinates": [
+              0.5860857367515564,
+              0.016680153086781502,
+              -0.16476128995418549,
+              0.12163858860731125
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.9963456392288208,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 0.5161885619163513,
+            "log_amplitude_q_low_to_high_frequency_ratio": 0.25856672901379574,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_04": {
+            "gate_k": 1.363640308380127,
+            "gate_q": 1.363640308380127,
+            "log_amplitude_k_dct_coordinates": [
+              0.16706132888793945,
+              -0.38453423976898193,
+              -0.47678983211517334,
+              -0.18392902612686157
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.7147250175476074,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 0.7000840306282043,
+            "log_amplitude_k_low_to_high_frequency_ratio": 0.9795152169576492,
+            "log_amplitude_q_dct_coordinates": [
+              0.16706132888793945,
+              -0.38453423976898193,
+              -0.47678983211517334,
+              -0.18392902612686157
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.7147250175476074,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 0.7000840306282043,
+            "log_amplitude_q_low_to_high_frequency_ratio": 0.9795152169576492,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_05": {
+            "gate_k": 0.8084509372711182,
+            "gate_q": 0.8084509372711182,
+            "log_amplitude_k_dct_coordinates": [
+              -0.3110605776309967,
+              -0.46838030219078064,
+              -0.43480637669563293,
+              0.1819026917219162
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.3670368492603302,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.1722244024276733,
+            "log_amplitude_k_low_to_high_frequency_ratio": 3.1937512671820136,
+            "log_amplitude_q_dct_coordinates": [
+              -0.3110605776309967,
+              -0.46838030219078064,
+              -0.43480637669563293,
+              0.1819026917219162
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.3670368492603302,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.1722244024276733,
+            "log_amplitude_q_low_to_high_frequency_ratio": 3.1937512671820136,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_06": {
+            "gate_k": 0.5563514232635498,
+            "gate_q": 0.5563514232635498,
+            "log_amplitude_k_dct_coordinates": [
+              -0.470608115196228,
+              -0.28968504071235657,
+              0.053536415100097656,
+              0.14258864521980286
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.4328831732273102,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.3711711168289185,
+            "log_amplitude_k_low_to_high_frequency_ratio": 3.167531568867211,
+            "log_amplitude_q_dct_coordinates": [
+              -0.470608115196228,
+              -0.28968504071235657,
+              0.053536415100097656,
+              0.14258864521980286
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.4328831732273102,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.3711711168289185,
+            "log_amplitude_q_low_to_high_frequency_ratio": 3.167531568867211,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_07": {
+            "gate_k": 0.7057496905326843,
+            "gate_q": 0.7057496905326843,
+            "log_amplitude_k_dct_coordinates": [
+              -0.264566570520401,
+              -0.28427955508232117,
+              -0.10475843399763107,
+              0.16009648144245148
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.5287370681762695,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.1335736513137817,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.143926952622646,
+            "log_amplitude_q_dct_coordinates": [
+              -0.264566570520401,
+              -0.28427955508232117,
+              -0.10475843399763107,
+              0.16009648144245148
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.5287370681762695,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.1335736513137817,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.143926952622646,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "dct_reconstruction_abs_max": 5.066394805908203e-07,
+        "effective_amplitude_max": 4.508267879486084,
+        "effective_amplitude_min": 0.18776702880859375,
+        "global_gate_max": 1.8026583194732666,
+        "global_gate_min": 0.5563514232635498,
+        "phase_abs_max": 0.0,
+        "qk_effective_amplitude_diff_rms": 0.0,
+        "qk_log_amplitude_diff_rms": 0.0,
+        "qk_phase_diff_rms": 0.0,
+        "spectral_amplitude_factor_max": 3.306053400039673,
+        "spectral_amplitude_factor_min": 0.23225530982017517,
+        "spectral_log_amplitude_delta_abs_max": 1.4599180221557617
+      },
+      "elapsed_seconds": 889.539661007002,
+      "final_holdout_loss": 3.877835589693859,
+      "optimization_health": {
+        "all_numeric_finite": true,
+        "endpoint_parameter_update_l2": 8.736580348056577e-09,
+        "function_active": true,
+        "last_active_carrier_function_step_rms": 9.03400268725818e-06,
+        "last_active_descent_update_gradient_cosine": -0.06584930419921875,
+        "last_active_gradient_clip_ratio": 1.0,
+        "last_active_parameter_update_l2": 2.442642107780557e-05,
+        "last_active_raw_gradient_l2": 0.03961200267076492,
+        "last_active_sqrt_second_moment_max_to_rms": 3.5452653871522677,
+        "last_active_step": 19000,
+        "median_descent_update_gradient_cosine": 0.4447900503873825,
+        "minimum_descent_update_gradient_cosine": -0.2405371218919754,
+        "positive_descent_update_gradient_cosine_fraction": 0.8571428571428571,
+        "sample_steps": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          32,
+          64,
+          128,
+          256,
+          512,
+          1000,
+          2000,
+          3000,
+          4000,
+          5000,
+          6000,
+          7000,
+          8000,
+          9000,
+          10000,
+          11000,
+          12000,
+          13000,
+          14000,
+          15000,
+          16000,
+          17000,
+          18000,
+          19000,
+          20000
+        ]
+      },
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76177192,
+        "position_params": 40,
+        "qk_position_params": 0,
+        "qk_preprojection_frequency_params": 0,
+        "qk_preprojection_params": 40,
+        "total": 153495976
+      },
+      "peak_reserved_mib": 5242.0,
+      "target_tokens_per_second": 183821.28101504952
+    },
+    "nope-fixed": {
+      "carrier_profiles": {
+        "dct_coordinates_by_layer": {
+          "layer_00": {
+            "gate_k": 1.2645546197891235,
+            "gate_q": 1.2645546197891235,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_01": {
+            "gate_k": 1.058250904083252,
+            "gate_q": 1.058250904083252,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_02": {
+            "gate_k": 1.9195688962936401,
+            "gate_q": 1.9195688962936401,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_03": {
+            "gate_k": 2.3300817012786865,
+            "gate_q": 2.3300817012786865,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_04": {
+            "gate_k": 1.9269694089889526,
+            "gate_q": 1.9269694089889526,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_05": {
+            "gate_k": 0.949148952960968,
+            "gate_q": 0.949148952960968,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_06": {
+            "gate_k": 0.614997386932373,
+            "gate_q": 0.614997386932373,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_07": {
+            "gate_k": 0.7442566156387329,
+            "gate_q": 0.7442566156387329,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "dct_reconstruction_abs_max": 0.0,
+        "effective_amplitude_max": 2.3300817012786865,
+        "effective_amplitude_min": 0.614997386932373,
+        "global_gate_max": 2.3300817012786865,
+        "global_gate_min": 0.614997386932373,
+        "phase_abs_max": 0.0,
+        "qk_effective_amplitude_diff_rms": 0.0,
+        "qk_log_amplitude_diff_rms": 0.0,
+        "qk_phase_diff_rms": 0.0,
+        "spectral_amplitude_factor_max": 1.0,
+        "spectral_amplitude_factor_min": 1.0,
+        "spectral_log_amplitude_delta_abs_max": 0.0
+      },
+      "elapsed_seconds": 886.4138347788248,
+      "final_holdout_loss": 3.888480051420629,
+      "optimization_health": {
+        "all_numeric_finite": true,
+        "endpoint_parameter_update_l2": 0.0,
+        "function_active": true,
+        "last_active_carrier_function_step_rms": 3.131073754047975e-06,
+        "last_active_descent_update_gradient_cosine": -0.0183715857565403,
+        "last_active_gradient_clip_ratio": 1.0,
+        "last_active_parameter_update_l2": 1.2523501936811954e-05,
+        "last_active_raw_gradient_l2": 0.019973671063780785,
+        "last_active_sqrt_second_moment_max_to_rms": 2.6590378540702915,
+        "last_active_step": 19000,
+        "median_descent_update_gradient_cosine": 0.41207003593444824,
+        "minimum_descent_update_gradient_cosine": -0.5145237445831299,
+        "positive_descent_update_gradient_cosine_fraction": 0.8571428571428571,
+        "sample_steps": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          32,
+          64,
+          128,
+          256,
+          512,
+          1000,
+          2000,
+          3000,
+          4000,
+          5000,
+          6000,
+          7000,
+          8000,
+          9000,
+          10000,
+          11000,
+          12000,
+          13000,
+          14000,
+          15000,
+          16000,
+          17000,
+          18000,
+          19000,
+          20000
+        ]
+      },
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76177160,
+        "position_params": 8,
+        "qk_position_params": 0,
+        "qk_preprojection_frequency_params": 0,
+        "qk_preprojection_params": 8,
+        "total": 153495944
+      },
+      "peak_reserved_mib": 5222.0,
+      "target_tokens_per_second": 184469.5035031804
+    },
+    "nope-polar": {
+      "carrier_profiles": {
+        "dct_coordinates_by_layer": {
+          "layer_00": {
+            "gate_k": 1.167568564414978,
+            "gate_q": 1.167568564414978,
+            "log_amplitude_k_dct_coordinates": [
+              -0.017977816984057426,
+              -0.17797386646270752,
+              0.015548605471849442,
+              0.030535859987139702
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.8381773829460144,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 0.8659365773200989,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.03311851994445,
+            "log_amplitude_q_dct_coordinates": [
+              -0.017977816984057426,
+              -0.17797386646270752,
+              0.015548605471849442,
+              0.030535859987139702
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.8381773829460144,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 0.8659365773200989,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.03311851994445,
+            "phase_k_dct_coordinates": [
+              -0.022753262892365456,
+              0.07540978491306305,
+              0.03370707482099533,
+              -0.02316250093281269
+            ],
+            "phase_q_dct_coordinates": [
+              -0.022753262892365456,
+              0.07540978491306305,
+              0.03370707482099533,
+              -0.02316250093281269
+            ]
+          },
+          "layer_01": {
+            "gate_k": 0.9672517776489258,
+            "gate_q": 0.9672517776489258,
+            "log_amplitude_k_dct_coordinates": [
+              -0.11193308234214783,
+              -0.28286823630332947,
+              -0.12946955859661102,
+              0.15262471139431
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.6362638473510742,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 0.9443997144699097,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.4842894475329413,
+            "log_amplitude_q_dct_coordinates": [
+              -0.11193308234214783,
+              -0.28286823630332947,
+              -0.12946955859661102,
+              0.15262471139431
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.6362638473510742,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 0.9443997144699097,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.4842894475329413,
+            "phase_k_dct_coordinates": [
+              -0.0009810166666284204,
+              0.05363881215453148,
+              -0.012732000090181828,
+              -0.019578026607632637
+            ],
+            "phase_q_dct_coordinates": [
+              -0.0009810166666284204,
+              0.05363881215453148,
+              -0.012732000090181828,
+              -0.019578026607632637
+            ]
+          },
+          "layer_02": {
+            "gate_k": 1.6118357181549072,
+            "gate_q": 1.6118357181549072,
+            "log_amplitude_k_dct_coordinates": [
+              0.576580286026001,
+              -0.04210822284221649,
+              -0.21464122831821442,
+              0.10596588253974915
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.8314660787582397,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 0.5061414837837219,
+            "log_amplitude_k_low_to_high_frequency_ratio": 0.2763586449424677,
+            "log_amplitude_q_dct_coordinates": [
+              0.576580286026001,
+              -0.04210822284221649,
+              -0.21464122831821442,
+              0.10596588253974915
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.8314660787582397,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 0.5061414837837219,
+            "log_amplitude_q_low_to_high_frequency_ratio": 0.2763586449424677,
+            "phase_k_dct_coordinates": [
+              0.013911710120737553,
+              0.07978660613298416,
+              0.019968973472714424,
+              -0.09235189110040665
+            ],
+            "phase_q_dct_coordinates": [
+              0.013911710120737553,
+              0.07978660613298416,
+              0.019968973472714424,
+              -0.09235189110040665
+            ]
+          },
+          "layer_03": {
+            "gate_k": 1.7766331434249878,
+            "gate_q": 1.7766331434249878,
+            "log_amplitude_k_dct_coordinates": [
+              0.5653866529464722,
+              -0.025448940694332123,
+              -0.22662492096424103,
+              0.01402996201068163
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.8235362768173218,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 0.523822546005249,
+            "log_amplitude_k_low_to_high_frequency_ratio": 0.287256443792549,
+            "log_amplitude_q_dct_coordinates": [
+              0.5653866529464722,
+              -0.025448940694332123,
+              -0.22662492096424103,
+              0.01402996201068163
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.8235362768173218,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 0.523822546005249,
+            "log_amplitude_q_low_to_high_frequency_ratio": 0.287256443792549,
+            "phase_k_dct_coordinates": [
+              -0.012517884373664856,
+              0.006422648672014475,
+              0.02761092223227024,
+              -0.03919641301035881
+            ],
+            "phase_q_dct_coordinates": [
+              -0.012517884373664856,
+              0.006422648672014475,
+              0.02761092223227024,
+              -0.03919641301035881
+            ]
+          },
+          "layer_04": {
+            "gate_k": 1.3562712669372559,
+            "gate_q": 1.3562712669372559,
+            "log_amplitude_k_dct_coordinates": [
+              0.16798698902130127,
+              -0.37699177861213684,
+              -0.4652448892593384,
+              -0.19017736613750458
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.7239821553230286,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 0.7005826234817505,
+            "log_amplitude_k_low_to_high_frequency_ratio": 0.9676794080223737,
+            "log_amplitude_q_dct_coordinates": [
+              0.16798698902130127,
+              -0.37699177861213684,
+              -0.4652448892593384,
+              -0.19017736613750458
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.7239821553230286,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 0.7005826234817505,
+            "log_amplitude_q_low_to_high_frequency_ratio": 0.9676794080223737,
+            "phase_k_dct_coordinates": [
+              -0.045008376240730286,
+              -0.028023386374115944,
+              0.08849375694990158,
+              0.01566758006811142
+            ],
+            "phase_q_dct_coordinates": [
+              -0.045008376240730286,
+              -0.028023386374115944,
+              0.08849375694990158,
+              0.01566758006811142
+            ]
+          },
+          "layer_05": {
+            "gate_k": 0.8092448115348816,
+            "gate_q": 0.8092448115348816,
+            "log_amplitude_k_dct_coordinates": [
+              -0.31251999735832214,
+              -0.4694218635559082,
+              -0.43288862705230713,
+              0.18314020335674286
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.36631008982658386,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.172348976135254,
+            "log_amplitude_k_low_to_high_frequency_ratio": 3.2004277487695187,
+            "log_amplitude_q_dct_coordinates": [
+              -0.31251999735832214,
+              -0.4694218635559082,
+              -0.43288862705230713,
+              0.18314020335674286
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.36631008982658386,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.172348976135254,
+            "log_amplitude_q_low_to_high_frequency_ratio": 3.2004277487695187,
+            "phase_k_dct_coordinates": [
+              0.0073654502630233765,
+              0.047614935785532,
+              0.06718280166387558,
+              -0.030298752710223198
+            ],
+            "phase_q_dct_coordinates": [
+              0.0073654502630233765,
+              0.047614935785532,
+              0.06718280166387558,
+              -0.030298752710223198
+            ]
+          },
+          "layer_06": {
+            "gate_k": 0.5563570857048035,
+            "gate_q": 0.5563570857048035,
+            "log_amplitude_k_dct_coordinates": [
+              -0.4714449644088745,
+              -0.2888409197330475,
+              0.05335496738553047,
+              0.14201703667640686
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.43271762132644653,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.3737826347351074,
+            "log_amplitude_k_low_to_high_frequency_ratio": 3.174778578519482,
+            "log_amplitude_q_dct_coordinates": [
+              -0.4714449644088745,
+              -0.2888409197330475,
+              0.05335496738553047,
+              0.14201703667640686
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.43271762132644653,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.3737826347351074,
+            "log_amplitude_q_low_to_high_frequency_ratio": 3.174778578519482,
+            "phase_k_dct_coordinates": [
+              0.034533560276031494,
+              -0.0058919633738696575,
+              0.0029148526955395937,
+              -0.035795073956251144
+            ],
+            "phase_q_dct_coordinates": [
+              0.034533560276031494,
+              -0.0058919633738696575,
+              0.0029148526955395937,
+              -0.035795073956251144
+            ]
+          },
+          "layer_07": {
+            "gate_k": 0.7055432200431824,
+            "gate_q": 0.7055432200431824,
+            "log_amplitude_k_dct_coordinates": [
+              -0.26567986607551575,
+              -0.28793707489967346,
+              -0.10382894426584244,
+              0.1624065786600113
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.5264599919319153,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.1310033798217773,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.1483178155122657,
+            "log_amplitude_q_dct_coordinates": [
+              -0.26567986607551575,
+              -0.28793707489967346,
+              -0.10382894426584244,
+              0.1624065786600113
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.5264599919319153,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.1310033798217773,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.1483178155122657,
+            "phase_k_dct_coordinates": [
+              -0.005184223875403404,
+              0.027691422030329704,
+              -8.302993228426203e-05,
+              -0.042286217212677
+            ],
+            "phase_q_dct_coordinates": [
+              -0.005184223875403404,
+              0.027691422030329704,
+              -8.302993228426203e-05,
+              -0.042286217212677
+            ]
+          }
+        },
+        "dct_reconstruction_abs_max": 5.960464477539062e-07,
+        "effective_amplitude_max": 4.414759635925293,
+        "effective_amplitude_min": 0.18812531232833862,
+        "global_gate_max": 1.7766331434249878,
+        "global_gate_min": 0.5563570857048035,
+        "phase_abs_max": 0.19597044587135315,
+        "qk_effective_amplitude_diff_rms": 0.0,
+        "qk_log_amplitude_diff_rms": 0.0,
+        "qk_phase_diff_rms": 0.0,
+        "spectral_amplitude_factor_max": 3.2550711631774902,
+        "spectral_amplitude_factor_min": 0.23247021436691284,
+        "spectral_log_amplitude_delta_abs_max": 1.4589931964874268
+      },
+      "elapsed_seconds": 888.6787736190017,
+      "final_holdout_loss": 3.877977134194225,
+      "optimization_health": {
+        "all_numeric_finite": true,
+        "endpoint_parameter_update_l2": 2.262116716167384e-08,
+        "function_active": true,
+        "last_active_carrier_function_step_rms": 1.3144549484422896e-05,
+        "last_active_descent_update_gradient_cosine": 0.03213268145918846,
+        "last_active_gradient_clip_ratio": 1.0,
+        "last_active_parameter_update_l2": 3.645480683189817e-05,
+        "last_active_raw_gradient_l2": 0.03943152353167534,
+        "last_active_sqrt_second_moment_max_to_rms": 4.6899519959401355,
+        "last_active_step": 19000,
+        "median_descent_update_gradient_cosine": 0.36674438416957855,
+        "minimum_descent_update_gradient_cosine": -0.07465852797031403,
+        "positive_descent_update_gradient_cosine_fraction": 0.9285714285714286,
+        "sample_steps": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          32,
+          64,
+          128,
+          256,
+          512,
+          1000,
+          2000,
+          3000,
+          4000,
+          5000,
+          6000,
+          7000,
+          8000,
+          9000,
+          10000,
+          11000,
+          12000,
+          13000,
+          14000,
+          15000,
+          16000,
+          17000,
+          18000,
+          19000,
+          20000
+        ]
+      },
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76177224,
+        "position_params": 72,
+        "qk_position_params": 0,
+        "qk_preprojection_frequency_params": 0,
+        "qk_preprojection_params": 72,
+        "total": 153496008
+      },
+      "peak_reserved_mib": 5242.0,
+      "target_tokens_per_second": 183999.35370809637
+    },
+    "nope-split-polar": {
+      "carrier_profiles": {
+        "dct_coordinates_by_layer": {
+          "layer_00": {
+            "gate_k": 1.250533938407898,
+            "gate_q": 0.8421065807342529,
+            "log_amplitude_k_dct_coordinates": [
+              -0.15952585637569427,
+              -0.2521764934062958,
+              0.15966686606407166,
+              0.0886678695678711
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.6960110068321228,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 0.9123855829238892,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.3108780952712085,
+            "log_amplitude_q_dct_coordinates": [
+              0.08097648620605469,
+              -0.07910903543233871,
+              -0.05343204364180565,
+              -0.0045898365788161755
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.009243369102478,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 0.8592900037765503,
+            "log_amplitude_q_low_to_high_frequency_ratio": 0.8514200143229264,
+            "phase_k_dct_coordinates": [
+              -0.032515447586774826,
+              0.03494098782539368,
+              0.05387376621365547,
+              0.0006771688931621611
+            ],
+            "phase_q_dct_coordinates": [
+              -0.008444723673164845,
+              0.05894642695784569,
+              0.003623005235567689,
+              -0.03225543722510338
+            ]
+          },
+          "layer_01": {
+            "gate_k": 1.1834793090820312,
+            "gate_q": 0.7489080429077148,
+            "log_amplitude_k_dct_coordinates": [
+              -0.26351022720336914,
+              -0.3380279839038849,
+              -0.027819273993372917,
+              0.22382353246212006
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.5211823582649231,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0439215898513794,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.002987194974742,
+            "log_amplitude_q_dct_coordinates": [
+              0.008218568749725819,
+              -0.19290457665920258,
+              -0.14454878866672516,
+              0.0929897129535675
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.7988654971122742,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 0.884448230266571,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.1071303410444686,
+            "phase_k_dct_coordinates": [
+              -0.0312984362244606,
+              -0.007976303808391094,
+              0.061254292726516724,
+              0.06558824330568314
+            ],
+            "phase_q_dct_coordinates": [
+              0.011217291466891766,
+              0.060651492327451706,
+              -0.036710310727357864,
+              -0.08297771215438843
+            ]
+          },
+          "layer_02": {
+            "gate_k": 1.8901078701019287,
+            "gate_q": 1.0940172672271729,
+            "log_amplitude_k_dct_coordinates": [
+              0.7202696800231934,
+              -0.2649003267288208,
+              -0.39687296748161316,
+              -0.11152156442403793
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.6655229330062866,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 0.3726436197757721,
+            "log_amplitude_k_low_to_high_frequency_ratio": 0.2237397110486773,
+            "log_amplitude_q_dct_coordinates": [
+              0.3777777850627899,
+              0.10000290721654892,
+              -0.18085110187530518,
+              -0.08411261439323425
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.6393190622329712,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 0.7303653359413147,
+            "log_amplitude_q_low_to_high_frequency_ratio": 0.4455297036236861,
+            "phase_k_dct_coordinates": [
+              -0.0921575203537941,
+              -0.1602085828781128,
+              -0.07247672975063324,
+              -0.09896460920572281
+            ],
+            "phase_q_dct_coordinates": [
+              0.038385894149541855,
+              0.16894292831420898,
+              0.14922252297401428,
+              0.06343293935060501
+            ]
+          },
+          "layer_03": {
+            "gate_k": 1.9835963249206543,
+            "gate_q": 1.26658296585083,
+            "log_amplitude_k_dct_coordinates": [
+              0.6789250373840332,
+              -0.21121923625469208,
+              -0.35288283228874207,
+              -0.12024221569299698
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.6896107196807861,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 0.4046104848384857,
+            "log_amplitude_k_low_to_high_frequency_ratio": 0.23946964831930503,
+            "log_amplitude_q_dct_coordinates": [
+              0.38664519786834717,
+              0.1304512768983841,
+              -0.16976909339427948,
+              -0.10391995310783386
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.7120441198349,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 0.7387537360191345,
+            "log_amplitude_q_low_to_high_frequency_ratio": 0.43150391246364367,
+            "phase_k_dct_coordinates": [
+              -0.04561564698815346,
+              -0.09474879503250122,
+              -0.06391778588294983,
+              -0.11947568506002426
+            ],
+            "phase_q_dct_coordinates": [
+              0.021920090541243553,
+              0.1213691234588623,
+              0.12154781073331833,
+              0.057863250374794006
+            ]
+          },
+          "layer_04": {
+            "gate_k": 1.575934886932373,
+            "gate_q": 0.989071786403656,
+            "log_amplitude_k_dct_coordinates": [
+              0.27789899706840515,
+              -0.5318076014518738,
+              -0.5595790147781372,
+              -0.15218554437160492
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.6959580183029175,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 0.5514882802963257,
+            "log_amplitude_k_low_to_high_frequency_ratio": 0.7924160161860353,
+            "log_amplitude_q_dct_coordinates": [
+              0.09001481533050537,
+              -0.1873643547296524,
+              -0.36001428961753845,
+              -0.21066926419734955
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.813119649887085,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 0.8776554465293884,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0793681429925661,
+            "phase_k_dct_coordinates": [
+              -0.06177389994263649,
+              -0.12905438244342804,
+              -0.08948007225990295,
+              -0.03703119978308678
+            ],
+            "phase_q_dct_coordinates": [
+              0.04027589038014412,
+              0.12624074518680573,
+              0.11822932958602905,
+              -0.0029731153044849634
+            ]
+          },
+          "layer_05": {
+            "gate_k": 0.8854614496231079,
+            "gate_q": 0.7321909666061401,
+            "log_amplitude_k_dct_coordinates": [
+              -0.40772512555122375,
+              -0.5719254612922668,
+              -0.48678848147392273,
+              0.2460509091615677
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.2891939580440521,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.2346885204315186,
+            "log_amplitude_k_low_to_high_frequency_ratio": 4.269413264309768,
+            "log_amplitude_q_dct_coordinates": [
+              -0.21405021846294403,
+              -0.31928306818008423,
+              -0.33850979804992676,
+              0.1276160627603531
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.4947667121887207,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.1374061107635498,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.2988735554418316,
+            "phase_k_dct_coordinates": [
+              0.015097137540578842,
+              0.028016112744808197,
+              0.020075077190995216,
+              0.0038002049550414085
+            ],
+            "phase_q_dct_coordinates": [
+              -0.02960059978067875,
+              0.02928045578300953,
+              0.035857804119586945,
+              -0.07066138833761215
+            ]
+          },
+          "layer_06": {
+            "gate_k": 0.6328438520431519,
+            "gate_q": 0.536408543586731,
+            "log_amplitude_k_dct_coordinates": [
+              -0.5898637175559998,
+              -0.28936925530433655,
+              0.10665857791900635,
+              0.12691177427768707
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.38048890233039856,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.5608720779418945,
+            "log_amplitude_k_low_to_high_frequency_ratio": 4.102280167389763,
+            "log_amplitude_q_dct_coordinates": [
+              -0.3199625015258789,
+              -0.22440476715564728,
+              -0.05311004817485809,
+              0.1339729279279709
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.5315442681312561,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.2559516429901123,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.362835455653857,
+            "phase_k_dct_coordinates": [
+              0.056148167699575424,
+              0.013315855525434017,
+              -0.0030380638781934977,
+              -0.029163382947444916
+            ],
+            "phase_q_dct_coordinates": [
+              -0.0037059541791677475,
+              -0.013196279294788837,
+              0.024203268811106682,
+              -0.027347035706043243
+            ]
+          },
+          "layer_07": {
+            "gate_k": 0.8883217573165894,
+            "gate_q": 0.6428813934326172,
+            "log_amplitude_k_dct_coordinates": [
+              -0.3765292167663574,
+              -0.2991110682487488,
+              -0.05424179509282112,
+              0.1684178113937378
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.462211549282074,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.2625547647476196,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.7315517466161796,
+            "log_amplitude_q_dct_coordinates": [
+              -0.16562847793102264,
+              -0.22874118387699127,
+              -0.14430150389671326,
+              0.13786549866199493
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.6199777126312256,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0684282779693604,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.7233333653799934,
+            "phase_k_dct_coordinates": [
+              -0.044585589319467545,
+              0.027776701375842094,
+              0.04613010212779045,
+              -0.01086687296628952
+            ],
+            "phase_q_dct_coordinates": [
+              0.054738376289606094,
+              0.013323045335710049,
+              -0.040552038699388504,
+              -0.05987657979130745
+            ]
+          }
+        },
+        "dct_reconstruction_abs_max": 8.940696716308594e-07,
+        "effective_amplitude_max": 7.482626914978027,
+        "effective_amplitude_min": 0.15763089060783386,
+        "global_gate_max": 1.9835963249206543,
+        "global_gate_min": 0.536408543586731,
+        "phase_abs_max": 0.5780317187309265,
+        "qk_effective_amplitude_diff_rms": 1.3928940296173096,
+        "qk_log_amplitude_diff_rms": 0.40265291929244995,
+        "qk_phase_diff_rms": 0.25339657068252563,
+        "spectral_amplitude_factor_max": 4.365633010864258,
+        "spectral_amplitude_factor_min": 0.17802117764949799,
+        "spectral_log_amplitude_delta_abs_max": 1.7258527278900146
+      },
+      "elapsed_seconds": 904.4491284589749,
+      "final_holdout_loss": 3.8764714105054736,
+      "optimization_health": {
+        "all_numeric_finite": true,
+        "endpoint_parameter_update_l2": 3.3947994637628653e-08,
+        "function_active": true,
+        "last_active_carrier_function_step_rms": 2.078481702483259e-05,
+        "last_active_descent_update_gradient_cosine": 0.06253927946090698,
+        "last_active_gradient_clip_ratio": 1.0,
+        "last_active_parameter_update_l2": 5.1405790145508945e-05,
+        "last_active_raw_gradient_l2": 0.03288812190294266,
+        "last_active_sqrt_second_moment_max_to_rms": 7.129709912800587,
+        "last_active_step": 19000,
+        "median_descent_update_gradient_cosine": 0.42854389548301697,
+        "minimum_descent_update_gradient_cosine": -0.022920897230505943,
+        "positive_descent_update_gradient_cosine_fraction": 0.9642857142857143,
+        "sample_steps": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          32,
+          64,
+          128,
+          256,
+          512,
+          1000,
+          2000,
+          3000,
+          4000,
+          5000,
+          6000,
+          7000,
+          8000,
+          9000,
+          10000,
+          11000,
+          12000,
+          13000,
+          14000,
+          15000,
+          16000,
+          17000,
+          18000,
+          19000,
+          20000
+        ]
+      },
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76177296,
+        "position_params": 144,
+        "qk_position_params": 0,
+        "qk_preprojection_frequency_params": 0,
+        "qk_preprojection_params": 144,
+        "total": 153496080
+      },
+      "peak_reserved_mib": 5362.0,
+      "target_tokens_per_second": 180791.06370371938
+    },
+    "rope-amplitude": {
+      "carrier_profiles": {
+        "dct_coordinates_by_layer": {
+          "layer_00": {
+            "gate_k": 0.9317473769187927,
+            "gate_q": 0.9317473769187927,
+            "log_amplitude_k_dct_coordinates": [
+              -0.16864949464797974,
+              0.053338244557380676,
+              -0.005624257028102875,
+              -0.044239092618227005
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.8444269299507141,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.3036143779754639,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.5437858880833546,
+            "log_amplitude_q_dct_coordinates": [
+              -0.16864949464797974,
+              0.053338244557380676,
+              -0.005624257028102875,
+              -0.044239092618227005
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.8444269299507141,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.3036143779754639,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.5437858880833546,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_01": {
+            "gate_k": 0.7006986737251282,
+            "gate_q": 0.7006986737251282,
+            "log_amplitude_k_dct_coordinates": [
+              -0.2710248529911041,
+              -0.002943146275356412,
+              -0.02757927216589451,
+              -0.05236770585179329
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.6980702877044678,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.424948811531067,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.0412683889137644,
+            "log_amplitude_q_dct_coordinates": [
+              -0.2710248529911041,
+              -0.002943146275356412,
+              -0.02757927216589451,
+              -0.05236770585179329
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.6980702877044678,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.424948811531067,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.0412683889137644,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_02": {
+            "gate_k": 0.5055643916130066,
+            "gate_q": 0.5055643916130066,
+            "log_amplitude_k_dct_coordinates": [
+              -0.3367478847503662,
+              -0.02932758815586567,
+              -0.006660338491201401,
+              -0.03393654152750969
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.6325517892837524,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.499578833580017,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.3706815141223645,
+            "log_amplitude_q_dct_coordinates": [
+              -0.3367478847503662,
+              -0.02932758815586567,
+              -0.006660338491201401,
+              -0.03393654152750969
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.6325517892837524,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.499578833580017,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.3706815141223645,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_03": {
+            "gate_k": 0.8060135841369629,
+            "gate_q": 0.8060135841369629,
+            "log_amplitude_k_dct_coordinates": [
+              -0.32216566801071167,
+              0.02520672045648098,
+              -0.04591253772377968,
+              -0.06735850125551224
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.6656526327133179,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.5720429420471191,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.3616566130583667,
+            "log_amplitude_q_dct_coordinates": [
+              -0.32216566801071167,
+              0.02520672045648098,
+              -0.04591253772377968,
+              -0.06735850125551224
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.6656526327133179,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.5720429420471191,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.3616566130583667,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_04": {
+            "gate_k": 0.5483348369598389,
+            "gate_q": 0.5483348369598389,
+            "log_amplitude_k_dct_coordinates": [
+              -0.46524643898010254,
+              -0.049052100628614426,
+              -0.02384543977677822,
+              0.016148028895258904
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.523794949054718,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.74774968624115,
+            "log_amplitude_k_low_to_high_frequency_ratio": 3.336705879648664,
+            "log_amplitude_q_dct_coordinates": [
+              -0.46524643898010254,
+              -0.049052100628614426,
+              -0.02384543977677822,
+              0.016148028895258904
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.523794949054718,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.74774968624115,
+            "log_amplitude_q_low_to_high_frequency_ratio": 3.336705879648664,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_05": {
+            "gate_k": 0.4826275110244751,
+            "gate_q": 0.4826275110244751,
+            "log_amplitude_k_dct_coordinates": [
+              -0.5019519329071045,
+              -0.12113689631223679,
+              0.03594610095024109,
+              0.023819634690880775
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.4805072546005249,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.6732827425003052,
+            "log_amplitude_k_low_to_high_frequency_ratio": 3.4823256599765755,
+            "log_amplitude_q_dct_coordinates": [
+              -0.5019519329071045,
+              -0.12113689631223679,
+              0.03594610095024109,
+              0.023819634690880775
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.4805072546005249,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.6732827425003052,
+            "log_amplitude_q_low_to_high_frequency_ratio": 3.4823256599765755,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_06": {
+            "gate_k": 0.4658428132534027,
+            "gate_q": 0.4658428132534027,
+            "log_amplitude_k_dct_coordinates": [
+              -0.4803081750869751,
+              -0.0822395533323288,
+              0.01076484750956297,
+              0.018685683608055115
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.5060991048812866,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.7039309740066528,
+            "log_amplitude_k_low_to_high_frequency_ratio": 3.3667930995577167,
+            "log_amplitude_q_dct_coordinates": [
+              -0.4803081750869751,
+              -0.0822395533323288,
+              0.01076484750956297,
+              0.018685683608055115
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.5060991048812866,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.7039309740066528,
+            "log_amplitude_q_low_to_high_frequency_ratio": 3.3667930995577167,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_07": {
+            "gate_k": 0.44896307587623596,
+            "gate_q": 0.44896307587623596,
+            "log_amplitude_k_dct_coordinates": [
+              -0.4172241687774658,
+              -0.08122725039720535,
+              -0.006980670616030693,
+              -0.001563924364745617
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.544808030128479,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.5857535600662231,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.910664807367586,
+            "log_amplitude_q_dct_coordinates": [
+              -0.4172241687774658,
+              -0.08122725039720535,
+              -0.006980670616030693,
+              -0.001563924364745617
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.544808030128479,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.5857535600662231,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.910664807367586,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "dct_reconstruction_abs_max": 7.748603820800781e-07,
+        "effective_amplitude_max": 1.291405200958252,
+        "effective_amplitude_min": 0.2175849974155426,
+        "global_gate_max": 0.9317473769187927,
+        "global_gate_min": 0.44896307587623596,
+        "phase_abs_max": 0.0,
+        "qk_effective_amplitude_diff_rms": 0.0,
+        "qk_log_amplitude_diff_rms": 0.0,
+        "qk_phase_diff_rms": 0.0,
+        "spectral_amplitude_factor_max": 1.9062490463256836,
+        "spectral_amplitude_factor_min": 0.4508342146873474,
+        "spectral_log_amplitude_delta_abs_max": 0.7966555953025818
+      },
+      "elapsed_seconds": 902.9839405729435,
+      "final_holdout_loss": 3.840667231241241,
+      "optimization_health": {
+        "all_numeric_finite": true,
+        "endpoint_parameter_update_l2": 1.0488368396011083e-08,
+        "function_active": true,
+        "last_active_carrier_function_step_rms": 6.5629446908133104e-06,
+        "last_active_descent_update_gradient_cosine": -0.5256614685058594,
+        "last_active_gradient_clip_ratio": 1.0,
+        "last_active_parameter_update_l2": 2.4616048904135823e-05,
+        "last_active_raw_gradient_l2": 0.05635645613074303,
+        "last_active_sqrt_second_moment_max_to_rms": 3.642574119682217,
+        "last_active_step": 19000,
+        "median_descent_update_gradient_cosine": 0.3909083753824234,
+        "minimum_descent_update_gradient_cosine": -0.5256614685058594,
+        "positive_descent_update_gradient_cosine_fraction": 0.8571428571428571,
+        "sample_steps": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          32,
+          64,
+          128,
+          256,
+          512,
+          1000,
+          2000,
+          3000,
+          4000,
+          5000,
+          6000,
+          7000,
+          8000,
+          9000,
+          10000,
+          11000,
+          12000,
+          13000,
+          14000,
+          15000,
+          16000,
+          17000,
+          18000,
+          19000,
+          20000
+        ]
+      },
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76177192,
+        "position_params": 40,
+        "qk_position_params": 0,
+        "qk_preprojection_frequency_params": 0,
+        "qk_preprojection_params": 40,
+        "total": 153495976
+      },
+      "peak_reserved_mib": 5242.0,
+      "target_tokens_per_second": 181084.41651381846
+    },
+    "rope-fixed": {
+      "carrier_profiles": {
+        "dct_coordinates_by_layer": {
+          "layer_00": {
+            "gate_k": 0.9301778674125671,
+            "gate_q": 0.9301778674125671,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_01": {
+            "gate_k": 0.7307779788970947,
+            "gate_q": 0.7307779788970947,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_02": {
+            "gate_k": 0.5148705840110779,
+            "gate_q": 0.5148705840110779,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_03": {
+            "gate_k": 0.841778576374054,
+            "gate_q": 0.841778576374054,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_04": {
+            "gate_k": 0.4957731068134308,
+            "gate_q": 0.4957731068134308,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_05": {
+            "gate_k": 0.37516048550605774,
+            "gate_q": 0.37516048550605774,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_06": {
+            "gate_k": 0.38242772221565247,
+            "gate_q": 0.38242772221565247,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          "layer_07": {
+            "gate_k": 0.36851295828819275,
+            "gate_q": 0.36851295828819275,
+            "log_amplitude_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.0,
+            "log_amplitude_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.0,
+            "phase_k_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "phase_q_dct_coordinates": [
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        },
+        "dct_reconstruction_abs_max": 0.0,
+        "effective_amplitude_max": 0.9301778674125671,
+        "effective_amplitude_min": 0.36851295828819275,
+        "global_gate_max": 0.9301778674125671,
+        "global_gate_min": 0.36851295828819275,
+        "phase_abs_max": 0.0,
+        "qk_effective_amplitude_diff_rms": 0.0,
+        "qk_log_amplitude_diff_rms": 0.0,
+        "qk_phase_diff_rms": 0.0,
+        "spectral_amplitude_factor_max": 1.0,
+        "spectral_amplitude_factor_min": 1.0,
+        "spectral_log_amplitude_delta_abs_max": 0.0
+      },
+      "elapsed_seconds": 896.3882709338795,
+      "final_holdout_loss": 3.843271086225286,
+      "optimization_health": {
+        "all_numeric_finite": true,
+        "endpoint_parameter_update_l2": 0.0,
+        "function_active": true,
+        "last_active_carrier_function_step_rms": 2.6945640456688125e-06,
+        "last_active_descent_update_gradient_cosine": -0.5485424995422363,
+        "last_active_gradient_clip_ratio": 1.0,
+        "last_active_parameter_update_l2": 1.0777979696285911e-05,
+        "last_active_raw_gradient_l2": 0.03308303281664848,
+        "last_active_sqrt_second_moment_max_to_rms": 2.0518918026089663,
+        "last_active_step": 19000,
+        "median_descent_update_gradient_cosine": 0.31690484285354614,
+        "minimum_descent_update_gradient_cosine": -0.6288043260574341,
+        "positive_descent_update_gradient_cosine_fraction": 0.7857142857142857,
+        "sample_steps": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          32,
+          64,
+          128,
+          256,
+          512,
+          1000,
+          2000,
+          3000,
+          4000,
+          5000,
+          6000,
+          7000,
+          8000,
+          9000,
+          10000,
+          11000,
+          12000,
+          13000,
+          14000,
+          15000,
+          16000,
+          17000,
+          18000,
+          19000,
+          20000
+        ]
+      },
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76177160,
+        "position_params": 8,
+        "qk_position_params": 0,
+        "qk_preprojection_frequency_params": 0,
+        "qk_preprojection_params": 8,
+        "total": 153495944
+      },
+      "peak_reserved_mib": 5222.0,
+      "target_tokens_per_second": 182416.84468901478
+    },
+    "rope-polar": {
+      "carrier_profiles": {
+        "dct_coordinates_by_layer": {
+          "layer_00": {
+            "gate_k": 0.9306880235671997,
+            "gate_q": 0.9306880235671997,
+            "log_amplitude_k_dct_coordinates": [
+              -0.17066334187984467,
+              0.05367785319685936,
+              -0.00492470245808363,
+              -0.04879302904009819
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.8427722454071045,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.306972861289978,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.5508019733832592,
+            "log_amplitude_q_dct_coordinates": [
+              -0.17066334187984467,
+              0.05367785319685936,
+              -0.00492470245808363,
+              -0.04879302904009819
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.8427722454071045,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.306972861289978,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.5508019733832592,
+            "phase_k_dct_coordinates": [
+              0.0037575250025838614,
+              0.044733691960573196,
+              -0.008130379021167755,
+              -0.020556936040520668
+            ],
+            "phase_q_dct_coordinates": [
+              0.0037575250025838614,
+              0.044733691960573196,
+              -0.008130379021167755,
+              -0.020556936040520668
+            ]
+          },
+          "layer_01": {
+            "gate_k": 0.7002500295639038,
+            "gate_q": 0.7002500295639038,
+            "log_amplitude_k_dct_coordinates": [
+              -0.27258458733558655,
+              -0.002531620906665921,
+              -0.026145443320274353,
+              -0.05309227108955383
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.6973675489425659,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.4274420738220215,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.0469006279206483,
+            "log_amplitude_q_dct_coordinates": [
+              -0.27258458733558655,
+              -0.002531620906665921,
+              -0.026145443320274353,
+              -0.05309227108955383
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.6973675489425659,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.4274420738220215,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.0469006279206483,
+            "phase_k_dct_coordinates": [
+              -0.018129369243979454,
+              0.030052920803427696,
+              -0.012644431553781033,
+              -0.026208030059933662
+            ],
+            "phase_q_dct_coordinates": [
+              -0.018129369243979454,
+              0.030052920803427696,
+              -0.012644431553781033,
+              -0.026208030059933662
+            ]
+          },
+          "layer_02": {
+            "gate_k": 0.5070872902870178,
+            "gate_q": 0.5070872902870178,
+            "log_amplitude_k_dct_coordinates": [
+              -0.3383207619190216,
+              -0.031782880425453186,
+              -0.0037507128436118364,
+              -0.0335482694208622
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.6306707262992859,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.497416615486145,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.374323958673077,
+            "log_amplitude_q_dct_coordinates": [
+              -0.3383207619190216,
+              -0.031782880425453186,
+              -0.0037507128436118364,
+              -0.0335482694208622
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.6306707262992859,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.497416615486145,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.374323958673077,
+            "phase_k_dct_coordinates": [
+              -0.010692779906094074,
+              0.05558323860168457,
+              -0.033747121691703796,
+              -0.06551062315702438
+            ],
+            "phase_q_dct_coordinates": [
+              -0.010692779906094074,
+              0.05558323860168457,
+              -0.033747121691703796,
+              -0.06551062315702438
+            ]
+          },
+          "layer_03": {
+            "gate_k": 0.8053165674209595,
+            "gate_q": 0.8053165674209595,
+            "log_amplitude_k_dct_coordinates": [
+              -0.3235293924808502,
+              0.022970179095864296,
+              -0.043300118297338486,
+              -0.06911617517471313
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.6638967394828796,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.5698654651641846,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.3646229478201373,
+            "log_amplitude_q_dct_coordinates": [
+              -0.3235293924808502,
+              0.022970179095864296,
+              -0.043300118297338486,
+              -0.06911617517471313
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.6638967394828796,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.5698654651641846,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.3646229478201373,
+            "phase_k_dct_coordinates": [
+              -0.025182649493217468,
+              0.01924455165863037,
+              0.028462670743465424,
+              -0.045438557863235474
+            ],
+            "phase_q_dct_coordinates": [
+              -0.025182649493217468,
+              0.01924455165863037,
+              0.028462670743465424,
+              -0.045438557863235474
+            ]
+          },
+          "layer_04": {
+            "gate_k": 0.548264741897583,
+            "gate_q": 0.548264741897583,
+            "log_amplitude_k_dct_coordinates": [
+              -0.4646308720111847,
+              -0.048572082072496414,
+              -0.024699365720152855,
+              0.017541317269206047
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.5242422819137573,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.7477686405181885,
+            "log_amplitude_k_low_to_high_frequency_ratio": 3.333894843693116,
+            "log_amplitude_q_dct_coordinates": [
+              -0.4646308720111847,
+              -0.048572082072496414,
+              -0.024699365720152855,
+              0.017541317269206047
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.5242422819137573,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.7477686405181885,
+            "log_amplitude_q_low_to_high_frequency_ratio": 3.333894843693116,
+            "phase_k_dct_coordinates": [
+              0.03789554536342621,
+              0.003933226224035025,
+              0.0011019718367606401,
+              -0.03548317775130272
+            ],
+            "phase_q_dct_coordinates": [
+              0.03789554536342621,
+              0.003933226224035025,
+              0.0011019718367606401,
+              -0.03548317775130272
+            ]
+          },
+          "layer_05": {
+            "gate_k": 0.48363426327705383,
+            "gate_q": 0.48363426327705383,
+            "log_amplitude_k_dct_coordinates": [
+              -0.501716136932373,
+              -0.12304624915122986,
+              0.03838394582271576,
+              0.024356098845601082
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.4803226590156555,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.6681811809539795,
+            "log_amplitude_k_low_to_high_frequency_ratio": 3.473042859091116,
+            "log_amplitude_q_dct_coordinates": [
+              -0.501716136932373,
+              -0.12304624915122986,
+              0.03838394582271576,
+              0.024356098845601082
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.4803226590156555,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.6681811809539795,
+            "log_amplitude_q_low_to_high_frequency_ratio": 3.473042859091116,
+            "phase_k_dct_coordinates": [
+              -0.002962718717753887,
+              0.015597842633724213,
+              -0.009430283680558205,
+              -0.06608325988054276
+            ],
+            "phase_q_dct_coordinates": [
+              -0.002962718717753887,
+              0.015597842633724213,
+              -0.009430283680558205,
+              -0.06608325988054276
+            ]
+          },
+          "layer_06": {
+            "gate_k": 0.46533268690109253,
+            "gate_q": 0.46533268690109253,
+            "log_amplitude_k_dct_coordinates": [
+              -0.4806264340877533,
+              -0.08332912623882294,
+              0.00958415400236845,
+              0.020708998665213585
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.5051451325416565,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.7038025856018066,
+            "log_amplitude_k_low_to_high_frequency_ratio": 3.372897165274187,
+            "log_amplitude_q_dct_coordinates": [
+              -0.4806264340877533,
+              -0.08332912623882294,
+              0.00958415400236845,
+              0.020708998665213585
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.5051451325416565,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.7038025856018066,
+            "log_amplitude_q_low_to_high_frequency_ratio": 3.372897165274187,
+            "phase_k_dct_coordinates": [
+              -0.0004139917728025466,
+              -0.0062170568853616714,
+              -0.005271653179079294,
+              -0.044639065861701965
+            ],
+            "phase_q_dct_coordinates": [
+              -0.0004139917728025466,
+              -0.0062170568853616714,
+              -0.005271653179079294,
+              -0.044639065861701965
+            ]
+          },
+          "layer_07": {
+            "gate_k": 0.44952625036239624,
+            "gate_q": 0.44952625036239624,
+            "log_amplitude_k_dct_coordinates": [
+              -0.41683492064476013,
+              -0.08214958757162094,
+              -0.005904467310756445,
+              -0.0010707402834668756
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.5448745489120483,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.5829286575317383,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.9051249699446853,
+            "log_amplitude_q_dct_coordinates": [
+              -0.41683492064476013,
+              -0.08214958757162094,
+              -0.005904467310756445,
+              -0.0010707402834668756
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.5448745489120483,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.5829286575317383,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.9051249699446853,
+            "phase_k_dct_coordinates": [
+              0.03463875874876976,
+              0.015563332475721836,
+              -0.02214202471077442,
+              -0.034933507442474365
+            ],
+            "phase_q_dct_coordinates": [
+              0.03463875874876976,
+              0.015563332475721836,
+              -0.02214202471077442,
+              -0.034933507442474365
+            ]
+          }
+        },
+        "dct_reconstruction_abs_max": 6.556510925292969e-07,
+        "effective_amplitude_max": 1.2873561382293701,
+        "effective_amplitude_min": 0.21844026446342468,
+        "global_gate_max": 0.9306880235671997,
+        "global_gate_min": 0.44952625036239624,
+        "phase_abs_max": 0.14522534608840942,
+        "qk_effective_amplitude_diff_rms": 0.0,
+        "qk_log_amplitude_diff_rms": 0.0,
+        "qk_phase_diff_rms": 0.0,
+        "spectral_amplitude_factor_max": 1.9119497537612915,
+        "spectral_amplitude_factor_min": 0.45166414976119995,
+        "spectral_log_amplitude_delta_abs_max": 0.7948164343833923
+      },
+      "elapsed_seconds": 903.8396856940817,
+      "final_holdout_loss": 3.8408084290567786,
+      "optimization_health": {
+        "all_numeric_finite": true,
+        "endpoint_parameter_update_l2": 1.9985835209013203e-08,
+        "function_active": true,
+        "last_active_carrier_function_step_rms": 7.261542577907676e-06,
+        "last_active_descent_update_gradient_cosine": -0.48635435104370117,
+        "last_active_gradient_clip_ratio": 1.0,
+        "last_active_parameter_update_l2": 3.0254315788624808e-05,
+        "last_active_raw_gradient_l2": 0.05611594021320343,
+        "last_active_sqrt_second_moment_max_to_rms": 4.845714737448485,
+        "last_active_step": 19000,
+        "median_descent_update_gradient_cosine": 0.3634919077157974,
+        "minimum_descent_update_gradient_cosine": -0.48635435104370117,
+        "positive_descent_update_gradient_cosine_fraction": 0.8928571428571429,
+        "sample_steps": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          32,
+          64,
+          128,
+          256,
+          512,
+          1000,
+          2000,
+          3000,
+          4000,
+          5000,
+          6000,
+          7000,
+          8000,
+          9000,
+          10000,
+          11000,
+          12000,
+          13000,
+          14000,
+          15000,
+          16000,
+          17000,
+          18000,
+          19000,
+          20000
+        ]
+      },
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76177224,
+        "position_params": 72,
+        "qk_position_params": 0,
+        "qk_preprojection_frequency_params": 0,
+        "qk_preprojection_params": 72,
+        "total": 153496008
+      },
+      "peak_reserved_mib": 5242.0,
+      "target_tokens_per_second": 180912.96785052275
+    },
+    "rope-split-polar": {
+      "carrier_profiles": {
+        "dct_coordinates_by_layer": {
+          "layer_00": {
+            "gate_k": 1.0575895309448242,
+            "gate_q": 0.7986363768577576,
+            "log_amplitude_k_dct_coordinates": [
+              -0.21576851606369019,
+              0.06427124887704849,
+              0.02938881702721119,
+              -0.0729762390255928
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.8151464462280273,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.377289891242981,
+            "log_amplitude_k_low_to_high_frequency_ratio": 1.6896226409575743,
+            "log_amplitude_q_dct_coordinates": [
+              -0.05768598988652229,
+              0.015164227224886417,
+              0.0028187113348394632,
+              -0.035527344793081284
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.9430846571922302,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.0897024869918823,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.1554662443943957,
+            "phase_k_dct_coordinates": [
+              0.026244385167956352,
+              0.04107657074928284,
+              -0.024906611070036888,
+              0.004052201751619577
+            ],
+            "phase_q_dct_coordinates": [
+              0.0020204028114676476,
+              0.03564486652612686,
+              0.015122576616704464,
+              -0.021818308159708977
+            ]
+          },
+          "layer_01": {
+            "gate_k": 0.8731223344802856,
+            "gate_q": 0.6395538449287415,
+            "log_amplitude_k_dct_coordinates": [
+              -0.29670384526252747,
+              -0.019679343327879906,
+              0.022496981546282768,
+              -0.07559815794229507
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.6798074245452881,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.4197914600372314,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.0885200849150864,
+            "log_amplitude_q_dct_coordinates": [
+              -0.17301040887832642,
+              -0.019204573705792427,
+              -0.033370375633239746,
+              -0.03621804341673851
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.7774485349655151,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.2425392866134644,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.5982270603527202,
+            "phase_k_dct_coordinates": [
+              -0.024261392652988434,
+              0.0221110787242651,
+              -0.019933490082621574,
+              -0.021805593743920326
+            ],
+            "phase_q_dct_coordinates": [
+              -0.010984960943460464,
+              0.027989553287625313,
+              0.006137386430054903,
+              -0.023365557193756104
+            ]
+          },
+          "layer_02": {
+            "gate_k": 0.6593124270439148,
+            "gate_q": 0.47520434856414795,
+            "log_amplitude_k_dct_coordinates": [
+              -0.35493209958076477,
+              -0.06668303161859512,
+              -0.01084867399185896,
+              -0.03401714190840721
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.596571683883667,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.486586570739746,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.4918825530942135,
+            "log_amplitude_q_dct_coordinates": [
+              -0.24461175501346588,
+              -0.028114713728427887,
+              -0.004951233044266701,
+              -0.02543683350086212
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.7125793695449829,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.334076166152954,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.8721790486368242,
+            "phase_k_dct_coordinates": [
+              -0.016503416001796722,
+              0.05339673534035683,
+              -0.037719596177339554,
+              -0.0471143014729023
+            ],
+            "phase_q_dct_coordinates": [
+              -0.009861155413091183,
+              0.033606093376874924,
+              -0.014375060796737671,
+              -0.049959003925323486
+            ]
+          },
+          "layer_03": {
+            "gate_k": 0.9237862229347229,
+            "gate_q": 0.7365368008613586,
+            "log_amplitude_k_dct_coordinates": [
+              -0.3630657494068146,
+              0.03480653092265129,
+              -0.010270393453538418,
+              -0.12293621152639389
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.6470750570297241,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.6453734636306763,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.5427861045725555,
+            "log_amplitude_q_dct_coordinates": [
+              -0.23556171357631683,
+              -0.010742656886577606,
+              -0.04050401225686073,
+              -0.030668191611766815
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.7212351560592651,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.359947681427002,
+            "log_amplitude_q_low_to_high_frequency_ratio": 1.8855815194278365,
+            "phase_k_dct_coordinates": [
+              -0.019074024632573128,
+              0.017983846366405487,
+              0.061624061316251755,
+              -0.06224082410335541
+            ],
+            "phase_q_dct_coordinates": [
+              -0.01575867272913456,
+              0.00686185248196125,
+              0.001116928062401712,
+              -0.016078121960163116
+            ]
+          },
+          "layer_04": {
+            "gate_k": 0.5849806666374207,
+            "gate_q": 0.6271112561225891,
+            "log_amplitude_k_dct_coordinates": [
+              -0.49331045150756836,
+              -0.07506456226110458,
+              0.0048835971392691135,
+              -0.006963884457945824
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.49976661801338196,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.7479586601257324,
+            "log_amplitude_k_low_to_high_frequency_ratio": 3.497549850516283,
+            "log_amplitude_q_dct_coordinates": [
+              -0.3049072027206421,
+              -0.05130982771515846,
+              -0.045827221125364304,
+              0.015721837058663368
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.6351673007011414,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.43544602394104,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.259949500480418,
+            "phase_k_dct_coordinates": [
+              0.028773553669452667,
+              0.012184812687337399,
+              -0.019356483593583107,
+              -0.05764361098408699
+            ],
+            "phase_q_dct_coordinates": [
+              0.027710331603884697,
+              -0.00769161619246006,
+              0.015482726506888866,
+              -0.007843846455216408
+            ]
+          },
+          "layer_05": {
+            "gate_k": 0.47082653641700745,
+            "gate_q": 0.5494170784950256,
+            "log_amplitude_k_dct_coordinates": [
+              -0.5922155976295471,
+              -0.12785769999027252,
+              0.05609605833888054,
+              0.019666070118546486
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.4294113218784332,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.8498648405075073,
+            "log_amplitude_k_low_to_high_frequency_ratio": 4.30790886559625,
+            "log_amplitude_q_dct_coordinates": [
+              -0.36342236399650574,
+              -0.12321368604898453,
+              -0.012609455734491348,
+              0.03434299677610397
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.5604531764984131,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.4292421340942383,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.5501544000942693,
+            "phase_k_dct_coordinates": [
+              0.024505773559212685,
+              0.023847637698054314,
+              -0.034747328609228134,
+              -0.08086641877889633
+            ],
+            "phase_q_dct_coordinates": [
+              -0.016636190935969353,
+              0.0076858787797391415,
+              0.013665971346199512,
+              -0.03875282034277916
+            ]
+          },
+          "layer_06": {
+            "gate_k": 0.4953669309616089,
+            "gate_q": 0.4926944375038147,
+            "log_amplitude_k_dct_coordinates": [
+              -0.5256701111793518,
+              -0.08842220157384872,
+              0.015201907604932785,
+              0.01599176786839962
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.47594043612480164,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.7918431758880615,
+            "log_amplitude_k_low_to_high_frequency_ratio": 3.7648475310851763,
+            "log_amplitude_q_dct_coordinates": [
+              -0.38659074902534485,
+              -0.09672067314386368,
+              -0.0018611702835187316,
+              0.01860770955681801
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.5598456859588623,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.5007030963897705,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.680565616611794,
+            "phase_k_dct_coordinates": [
+              0.03148691728711128,
+              0.031240245327353477,
+              -0.015341880731284618,
+              -0.0790550708770752
+            ],
+            "phase_q_dct_coordinates": [
+              -0.012211457826197147,
+              -0.02427382953464985,
+              -0.003248007269576192,
+              -0.0017390557331964374
+            ]
+          },
+          "layer_07": {
+            "gate_k": 0.494232714176178,
+            "gate_q": 0.47249698638916016,
+            "log_amplitude_k_dct_coordinates": [
+              -0.4305560290813446,
+              -0.10631266981363297,
+              0.0012093675322830677,
+              0.007513383403420448
+            ],
+            "log_amplitude_k_high_frequency_quartile_geomean_factor": 0.5255001187324524,
+            "log_amplitude_k_low_frequency_quartile_geomean_factor": 1.571408987045288,
+            "log_amplitude_k_low_to_high_frequency_ratio": 2.9903113834410733,
+            "log_amplitude_q_dct_coordinates": [
+              -0.34562358260154724,
+              -0.08248773962259293,
+              -0.01916196569800377,
+              -0.002438494237139821
+            ],
+            "log_amplitude_q_high_frequency_quartile_geomean_factor": 0.5930589437484741,
+            "log_amplitude_q_low_frequency_quartile_geomean_factor": 1.4534350633621216,
+            "log_amplitude_q_low_to_high_frequency_ratio": 2.45074301413545,
+            "phase_k_dct_coordinates": [
+              0.032862935215234756,
+              0.04584841430187225,
+              -0.022176412865519524,
+              -0.05676521733403206
+            ],
+            "phase_q_dct_coordinates": [
+              0.02103368379175663,
+              -0.018888691440224648,
+              -0.021748466417193413,
+              -0.006239790003746748
+            ]
+          }
+        },
+        "dct_reconstruction_abs_max": 7.152557373046875e-07,
+        "effective_amplitude_max": 1.628472089767456,
+        "effective_amplitude_min": 0.1892935335636139,
+        "global_gate_max": 1.0575895309448242,
+        "global_gate_min": 0.47082653641700745,
+        "phase_abs_max": 0.18165507912635803,
+        "qk_effective_amplitude_diff_rms": 0.23166395723819733,
+        "qk_log_amplitude_diff_rms": 0.16411253809928894,
+        "qk_phase_diff_rms": 0.06969306617975235,
+        "spectral_amplitude_factor_max": 1.8662678003311157,
+        "spectral_amplitude_factor_min": 0.4020451605319977,
+        "spectral_log_amplitude_delta_abs_max": 0.9111908674240112
+      },
+      "elapsed_seconds": 913.8251752071083,
+      "final_holdout_loss": 3.8405447327531874,
+      "optimization_health": {
+        "all_numeric_finite": true,
+        "endpoint_parameter_update_l2": 3.8025422810505916e-08,
+        "function_active": true,
+        "last_active_carrier_function_step_rms": 6.907393526489614e-06,
+        "last_active_descent_update_gradient_cosine": -0.36346176266670227,
+        "last_active_gradient_clip_ratio": 1.0,
+        "last_active_parameter_update_l2": 4.0057093428913504e-05,
+        "last_active_raw_gradient_l2": 0.07119382917881012,
+        "last_active_sqrt_second_moment_max_to_rms": 6.600826883012696,
+        "last_active_step": 19000,
+        "median_descent_update_gradient_cosine": 0.35528068244457245,
+        "minimum_descent_update_gradient_cosine": -0.36346176266670227,
+        "positive_descent_update_gradient_cosine_fraction": 0.9642857142857143,
+        "sample_steps": [
+          1,
+          2,
+          4,
+          8,
+          16,
+          32,
+          64,
+          128,
+          256,
+          512,
+          1000,
+          2000,
+          3000,
+          4000,
+          5000,
+          6000,
+          7000,
+          8000,
+          9000,
+          10000,
+          11000,
+          12000,
+          13000,
+          14000,
+          15000,
+          16000,
+          17000,
+          18000,
+          19000,
+          20000
+        ]
+      },
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76177296,
+        "position_params": 144,
+        "qk_position_params": 0,
+        "qk_preprojection_frequency_params": 0,
+        "qk_preprojection_params": 144,
+        "total": 153496080
+      },
+      "peak_reserved_mib": 5362.0,
+      "target_tokens_per_second": 178936.10773301453
+    }
+  },
+  "caveat": "Paired-example intervals measure holdout precision for seed 123, not training-seed variability. This 20k screen measures early optimization.",
+  "contrasts": {
+    "nope-amplitude_vs_nope-fixed": {
+      "candidate": "nope-amplitude",
+      "development_curve": {
+        "late_slope_delta_per_1k_steps": -7.178820669651031e-05,
+        "late_window_start_step": 15000,
+        "points": {
+          "10000": {
+            "candidate_loss": 4.031946912407875,
+            "delta_candidate_minus_reference": -0.008746650069952011,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.01148903223442206,
+              -0.006004267905481963
+            ],
+            "reference_loss": 4.040693562477827
+          },
+          "12000": {
+            "candidate_loss": 3.95843293517828,
+            "delta_candidate_minus_reference": -0.01093950867652893,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.013968729927605653,
+              -0.007910287425452208
+            ],
+            "reference_loss": 3.969372443854809
+          },
+          "14000": {
+            "candidate_loss": 3.900627825409174,
+            "delta_candidate_minus_reference": -0.00930878333747387,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.01232313583212382,
+              -0.0062944308428239185
+            ],
+            "reference_loss": 3.909936608746648
+          },
+          "16000": {
+            "candidate_loss": 3.850092312321067,
+            "delta_candidate_minus_reference": -0.009992439299821854,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.013093174098383918,
+              -0.006891704501259789
+            ],
+            "reference_loss": 3.8600847516208887
+          },
+          "18000": {
+            "candidate_loss": 3.813894245773554,
+            "delta_candidate_minus_reference": -0.010652594268321991,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.013563744555276395,
+              -0.007741443981367587
+            ],
+            "reference_loss": 3.824546840041876
+          },
+          "2000": {
+            "candidate_loss": 4.946651658043265,
+            "delta_candidate_minus_reference": -0.01870810054242611,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.02068326553003716,
+              -0.01673293555481506
+            ],
+            "reference_loss": 4.9653597585856915
+          },
+          "20000": {
+            "candidate_loss": 3.7929932419210672,
+            "delta_candidate_minus_reference": -0.010279592126607895,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.013081488757840274,
+              -0.007477695495375516
+            ],
+            "reference_loss": 3.803272834047675
+          },
+          "4000": {
+            "candidate_loss": 4.500781614333391,
+            "delta_candidate_minus_reference": -0.020239396020770073,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.023058835054376618,
+              -0.01741995698716353
+            ],
+            "reference_loss": 4.521021010354161
+          },
+          "6000": {
+            "candidate_loss": 4.263459419831634,
+            "delta_candidate_minus_reference": -0.011326845735311508,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.014273220738423163,
+              -0.008380470732199854
+            ],
+            "reference_loss": 4.274786265566945
+          },
+          "8000": {
+            "candidate_loss": 4.12504880130291,
+            "delta_candidate_minus_reference": -0.011518768966197968,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0143360045822119,
+              -0.008701533350184035
+            ],
+            "reference_loss": 4.136567570269108
+          }
+        }
+      },
+      "final": {
+        "candidate_loss": 3.877835589693859,
+        "delta_candidate_minus_reference": -0.010644461726769805,
+        "num_paired_examples": 1024,
+        "paired_example_ci95": [
+          -0.01170028020263868,
+          -0.00958864325090093
+        ],
+        "reference_loss": 3.888480051420629
+      },
+      "promotion_gate": {
+        "endpoint_and_interval_pass": true,
+        "is_primary_intervention_contrast": true,
+        "late_curve_requires_review": true,
+        "optimization_active_and_finite": true
+      },
+      "reference": "nope-fixed"
+    },
+    "nope-polar_vs_nope-amplitude": {
+      "candidate": "nope-polar",
+      "development_curve": {
+        "late_slope_delta_per_1k_steps": 8.568167686462402e-08,
+        "late_window_start_step": 15000,
+        "points": {
+          "10000": {
+            "candidate_loss": 4.0328136291354895,
+            "delta_candidate_minus_reference": 0.0008667167276144028,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0005997395147486302,
+              0.0023331729699774357
+            ],
+            "reference_loss": 4.031946912407875
+          },
+          "12000": {
+            "candidate_loss": 3.9593434911221266,
+            "delta_candidate_minus_reference": 0.0009105559438467026,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0005520363247955497,
+              0.0023731482124889547
+            ],
+            "reference_loss": 3.95843293517828
+          },
+          "14000": {
+            "candidate_loss": 3.902048695832491,
+            "delta_candidate_minus_reference": 0.0014208704233169556,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              3.332787872245254e-05,
+              0.0028084129679114586
+            ],
+            "reference_loss": 3.900627825409174
+          },
+          "16000": {
+            "candidate_loss": 3.850886980071664,
+            "delta_candidate_minus_reference": 0.0007946677505970001,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0005500063902957146,
+              0.002139341891489715
+            ],
+            "reference_loss": 3.850092312321067
+          },
+          "18000": {
+            "candidate_loss": 3.8147822935134172,
+            "delta_candidate_minus_reference": 0.0008880477398633957,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.00035261238445030317,
+              0.0021287078641770945
+            ],
+            "reference_loss": 3.813894245773554
+          },
+          "2000": {
+            "candidate_loss": 4.946717945858836,
+            "delta_candidate_minus_reference": 6.62878155708313e-05,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0007020280673743236,
+              0.0008346036985159862
+            ],
+            "reference_loss": 4.946651658043265
+          },
+          "20000": {
+            "candidate_loss": 3.7937882523983717,
+            "delta_candidate_minus_reference": 0.0007950104773044586,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0004496401020045761,
+              0.0020396610566134933
+            ],
+            "reference_loss": 3.7929932419210672
+          },
+          "4000": {
+            "candidate_loss": 4.500309882685542,
+            "delta_candidate_minus_reference": -0.00047173164784908295,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0012425077223406555,
+              0.0002990444266424895
+            ],
+            "reference_loss": 4.500781614333391
+          },
+          "6000": {
+            "candidate_loss": 4.264316273853183,
+            "delta_candidate_minus_reference": 0.0008568540215492249,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.00035703729031813665,
+              0.0020707453334165866
+            ],
+            "reference_loss": 4.263459419831634
+          },
+          "8000": {
+            "candidate_loss": 4.126033948734403,
+            "delta_candidate_minus_reference": 0.0009851474314928055,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0002428869263743391,
+              0.00221318178935995
+            ],
+            "reference_loss": 4.12504880130291
+          }
+        }
+      },
+      "final": {
+        "candidate_loss": 3.877977134194225,
+        "delta_candidate_minus_reference": 0.0001415445003658533,
+        "num_paired_examples": 1024,
+        "paired_example_ci95": [
+          -0.00034127470340518943,
+          0.0006243637041368961
+        ],
+        "reference_loss": 3.877835589693859
+      },
+      "promotion_gate": {
+        "endpoint_and_interval_pass": false,
+        "is_primary_intervention_contrast": true,
+        "late_curve_requires_review": true,
+        "optimization_active_and_finite": true
+      },
+      "reference": "nope-amplitude"
+    },
+    "nope-split-polar_vs_nope-polar": {
+      "candidate": "nope-split-polar",
+      "development_curve": {
+        "late_slope_delta_per_1k_steps": -0.00014996575191617012,
+        "late_window_start_step": 15000,
+        "points": {
+          "10000": {
+            "candidate_loss": 4.029436262324452,
+            "delta_candidate_minus_reference": -0.0033773668110370636,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.005239540785750087,
+              -0.0015151928363240398
+            ],
+            "reference_loss": 4.0328136291354895
+          },
+          "12000": {
+            "candidate_loss": 3.9565329141914845,
+            "delta_candidate_minus_reference": -0.002810576930642128,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.004915596601257057,
+              -0.0007055572600271993
+            ],
+            "reference_loss": 3.9593434911221266
+          },
+          "14000": {
+            "candidate_loss": 3.8990942295640707,
+            "delta_candidate_minus_reference": -0.0029544662684202194,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.004873596919646681,
+              -0.0010353356171937584
+            ],
+            "reference_loss": 3.902048695832491
+          },
+          "16000": {
+            "candidate_loss": 3.849343840032816,
+            "delta_candidate_minus_reference": -0.0015431400388479233,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0034136913205882777,
+              0.0003274112428924311
+            ],
+            "reference_loss": 3.850886980071664
+          },
+          "18000": {
+            "candidate_loss": 3.8123771343380213,
+            "delta_candidate_minus_reference": -0.0024051591753959656,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.004254976341821381,
+              -0.0005553420089705503
+            ],
+            "reference_loss": 3.8147822935134172
+          },
+          "2000": {
+            "candidate_loss": 4.942602351307869,
+            "delta_candidate_minus_reference": -0.0041155945509672165,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.004955678130593313,
+              -0.0032755109713411205
+            ],
+            "reference_loss": 4.946717945858836
+          },
+          "20000": {
+            "candidate_loss": 3.791645249351859,
+            "delta_candidate_minus_reference": -0.0021430030465126038,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.004039098964016139,
+              -0.00024690712900906817
+            ],
+            "reference_loss": 3.7937882523983717
+          },
+          "4000": {
+            "candidate_loss": 4.49538335390389,
+            "delta_candidate_minus_reference": -0.0049265287816524506,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.006287065007415255,
+              -0.0035659925558896464
+            ],
+            "reference_loss": 4.500309882685542
+          },
+          "6000": {
+            "candidate_loss": 4.25879268348217,
+            "delta_candidate_minus_reference": -0.005523590371012688,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.007206146189061364,
+              -0.003841034552964011
+            ],
+            "reference_loss": 4.264316273853183
+          },
+          "8000": {
+            "candidate_loss": 4.123189000412822,
+            "delta_candidate_minus_reference": -0.002844948321580887,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.004788324879838643,
+              -0.0009015717633231307
+            ],
+            "reference_loss": 4.126033948734403
+          }
+        }
+      },
+      "final": {
+        "candidate_loss": 3.8764714105054736,
+        "delta_candidate_minus_reference": -0.0015057236887514591,
+        "num_paired_examples": 1024,
+        "paired_example_ci95": [
+          -0.002148702339438866,
+          -0.0008627450380640521
+        ],
+        "reference_loss": 3.877977134194225
+      },
+      "promotion_gate": {
+        "endpoint_and_interval_pass": false,
+        "is_primary_intervention_contrast": true,
+        "late_curve_requires_review": true,
+        "optimization_active_and_finite": true
+      },
+      "reference": "nope-polar"
+    },
+    "rope-amplitude_vs_nope-amplitude": {
+      "candidate": "rope-amplitude",
+      "development_curve": {
+        "late_slope_delta_per_1k_steps": 0.00017518829554319382,
+        "late_window_start_step": 15000,
+        "points": {
+          "10000": {
+            "candidate_loss": 3.987065613269806,
+            "delta_candidate_minus_reference": -0.04488129913806915,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.04927808177944762,
+              -0.04048451649669069
+            ],
+            "reference_loss": 4.031946912407875
+          },
+          "12000": {
+            "candidate_loss": 3.9181255493313074,
+            "delta_candidate_minus_reference": -0.040307385846972466,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.044486557026706904,
+              -0.03612821466723803
+            ],
+            "reference_loss": 3.95843293517828
+          },
+          "14000": {
+            "candidate_loss": 3.8617742843925953,
+            "delta_candidate_minus_reference": -0.038853541016578674,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.043390863410730396,
+              -0.03431621862242695
+            ],
+            "reference_loss": 3.900627825409174
+          },
+          "16000": {
+            "candidate_loss": 3.8144642878323793,
+            "delta_candidate_minus_reference": -0.035628024488687515,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.04002949507735996,
+              -0.031226553900015074
+            ],
+            "reference_loss": 3.850092312321067
+          },
+          "18000": {
+            "candidate_loss": 3.7803262751549482,
+            "delta_candidate_minus_reference": -0.033567970618605614,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.03785437998731924,
+              -0.029281561249891987
+            ],
+            "reference_loss": 3.813894245773554
+          },
+          "2000": {
+            "candidate_loss": 4.833405572921038,
+            "delta_candidate_minus_reference": -0.11324608512222767,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.11834611281146715,
+              -0.10814605743298819
+            ],
+            "reference_loss": 4.946651658043265
+          },
+          "20000": {
+            "candidate_loss": 3.7580659706145525,
+            "delta_candidate_minus_reference": -0.03492727130651474,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.039103738664526426,
+              -0.030750803948503054
+            ],
+            "reference_loss": 3.7929932419210672
+          },
+          "4000": {
+            "candidate_loss": 4.413936259225011,
+            "delta_candidate_minus_reference": -0.08684535510838032,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.09202155148189316,
+              -0.08166915873486748
+            ],
+            "reference_loss": 4.500781614333391
+          },
+          "6000": {
+            "candidate_loss": 4.201256206259131,
+            "delta_candidate_minus_reference": -0.062203213572502136,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.06703409631628483,
+              -0.05737233082871944
+            ],
+            "reference_loss": 4.263459419831634
+          },
+          "8000": {
+            "candidate_loss": 4.074234841391444,
+            "delta_candidate_minus_reference": -0.050813959911465645,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.05581774119952271,
+              -0.04581017862340858
+            ],
+            "reference_loss": 4.12504880130291
+          }
+        }
+      },
+      "final": {
+        "candidate_loss": 3.840667231241241,
+        "delta_candidate_minus_reference": -0.03716835845261812,
+        "num_paired_examples": 1024,
+        "paired_example_ci95": [
+          -0.03879743039623858,
+          -0.03553928650899767
+        ],
+        "reference_loss": 3.877835589693859
+      },
+      "promotion_gate": {
+        "endpoint_and_interval_pass": false,
+        "is_primary_intervention_contrast": false,
+        "late_curve_requires_review": false,
+        "optimization_active_and_finite": true
+      },
+      "reference": "nope-amplitude"
+    },
+    "rope-amplitude_vs_rope-fixed": {
+      "candidate": "rope-amplitude",
+      "development_curve": {
+        "late_slope_delta_per_1k_steps": -0.00018308311700820923,
+        "late_window_start_step": 15000,
+        "points": {
+          "10000": {
+            "candidate_loss": 3.987065613269806,
+            "delta_candidate_minus_reference": -0.0015489254146814346,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.003154600460172176,
+              5.6749630809306735e-05
+            ],
+            "reference_loss": 3.9886145386844873
+          },
+          "12000": {
+            "candidate_loss": 3.9181255493313074,
+            "delta_candidate_minus_reference": -0.002236638218164444,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.00418988821471236,
+              -0.0002833882216165275
+            ],
+            "reference_loss": 3.920362187549472
+          },
+          "14000": {
+            "candidate_loss": 3.8617742843925953,
+            "delta_candidate_minus_reference": -0.002901975065469742,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.004738175362492301,
+              -0.0010657747684471826
+            ],
+            "reference_loss": 3.864676259458065
+          },
+          "16000": {
+            "candidate_loss": 3.8144642878323793,
+            "delta_candidate_minus_reference": -0.0014955159276723862,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0031974456223608757,
+              0.00020641376701610353
+            ],
+            "reference_loss": 3.8159598037600517
+          },
+          "18000": {
+            "candidate_loss": 3.7803262751549482,
+            "delta_candidate_minus_reference": -0.0011901911348104477,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0027916981546638117,
+              0.00041131588504291655
+            ],
+            "reference_loss": 3.7815164662897587
+          },
+          "2000": {
+            "candidate_loss": 4.833405572921038,
+            "delta_candidate_minus_reference": -0.003655150532722473,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.004499975368948179,
+              -0.002810325696496767
+            ],
+            "reference_loss": 4.83706072345376
+          },
+          "20000": {
+            "candidate_loss": 3.7580659706145525,
+            "delta_candidate_minus_reference": -0.002227848395705223,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.003801979576288135,
+              -0.0006537172151223113
+            ],
+            "reference_loss": 3.7602938190102577
+          },
+          "4000": {
+            "candidate_loss": 4.413936259225011,
+            "delta_candidate_minus_reference": -0.006668316200375557,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.007873549299224899,
+              -0.005463083101526216
+            ],
+            "reference_loss": 4.420604575425386
+          },
+          "6000": {
+            "candidate_loss": 4.201256206259131,
+            "delta_candidate_minus_reference": -0.004174793139100075,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0056821890088235615,
+              -0.002667397269376588
+            ],
+            "reference_loss": 4.2054309993982315
+          },
+          "8000": {
+            "candidate_loss": 4.074234841391444,
+            "delta_candidate_minus_reference": -0.0016403347253799438,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0033411671728836964,
+              6.0497722123808734e-05
+            ],
+            "reference_loss": 4.075875176116824
+          }
+        }
+      },
+      "final": {
+        "candidate_loss": 3.840667231241241,
+        "delta_candidate_minus_reference": -0.0026038549840450287,
+        "num_paired_examples": 1024,
+        "paired_example_ci95": [
+          -0.003194281723280187,
+          -0.0020134282448098706
+        ],
+        "reference_loss": 3.843271086225286
+      },
+      "promotion_gate": {
+        "endpoint_and_interval_pass": false,
+        "is_primary_intervention_contrast": true,
+        "late_curve_requires_review": true,
+        "optimization_active_and_finite": true
+      },
+      "reference": "rope-fixed"
+    },
+    "rope-fixed_vs_nope-fixed": {
+      "candidate": "rope-fixed",
+      "development_curve": {
+        "late_slope_delta_per_1k_steps": 0.00028648320585489273,
+        "late_window_start_step": 15000,
+        "points": {
+          "10000": {
+            "candidate_loss": 3.9886145386844873,
+            "delta_candidate_minus_reference": -0.05207902379333973,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.056165362168212114,
+              -0.047992685418467344
+            ],
+            "reference_loss": 4.040693562477827
+          },
+          "12000": {
+            "candidate_loss": 3.920362187549472,
+            "delta_candidate_minus_reference": -0.04901025630533695,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.05302828607824137,
+              -0.04499222653243253
+            ],
+            "reference_loss": 3.969372443854809
+          },
+          "14000": {
+            "candidate_loss": 3.864676259458065,
+            "delta_candidate_minus_reference": -0.0452603492885828,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.04947171068430252,
+              -0.041048987892863084
+            ],
+            "reference_loss": 3.909936608746648
+          },
+          "16000": {
+            "candidate_loss": 3.8159598037600517,
+            "delta_candidate_minus_reference": -0.04412494786083698,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.04814173757281659,
+              -0.040108158148857376
+            ],
+            "reference_loss": 3.8600847516208887
+          },
+          "18000": {
+            "candidate_loss": 3.7815164662897587,
+            "delta_candidate_minus_reference": -0.04303037375211716,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.04696240983537405,
+              -0.03909833766886026
+            ],
+            "reference_loss": 3.824546840041876
+          },
+          "2000": {
+            "candidate_loss": 4.83706072345376,
+            "delta_candidate_minus_reference": -0.1282990351319313,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.13374242820397655,
+              -0.12285564205988606
+            ],
+            "reference_loss": 4.9653597585856915
+          },
+          "20000": {
+            "candidate_loss": 3.7602938190102577,
+            "delta_candidate_minus_reference": -0.04297901503741741,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.046907579159194,
+              -0.03905045091564082
+            ],
+            "reference_loss": 3.803272834047675
+          },
+          "4000": {
+            "candidate_loss": 4.420604575425386,
+            "delta_candidate_minus_reference": -0.10041643492877483,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.10594770041913543,
+              -0.09488516943841424
+            ],
+            "reference_loss": 4.521021010354161
+          },
+          "6000": {
+            "candidate_loss": 4.2054309993982315,
+            "delta_candidate_minus_reference": -0.06935526616871357,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.07397385834830772,
+              -0.06473667398911942
+            ],
+            "reference_loss": 4.274786265566945
+          },
+          "8000": {
+            "candidate_loss": 4.075875176116824,
+            "delta_candidate_minus_reference": -0.06069239415228367,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.06472993564291267,
+              -0.05665485266165467
+            ],
+            "reference_loss": 4.136567570269108
+          }
+        }
+      },
+      "final": {
+        "candidate_loss": 3.843271086225286,
+        "delta_candidate_minus_reference": -0.0452089651953429,
+        "num_paired_examples": 1024,
+        "paired_example_ci95": [
+          -0.04687366459114053,
+          -0.04354426579954527
+        ],
+        "reference_loss": 3.888480051420629
+      },
+      "promotion_gate": {
+        "endpoint_and_interval_pass": false,
+        "is_primary_intervention_contrast": false,
+        "late_curve_requires_review": false,
+        "optimization_active_and_finite": true
+      },
+      "reference": "nope-fixed"
+    },
+    "rope-polar_vs_nope-polar": {
+      "candidate": "rope-polar",
+      "development_curve": {
+        "late_slope_delta_per_1k_steps": 0.0002111745998263359,
+        "late_window_start_step": 15000,
+        "points": {
+          "10000": {
+            "candidate_loss": 3.9866928309202194,
+            "delta_candidate_minus_reference": -0.04612079821527004,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.05053829245429373,
+              -0.04170330397624635
+            ],
+            "reference_loss": 4.0328136291354895
+          },
+          "12000": {
+            "candidate_loss": 3.9181794356554747,
+            "delta_candidate_minus_reference": -0.041164055466651917,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.045082929691580446,
+              -0.03724518124172339
+            ],
+            "reference_loss": 3.9593434911221266
+          },
+          "14000": {
+            "candidate_loss": 3.8617677744477987,
+            "delta_candidate_minus_reference": -0.04028092138469219,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.04460854154871954,
+              -0.03595330122066485
+            ],
+            "reference_loss": 3.902048695832491
+          },
+          "16000": {
+            "candidate_loss": 3.814201368018985,
+            "delta_candidate_minus_reference": -0.03668561205267906,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.041020297426324744,
+              -0.03235092667903338
+            ],
+            "reference_loss": 3.850886980071664
+          },
+          "18000": {
+            "candidate_loss": 3.7800090573728085,
+            "delta_candidate_minus_reference": -0.03477323614060879,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0390384458383177,
+              -0.030508026442899874
+            ],
+            "reference_loss": 3.8147822935134172
+          },
+          "2000": {
+            "candidate_loss": 4.833609813824296,
+            "delta_candidate_minus_reference": -0.11310813203454018,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.11798829560574366,
+              -0.1082279684633367
+            ],
+            "reference_loss": 4.946717945858836
+          },
+          "20000": {
+            "candidate_loss": 3.757947338744998,
+            "delta_candidate_minus_reference": -0.03584091365337372,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.04001782147649656,
+              -0.03166400583025088
+            ],
+            "reference_loss": 3.7937882523983717
+          },
+          "4000": {
+            "candidate_loss": 4.41392258182168,
+            "delta_candidate_minus_reference": -0.08638730086386204,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.09146537340143047,
+              -0.0813092283262936
+            ],
+            "reference_loss": 4.500309882685542
+          },
+          "6000": {
+            "candidate_loss": 4.200705409049988,
+            "delta_candidate_minus_reference": -0.063610864803195,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.06855795654081996,
+              -0.05866377306557004
+            ],
+            "reference_loss": 4.264316273853183
+          },
+          "8000": {
+            "candidate_loss": 4.073631612583995,
+            "delta_candidate_minus_reference": -0.05240233615040779,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.05733020196916523,
+              -0.04747447033165035
+            ],
+            "reference_loss": 4.126033948734403
+          }
+        }
+      },
+      "final": {
+        "candidate_loss": 3.8408084290567786,
+        "delta_candidate_minus_reference": -0.03716870513744652,
+        "num_paired_examples": 1024,
+        "paired_example_ci95": [
+          -0.03880870516382105,
+          -0.03552870511107199
+        ],
+        "reference_loss": 3.877977134194225
+      },
+      "promotion_gate": {
+        "endpoint_and_interval_pass": false,
+        "is_primary_intervention_contrast": false,
+        "late_curve_requires_review": false,
+        "optimization_active_and_finite": true
+      },
+      "reference": "nope-polar"
+    },
+    "rope-polar_vs_rope-amplitude": {
+      "candidate": "rope-polar",
+      "development_curve": {
+        "late_slope_delta_per_1k_steps": 3.6071985960006714e-05,
+        "late_window_start_step": 15000,
+        "points": {
+          "10000": {
+            "candidate_loss": 3.9866928309202194,
+            "delta_candidate_minus_reference": -0.0003727823495864868,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0012155619685197188,
+              0.0004699972693467452
+            ],
+            "reference_loss": 3.987065613269806
+          },
+          "12000": {
+            "candidate_loss": 3.9181794356554747,
+            "delta_candidate_minus_reference": 5.388632416725159e-05,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0007083656382267951,
+              0.0008161382865612982
+            ],
+            "reference_loss": 3.9181255493313074
+          },
+          "14000": {
+            "candidate_loss": 3.8617677744477987,
+            "delta_candidate_minus_reference": -6.509944796562195e-06,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0008306126831179466,
+              0.0008175927935248223
+            ],
+            "reference_loss": 3.8617742843925953
+          },
+          "16000": {
+            "candidate_loss": 3.814201368018985,
+            "delta_candidate_minus_reference": -0.0002629198133945465,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.001024075516095497,
+              0.000498235889306404
+            ],
+            "reference_loss": 3.8144642878323793
+          },
+          "18000": {
+            "candidate_loss": 3.7800090573728085,
+            "delta_candidate_minus_reference": -0.00031721778213977814,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0010768832146181534,
+              0.000442447650338597
+            ],
+            "reference_loss": 3.7803262751549482
+          },
+          "2000": {
+            "candidate_loss": 4.833609813824296,
+            "delta_candidate_minus_reference": 0.00020424090325832367,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              2.0451627974384025e-05,
+              0.0003880301785422633
+            ],
+            "reference_loss": 4.833405572921038
+          },
+          "20000": {
+            "candidate_loss": 3.757947338744998,
+            "delta_candidate_minus_reference": -0.00011863186955451965,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.000853662554520845,
+              0.0006163988154118057
+            ],
+            "reference_loss": 3.7580659706145525
+          },
+          "4000": {
+            "candidate_loss": 4.41392258182168,
+            "delta_candidate_minus_reference": -1.3677403330802917e-05,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.000408034204141195,
+              0.00038067939747958915
+            ],
+            "reference_loss": 4.413936259225011
+          },
+          "6000": {
+            "candidate_loss": 4.200705409049988,
+            "delta_candidate_minus_reference": -0.0005507972091436386,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.001123130585881804,
+              2.153616759452675e-05
+            ],
+            "reference_loss": 4.201256206259131
+          },
+          "8000": {
+            "candidate_loss": 4.073631612583995,
+            "delta_candidate_minus_reference": -0.0006032288074493408,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0013078314529426697,
+              0.00010137383804398813
+            ],
+            "reference_loss": 4.074234841391444
+          }
+        }
+      },
+      "final": {
+        "candidate_loss": 3.8408084290567786,
+        "delta_candidate_minus_reference": 0.0001411978155374527,
+        "num_paired_examples": 1024,
+        "paired_example_ci95": [
+          -0.00012067142520005782,
+          0.0004030670562749632
+        ],
+        "reference_loss": 3.840667231241241
+      },
+      "promotion_gate": {
+        "endpoint_and_interval_pass": false,
+        "is_primary_intervention_contrast": true,
+        "late_curve_requires_review": true,
+        "optimization_active_and_finite": true
+      },
+      "reference": "rope-amplitude"
+    },
+    "rope-split-polar_vs_nope-split-polar": {
+      "candidate": "rope-split-polar",
+      "development_curve": {
+        "late_slope_delta_per_1k_steps": 0.0004056892357766628,
+        "late_window_start_step": 15000,
+        "points": {
+          "10000": {
+            "candidate_loss": 3.9869176354259253,
+            "delta_candidate_minus_reference": -0.042518626898527145,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.04677586689742905,
+              -0.038261386899625244
+            ],
+            "reference_loss": 4.029436262324452
+          },
+          "12000": {
+            "candidate_loss": 3.91800544410944,
+            "delta_candidate_minus_reference": -0.0385274700820446,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.042748805184557946,
+              -0.03430613497953126
+            ],
+            "reference_loss": 3.9565329141914845
+          },
+          "14000": {
+            "candidate_loss": 3.8618737254291773,
+            "delta_candidate_minus_reference": -0.03722050413489342,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.04159250252319716,
+              -0.03284850574658967
+            ],
+            "reference_loss": 3.8990942295640707
+          },
+          "16000": {
+            "candidate_loss": 3.814508466050029,
+            "delta_candidate_minus_reference": -0.03483537398278713,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.039278611740673555,
+              -0.030392136224900706
+            ],
+            "reference_loss": 3.849343840032816
+          },
+          "18000": {
+            "candidate_loss": 3.7801437452435493,
+            "delta_candidate_minus_reference": -0.03223338909447193,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.03661906131115311,
+              -0.02784771687779075
+            ],
+            "reference_loss": 3.8123771343380213
+          },
+          "2000": {
+            "candidate_loss": 4.833317749202251,
+            "delta_candidate_minus_reference": -0.10928460210561752,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.11430865160265194,
+              -0.1042605526085831
+            ],
+            "reference_loss": 4.942602351307869
+          },
+          "20000": {
+            "candidate_loss": 3.7584326323121786,
+            "delta_candidate_minus_reference": -0.03321261703968048,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.03759105727182117,
+              -0.028834176807539795
+            ],
+            "reference_loss": 3.791645249351859
+          },
+          "4000": {
+            "candidate_loss": 4.414850518107414,
+            "delta_candidate_minus_reference": -0.08053283579647541,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.08549236722706662,
+              -0.0755733043658842
+            ],
+            "reference_loss": 4.49538335390389
+          },
+          "6000": {
+            "candidate_loss": 4.200705215334892,
+            "delta_candidate_minus_reference": -0.05808746814727783,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.06280834831898273,
+              -0.05336658797557294
+            ],
+            "reference_loss": 4.25879268348217
+          },
+          "8000": {
+            "candidate_loss": 4.0742160603404045,
+            "delta_candidate_minus_reference": -0.04897294007241726,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.05388828656651017,
+              -0.044057593578324346
+            ],
+            "reference_loss": 4.123189000412822
+          }
+        }
+      },
+      "final": {
+        "candidate_loss": 3.8405447327531874,
+        "delta_candidate_minus_reference": -0.035926677752286196,
+        "num_paired_examples": 1024,
+        "paired_example_ci95": [
+          -0.037545365486268086,
+          -0.034307990018304306
+        ],
+        "reference_loss": 3.8764714105054736
+      },
+      "promotion_gate": {
+        "endpoint_and_interval_pass": false,
+        "is_primary_intervention_contrast": false,
+        "late_curve_requires_review": false,
+        "optimization_active_and_finite": true
+      },
+      "reference": "nope-split-polar"
+    },
+    "rope-split-polar_vs_rope-polar": {
+      "candidate": "rope-split-polar",
+      "development_curve": {
+        "late_slope_delta_per_1k_steps": 4.45488840341568e-05,
+        "late_window_start_step": 15000,
+        "points": {
+          "10000": {
+            "candidate_loss": 3.9869176354259253,
+            "delta_candidate_minus_reference": 0.00022480450570583344,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0007748499325516175,
+              0.0012244589439632844
+            ],
+            "reference_loss": 3.9866928309202194
+          },
+          "12000": {
+            "candidate_loss": 3.91800544410944,
+            "delta_candidate_minus_reference": -0.00017399154603481293,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0011654525166163276,
+              0.0008174694245467018
+            ],
+            "reference_loss": 3.9181794356554747
+          },
+          "14000": {
+            "candidate_loss": 3.8618737254291773,
+            "delta_candidate_minus_reference": 0.0001059509813785553,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0008953478966920187,
+              0.0011072498594491293
+            ],
+            "reference_loss": 3.8617677744477987
+          },
+          "16000": {
+            "candidate_loss": 3.814508466050029,
+            "delta_candidate_minus_reference": 0.00030709803104400635,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0006757118421520246,
+              0.0012899079042400373
+            ],
+            "reference_loss": 3.814201368018985
+          },
+          "18000": {
+            "candidate_loss": 3.7801437452435493,
+            "delta_candidate_minus_reference": 0.0001346878707408905,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0009116198807348282,
+              0.0011809956222166092
+            ],
+            "reference_loss": 3.7800090573728085
+          },
+          "2000": {
+            "candidate_loss": 4.833317749202251,
+            "delta_candidate_minus_reference": -0.0002920646220445633,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0006593290995231995,
+              7.519985543407294e-05
+            ],
+            "reference_loss": 4.833609813824296
+          },
+          "20000": {
+            "candidate_loss": 3.7584326323121786,
+            "delta_candidate_minus_reference": 0.00048529356718063354,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.00046676208838861415,
+              0.0014373492227498811
+            ],
+            "reference_loss": 3.757947338744998
+          },
+          "4000": {
+            "candidate_loss": 4.414850518107414,
+            "delta_candidate_minus_reference": 0.0009279362857341766,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              0.00032839824369054174,
+              0.0015274743277778114
+            ],
+            "reference_loss": 4.41392258182168
+          },
+          "6000": {
+            "candidate_loss": 4.200705215334892,
+            "delta_candidate_minus_reference": -1.9371509552001953e-07,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0006544956575653773,
+              0.0006541082273743373
+            ],
+            "reference_loss": 4.200705409049988
+          },
+          "8000": {
+            "candidate_loss": 4.0742160603404045,
+            "delta_candidate_minus_reference": 0.0005844477564096451,
+            "num_paired_examples": 128,
+            "paired_example_ci95": [
+              -0.0003337432279950706,
+              0.0015026387408143607
+            ],
+            "reference_loss": 4.073631612583995
+          }
+        }
+      },
+      "final": {
+        "candidate_loss": 3.8405447327531874,
+        "delta_candidate_minus_reference": -0.00026369630359113216,
+        "num_paired_examples": 1024,
+        "paired_example_ci95": [
+          -0.0006232822229657697,
+          9.58896157835054e-05
+        ],
+        "reference_loss": 3.8408084290567786
+      },
+      "promotion_gate": {
+        "endpoint_and_interval_pass": false,
+        "is_primary_intervention_contrast": true,
+        "late_curve_requires_review": true,
+        "optimization_active_and_finite": true
+      },
+      "reference": "rope-polar"
+    }
+  },
+  "final_holdout_examples": 1024,
+  "final_holdout_start_batch": 2048,
+  "primary_context": 1024,
+  "provenance": {
+    "dataset": {
+      "manifest_sha256": {
+        ".tokenized-cache-manifest.json": "72e4f457b76f238fc0b6ccdf5d6a4d04369e80f62c188971f503bced94019f00",
+        "MANIFEST.json": "0c9f0003e04a25cb51c1502d5ac820a9bca65c795de2051579d417f2821dc9d5"
+      },
+      "resolved_path": "/workspace/data/tokenized/openwebtext_gpt2_bs1024",
+      "splits": {
+        "train": {
+          "fingerprint": "810ccf0fc385e9f7",
+          "rows": 8372843
+        },
+        "validation": {
+          "fingerprint": "bad5e77d382e856c",
+          "rows": 443501
+        }
+      }
+    },
+    "gpu_by_arm": {
+      "nope-amplitude": {
+        "compute_capability": [
+          12,
+          0
+        ],
+        "multiprocessor_count": 170,
+        "name": "NVIDIA GeForce RTX 5090",
+        "total_memory_bytes": 33670758400,
+        "uuid": "55fc0669-93bd-9223-674d-212086d4258b",
+        "visible_index": 0
+      },
+      "nope-fixed": {
+        "compute_capability": [
+          12,
+          0
+        ],
+        "multiprocessor_count": 170,
+        "name": "NVIDIA GeForce RTX 5090",
+        "total_memory_bytes": 33670758400,
+        "uuid": "866cad81-dc9b-cc40-afb8-c387d3ffba5f",
+        "visible_index": 0
+      },
+      "nope-polar": {
+        "compute_capability": [
+          12,
+          0
+        ],
+        "multiprocessor_count": 170,
+        "name": "NVIDIA GeForce RTX 5090",
+        "total_memory_bytes": 33670758400,
+        "uuid": "55fc0669-93bd-9223-674d-212086d4258b",
+        "visible_index": 0
+      },
+      "nope-split-polar": {
+        "compute_capability": [
+          12,
+          0
+        ],
+        "multiprocessor_count": 170,
+        "name": "NVIDIA GeForce RTX 5090",
+        "total_memory_bytes": 33670758400,
+        "uuid": "30b51b9a-d3ac-4a3f-7b1d-46332232a9c1",
+        "visible_index": 0
+      },
+      "rope-amplitude": {
+        "compute_capability": [
+          12,
+          0
+        ],
+        "multiprocessor_count": 170,
+        "name": "NVIDIA GeForce RTX 5090",
+        "total_memory_bytes": 33670758400,
+        "uuid": "8c7bb66c-eccc-1946-48f6-306f8f5a6d25",
+        "visible_index": 0
+      },
+      "rope-fixed": {
+        "compute_capability": [
+          12,
+          0
+        ],
+        "multiprocessor_count": 170,
+        "name": "NVIDIA GeForce RTX 5090",
+        "total_memory_bytes": 33670758400,
+        "uuid": "0d8515c7-fc33-c2b3-7e6e-48791efad78d",
+        "visible_index": 0
+      },
+      "rope-polar": {
+        "compute_capability": [
+          12,
+          0
+        ],
+        "multiprocessor_count": 170,
+        "name": "NVIDIA GeForce RTX 5090",
+        "total_memory_bytes": 33670758400,
+        "uuid": "13cc532b-da57-e8fc-29ec-7eca34a6e43e",
+        "visible_index": 0
+      },
+      "rope-split-polar": {
+        "compute_capability": [
+          12,
+          0
+        ],
+        "multiprocessor_count": 170,
+        "name": "NVIDIA GeForce RTX 5090",
+        "total_memory_bytes": 33670758400,
+        "uuid": "f9397a2d-9940-b5ab-bd06-54c68b83117b",
+        "visible_index": 0
+      }
+    },
+    "software": {
+      "cuda_visible_devices": "GPU-0d8515c7-fc33-c2b3-7e6e-48791efad78d",
+      "cudnn": 91900,
+      "nvidia_driver_versions": [
+        "595.84"
+      ],
+      "packages": {
+        "accelerate": "1.14.0",
+        "datasets": "5.0.1",
+        "tokenizers": "0.23.1",
+        "torch": "2.11.0+cu128",
+        "transformers": "5.16.1",
+        "triton": "3.6.0",
+        "wandb": "0.29.0"
+      },
+      "platform": "Linux-6.8.0-136-generic-x86_64-with-glibc2.39",
+      "python": "3.12.14 | packaged by conda-forge | (main, Aug 21 2026, 22:48:28) [GCC 14.4.0]",
+      "torch_cuda": "12.8"
+    },
+    "source": {
+      "branch": "main",
+      "commit": "cee321414a346799e38471a8c04ecf167a134518",
+      "dirty": false,
+      "repository": "/workspace/MLPRope",
+      "status_porcelain": []
+    }
+  },
+  "scope": "phase35_one_seed_20k_smooth_pre_qk_carrier",
+  "seed": 123,
+  "smooth_rank": 4,
+  "training_steps": 20000
+}

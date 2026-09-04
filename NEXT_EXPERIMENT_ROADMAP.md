@@ -132,7 +132,7 @@ late advantage was collapsing. It is historical evidence only: current
 interventions do not modify RoPE. Full results are in
 [`results/phase34_shared_frequency_200k/PHASE34_RESULTS.md`](results/phase34_shared_frequency_200k/PHASE34_RESULTS.md).
 
-## Stage 5 — carrier-only consolidation and optimization audit (active)
+## Stage 5 — carrier-only consolidation and optimization audit (completed)
 
 Enforce the fixed-RoPE/NoPE backbone boundary and remove learned-RoPE launch
 machinery. Every surviving learned positional change acts on the sinusoidal
@@ -150,7 +150,7 @@ For each learned intervention, persist sparse diagnostics for:
 This audit distinguishes poor conditioning, outlier-inflated Adam moments, and
 momentum interference from a well-optimized but scientifically null method.
 
-## Stage 6 — promote only a new clear finalist
+## Stage 6 — promote only a new clear finalist (Phase 35 completed)
 
 Start a new idea with one seed and a 10k--20k horizon. Add seeds 456 and 789
 only after a materially favorable, non-collapsing result under healthy
@@ -164,10 +164,17 @@ optimization. A durable claim requires:
 
 Only after this gate consider model-width transfer or longer-context testing.
 
-The current Stage-6 screen is Phase 35: rank-4 smooth pre-Q/K carrier
-amplitude/phase under both fixed RoPE and NoPE. Its frozen eight-arm protocol
-and direct-parent contrasts are in
-[`SMOOTH_CARRIER_PLAN.md`](SMOOTH_CARRIER_PLAN.md).
+Phase 35 tested rank-4 smooth pre-Q/K carrier amplitude/phase under fixed RoPE
+and NoPE. NoPE amplitude passed its direct-parent gate at `-0.010644`, but the
+matched RoPE arm remained better by `0.037168`; this is not an absolute model
+finalist. RoPE amplitude was `-0.002604`, just below the practical gate. Phase
+and Q/K untying were null or subthreshold under healthy optimization.
+
+Disposition: do not automatically add seeds or a 200k run. Retain NoPE smooth
+amplitude only as a conditional lead for a specifically RoPE-free objective.
+Otherwise Phase 35 closes the current carrier-shape ladder. Protocol and result
+are in [`SMOOTH_CARRIER_PLAN.md`](SMOOTH_CARRIER_PLAN.md) and the
+[`Phase-35 report`](results/phase35_smooth_carrier_20k/PHASE35_RESULTS.md).
 
 ## Explicitly deferred
 
@@ -177,6 +184,7 @@ and direct-parent contrasts are in
 - EMA/linear-RNN conditioning;
 - per-head post-projection sinusoidal branches;
 - full or low-rank mixing between Fourier pairs;
+- additional static carrier-phase or Q/K-untying ladders;
 - combinations of AddRoPE and pre-Q/K injection, absent a specific factorial
   hypothesis;
 - broad mapper or coupling sweeps.

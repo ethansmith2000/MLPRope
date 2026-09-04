@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_ROOT = ROOT / "model-output" / "position_bias_phase35_smooth_carrier_20k"
 RESULT_ROOT = ROOT / "results" / "phase35_smooth_carrier_20k"
 STEP = 20_000
+SMOOTH_RANK = 4
 ARMS = {
     "rope-fixed": "phase35-rope-tied-fixed-seed123-s20000-h768d8",
     "rope-amplitude": (
@@ -145,7 +146,10 @@ def optimization_health(arm: str) -> dict:
         if key not in {"step", "timestamp"} and isinstance(value, (int, float))
     ]
     populated = [
-        row for row in rows if row.get(f"{prefix}/parameter_update/l2", 0) > 0
+        row
+        for row in rows
+        if row["step"] < STEP
+        and row.get(f"{prefix}/parameter_update/l2", 0) > 0
     ]
     last = rows[-1]
     descent_cosines = [
@@ -153,21 +157,36 @@ def optimization_health(arm: str) -> dict:
         for row in populated
         if row.get(f"{prefix}/descent_update_gradient_cosine") is not None
     ]
+    last_active = populated[-1] if populated else rows[-1]
     return {
         "sample_steps": [row["step"] for row in rows],
         "all_numeric_finite": all(math.isfinite(float(value)) for value in numeric),
-        "last_raw_gradient_l2": last[f"{prefix}/raw_gradient/l2"],
-        "last_parameter_update_l2": last[f"{prefix}/parameter_update/l2"],
-        "last_carrier_function_step_rms": last[
+        "endpoint_parameter_update_l2": last[f"{prefix}/parameter_update/l2"],
+        "last_active_step": last_active["step"],
+        "last_active_raw_gradient_l2": last_active[f"{prefix}/raw_gradient/l2"],
+        "last_active_parameter_update_l2": last_active[
+            f"{prefix}/parameter_update/l2"
+        ],
+        "last_active_carrier_function_step_rms": last_active[
             f"{prefix}/carrier_function_step/rms"
         ],
-        "last_gradient_clip_ratio": last[f"{prefix}/gradient_clip_ratio"],
-        "last_sqrt_second_moment_max_to_rms": last[
+        "last_active_gradient_clip_ratio": last_active[
+            f"{prefix}/gradient_clip_ratio"
+        ],
+        "last_active_sqrt_second_moment_max_to_rms": last_active[
             f"{prefix}/adam_after/sqrt_second_moment_max_to_rms"
         ],
-        "last_descent_update_gradient_cosine": last[
+        "last_active_descent_update_gradient_cosine": last_active[
             f"{prefix}/descent_update_gradient_cosine"
         ],
+        "median_descent_update_gradient_cosine": (
+            statistics.median(descent_cosines) if descent_cosines else None
+        ),
+        "positive_descent_update_gradient_cosine_fraction": (
+            sum(value > 0 for value in descent_cosines) / len(descent_cosines)
+            if descent_cosines
+            else None
+        ),
         "minimum_descent_update_gradient_cosine": (
             min(descent_cosines) if descent_cosines else None
         ),
@@ -178,6 +197,23 @@ def optimization_health(arm: str) -> dict:
     }
 
 
+def final_metrics(arm: str) -> dict:
+    path = run_dir(arm) / "metrics.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line]
+    matches = [
+        row
+        for row in rows
+        if row.get("step") == STEP
+        and row.get("evaluation_kind") == "final_holdout"
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"Expected one step-{STEP} final-holdout metrics row for {arm}, "
+            f"got {len(matches)}"
+        )
+    return matches[0]
+
+
 def carrier_profiles(arm: str) -> dict:
     path = run_dir(arm) / "position_profiles" / f"step_{STEP:08d}.pt"
     payload = torch.load(path, map_location="cpu", weights_only=True)
@@ -186,29 +222,115 @@ def carrier_profiles(arm: str) -> dict:
         for key, value in payload["profiles"].items()
         if "/qk_preprojection/" in key
     }
-    serialized = {key: value.tolist() for key, value in profiles.items()}
-    q_amplitude = [
-        value
-        for key, value in profiles.items()
-        if key.endswith("/log_amplitude_q")
-    ]
+    q_amplitude_keys = sorted(
+        key for key in profiles if key.endswith("/log_amplitude_q")
+    )
+    q_phase_keys = sorted(key for key in profiles if key.endswith("/phase_q"))
+    q_amplitude = [profiles[key] for key in q_amplitude_keys]
     k_amplitude = [
         profiles[key.replace("/log_amplitude_q", "/log_amplitude_k")]
-        for key in profiles
-        if key.endswith("/log_amplitude_q")
+        for key in q_amplitude_keys
     ]
-    q_phase = [value for key, value in profiles.items() if key.endswith("/phase_q")]
-    k_phase = [profiles[key.replace("/phase_q", "/phase_k")] for key in profiles if key.endswith("/phase_q")]
+    q_phase = [profiles[key] for key in q_phase_keys]
+    k_phase = [
+        profiles[key.replace("/phase_q", "/phase_k")]
+        for key in q_phase_keys
+    ]
+    metrics = final_metrics(arm)
+    q_gates = [
+        float(metrics[key.replace("/log_amplitude_q", "/gate_q")])
+        for key in q_amplitude_keys
+    ]
+    k_gates = [
+        float(metrics[key.replace("/log_amplitude_q", "/gate_k")])
+        for key in q_amplitude_keys
+    ]
 
     def flat(values: list[torch.Tensor]) -> torch.Tensor:
         return torch.cat([value.reshape(-1) for value in values])
 
     qa, ka, qp, kp = map(flat, (q_amplitude, k_amplitude, q_phase, k_phase))
+    q_effective_amplitude = flat(
+        [delta.exp() * gate for delta, gate in zip(q_amplitude, q_gates, strict=True)]
+    )
+    k_effective_amplitude = flat(
+        [delta.exp() * gate for delta, gate in zip(k_amplitude, k_gates, strict=True)]
+    )
+    gates = q_gates + k_gates
+    spectral_amplitudes = torch.cat((qa.exp(), ka.exp()))
+    effective_amplitudes = torch.cat((q_effective_amplitude, k_effective_amplitude))
+
+    def project_dct(value: torch.Tensor, *, start_mode: int) -> tuple[list[float], float]:
+        size = value.numel()
+        index = torch.arange(size, dtype=torch.float32)[:, None] + 0.5
+        modes = torch.arange(
+            start_mode,
+            start_mode + SMOOTH_RANK,
+            dtype=torch.float32,
+        )[None, :]
+        basis = torch.cos(math.pi * index * modes / size)
+        scales = torch.full(
+            (SMOOTH_RANK,),
+            math.sqrt(2.0),
+            dtype=torch.float32,
+        )
+        if start_mode == 0:
+            scales[0] = 1.0
+        basis = basis * scales
+        coordinates = basis.T @ value.float() / size
+        residual = (basis @ coordinates - value.float()).abs().max().item()
+        return coordinates.tolist(), residual
+
+    compact_profiles = {}
+    reconstruction_errors = []
+    for index, q_amplitude_key in enumerate(q_amplitude_keys):
+        layer = q_amplitude_key.split("/")[1]
+        values = (
+            ("log_amplitude_q", q_amplitude[index], 1),
+            ("log_amplitude_k", k_amplitude[index], 1),
+            ("phase_q", q_phase[index], 0),
+            ("phase_k", k_phase[index], 0),
+        )
+        entry = {"gate_q": q_gates[index], "gate_k": k_gates[index]}
+        for name, value, start_mode in values:
+            coordinates, error = project_dct(value, start_mode=start_mode)
+            entry[f"{name}_dct_coordinates"] = coordinates
+            reconstruction_errors.append(error)
+            if name.startswith("log_amplitude"):
+                quartile = value.numel() // 4
+                high_frequency = value[:quartile].mean().exp().item()
+                low_frequency = value[-quartile:].mean().exp().item()
+                entry[f"{name}_high_frequency_quartile_geomean_factor"] = (
+                    high_frequency
+                )
+                entry[f"{name}_low_frequency_quartile_geomean_factor"] = (
+                    low_frequency
+                )
+                entry[f"{name}_low_to_high_frequency_ratio"] = (
+                    low_frequency / high_frequency
+                )
+        compact_profiles[layer] = entry
     return {
-        "effective_profiles": serialized,
-        "log_amplitude_abs_max": max(qa.abs().max().item(), ka.abs().max().item()),
+        "dct_coordinates_by_layer": compact_profiles,
+        "dct_reconstruction_abs_max": max(reconstruction_errors),
+        "global_gate_min": min(gates),
+        "global_gate_max": max(gates),
+        "spectral_log_amplitude_delta_abs_max": max(
+            qa.abs().max().item(), ka.abs().max().item()
+        ),
+        "spectral_amplitude_factor_min": spectral_amplitudes.min().item(),
+        "spectral_amplitude_factor_max": spectral_amplitudes.max().item(),
+        "effective_amplitude_min": effective_amplitudes.min().item(),
+        "effective_amplitude_max": effective_amplitudes.max().item(),
         "phase_abs_max": max(qp.abs().max().item(), kp.abs().max().item()),
         "qk_log_amplitude_diff_rms": (qa - ka).square().mean().sqrt().item(),
+        "qk_effective_amplitude_diff_rms": (
+            (q_effective_amplitude - k_effective_amplitude)
+            .square()
+            .mean()
+            .sqrt()
+            .item()
+        ),
         "qk_phase_diff_rms": (qp - kp).square().mean().sqrt().item(),
     }
 
@@ -220,9 +342,11 @@ def analyze() -> dict:
     finals = {arm: final_losses(arm) for arm in ARMS}
     developments = {arm: development_losses(arm) for arm in ARMS}
     arm_results = {}
+    launches = {}
     for arm in ARMS:
         summary = json.loads((run_dir(arm) / "training_summary.json").read_text())
         provenance = json.loads((run_dir(arm) / "run_provenance.json").read_text())
+        launches[arm] = provenance["launches"][-1]
         arm_results[arm] = {
             "final_holdout_loss": statistics.fmean(finals[arm]),
             "target_tokens_per_second": summary["target_tokens_per_second"],
@@ -232,6 +356,20 @@ def analyze() -> dict:
             "optimization_health": optimization_health(arm),
             "carrier_profiles": carrier_profiles(arm),
         }
+    source_states = {
+        json.dumps(launch["source"], sort_keys=True) for launch in launches.values()
+    }
+    dataset_splits = {
+        json.dumps(launch["dataset"]["splits"], sort_keys=True)
+        for launch in launches.values()
+    }
+    if len(source_states) != 1 or any(
+        launch["source"]["dirty"] for launch in launches.values()
+    ):
+        raise ValueError("Phase-35 arms do not share one clean source state")
+    if len(dataset_splits) != 1:
+        raise ValueError("Phase-35 arms do not share dataset split fingerprints")
+    first_launch = launches[next(iter(ARMS))]
     contrast_results = {}
     primary_names = {name for name, _, _ in PRIMARY_CONTRASTS}
     for name, candidate, reference in CONTRASTS:
@@ -261,10 +399,28 @@ def analyze() -> dict:
         "scope": "phase35_one_seed_20k_smooth_pre_qk_carrier",
         "seed": 123,
         "training_steps": STEP,
-        "smooth_rank": 4,
+        "smooth_rank": SMOOTH_RANK,
         "primary_context": 1_024,
         "final_holdout_start_batch": 2_048,
         "final_holdout_examples": 1_024,
+        "provenance": {
+            "source": first_launch["source"],
+            "dataset": {
+                "resolved_path": first_launch["dataset"]["resolved_path"],
+                "splits": first_launch["dataset"]["splits"],
+                "manifest_sha256": {
+                    name: manifest["sha256"]
+                    for name, manifest in first_launch["dataset"][
+                        "manifests"
+                    ].items()
+                },
+            },
+            "software": first_launch["software"],
+            "gpu_by_arm": {
+                arm: launch["hardware"]["cuda_device"]
+                for arm, launch in launches.items()
+            },
+        },
         "arms": arm_results,
         "contrasts": contrast_results,
         "caveat": (
@@ -281,8 +437,8 @@ def render(results: dict) -> str:
         "All arms use seed 123 and one common 20k schedule. Negative deltas favor",
         "the candidate.",
         "",
-        "| Arm | Final loss | Target tok/s | Peak MiB | Amp max | Phase max |",
-        "| --- | ---: | ---: | ---: | ---: | ---: |",
+        "| Arm | Final loss | Target tok/s | Peak MiB | Scalar-gate range | Spectral amp range | Phase max |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for arm in ARMS:
         row = results["arms"][arm]
@@ -291,7 +447,10 @@ def render(results: dict) -> str:
             f"| {arm} | {row['final_holdout_loss']:.6f} | "
             f"{row['target_tokens_per_second']:,.0f} | "
             f"{row['peak_reserved_mib']:,.0f} | "
-            f"{profile['log_amplitude_abs_max']:.4f} | "
+            f"{profile['global_gate_min']:.3f}--"
+            f"{profile['global_gate_max']:.3f} | "
+            f"{profile['spectral_amplitude_factor_min']:.3f}--"
+            f"{profile['spectral_amplitude_factor_max']:.3f} | "
             f"{profile['phase_abs_max']:.4f} |"
         )
     lines.extend(
@@ -315,12 +474,84 @@ def render(results: dict) -> str:
             f"| {name} | {final['delta_candidate_minus_reference']:+.6f} | "
             f"[{low:+.6f}, {high:+.6f}] | {slope_text} | {gate_text} |"
         )
+    rope_amplitude_delta = results["contrasts"][
+        "rope-amplitude_vs_rope-fixed"
+    ]["final"]["delta_candidate_minus_reference"]
+    nope_amplitude_delta = results["contrasts"][
+        "nope-amplitude_vs_nope-fixed"
+    ]["final"]["delta_candidate_minus_reference"]
+    fixed_backbone_gap = (
+        results["arms"]["nope-fixed"]["final_holdout_loss"]
+        - results["arms"]["rope-fixed"]["final_holdout_loss"]
+    )
+    amplitude_backbone_gap = (
+        results["arms"]["nope-amplitude"]["final_holdout_loss"]
+        - results["arms"]["rope-amplitude"]["final_holdout_loss"]
+    )
+    recovered_fraction = 1.0 - amplitude_backbone_gap / fixed_backbone_gap
+    health = [row["optimization_health"] for row in results["arms"].values()]
+    median_cosines = [row["median_descent_update_gradient_cosine"] for row in health]
+    positive_fractions = [
+        row["positive_descent_update_gradient_cosine_fraction"] for row in health
+    ]
+    rope_frequency_ratios = [
+        layer["log_amplitude_q_low_to_high_frequency_ratio"]
+        for layer in results["arms"]["rope-amplitude"]["carrier_profiles"][
+            "dct_coordinates_by_layer"
+        ].values()
+    ]
+    nope_frequency_ratios = [
+        layer["log_amplitude_q_low_to_high_frequency_ratio"]
+        for layer in results["arms"]["nope-amplitude"]["carrier_profiles"][
+            "dct_coordinates_by_layer"
+        ].values()
+    ]
     lines.extend(
         [
             "",
-            "The JSON companion contains every development point, complete effective",
-            "amplitude/phase profiles, parameter counts, and optimization-health",
-            "summaries. Inspect late curves before promoting any endpoint pass.",
+            "## Decision",
+            "",
+            f"Only NoPE smooth amplitude clears the direct-parent gate "
+            f"({nope_amplitude_delta:+.6f}).",
+            f"Smooth amplitude under RoPE is a small, precise favorable signal "
+            f"({rope_amplitude_delta:+.6f}),",
+            "but it misses the predeclared 0.003-nat practical threshold. Phase is null",
+            "under both backbones, and Q/K splitting is below threshold.",
+            "",
+            f"Smooth amplitude recovers {recovered_fraction:.1%} of the fixed-shape "
+            "RoPE-versus-NoPE gap,",
+            "but does not replace RoPE: amplitude+RoPE remains better than",
+            f"amplitude+NoPE by {amplitude_backbone_gap:.6f} nats. No automatic seed",
+            "or 200k expansion is warranted unless a specifically",
+            "RoPE-free model is the research target.",
+            "",
+            "The learned spectra are not disguised scalar-gate changes. With RoPE,",
+            f"every layer favors the lowest-frequency quartile by "
+            f"{min(rope_frequency_ratios):.2f}x--{max(rope_frequency_ratios):.2f}x",
+            "relative to the highest-frequency quartile. NoPE learns heterogeneous",
+            f"layer roles spanning {min(nope_frequency_ratios):.2f}x--"
+            f"{max(nope_frequency_ratios):.2f}x. This is descriptive one-seed",
+            "evidence, not yet a general spectral law.",
+            "",
+            "## Optimization audit",
+            "",
+            "Every arm has finite, nonzero functional movement and a gradient-clip",
+            "ratio of 1.0 at the last active sample. Across arms, the median",
+            f"descent-update/gradient cosine is {min(median_cosines):.3f}--"
+            f"{max(median_cosines):.3f}, and",
+            f"{min(positive_fractions):.1%}--{max(positive_fractions):.1%} of "
+            "nonzero-update samples have positive alignment.",
+            "Some 19k samples turn negative as the linear schedule",
+            "approaches zero, including the scalar controls; their function-space",
+            "steps are tiny. There is no intervention-specific explosion, clipping,",
+            "or Adam suppression that explains the null phase results.",
+            "",
+            "The JSON companion contains every development point, losslessly compact",
+            "rank-4 DCT profile coordinates, parameter counts, and optimization-health",
+            "summaries. Here `fixed` means a fixed spectral shape with the existing",
+            "learned per-layer tied scalar gate; the smooth modes add zero-mean",
+            "spectral deformation. Inspect late curves before promoting any endpoint",
+            "pass.",
             "",
         ]
     )

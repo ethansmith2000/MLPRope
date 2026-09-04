@@ -83,9 +83,17 @@ small endpoint advantage, but its late advantage was collapsing and learned
 RoPE is outside the active architectural boundary.
 
 Consequently the default anchor remains the fixed tied pre-Q/K carrier with
-standard RoPE. Static carrier amplitude/phase variants remain valid controlled
-ablations, not established improvements. Dynamic frequency and arbitrary
-tokenwise warp remain closed.
+standard RoPE. Free pairwise carrier amplitude/phase variants remain controlled
+ablations rather than established improvements. Dynamic frequency and
+arbitrary tokenwise warp remain closed.
+
+Phase 35 then tested a rank-4 smooth, zero-mean spectral transform while
+retaining the learned per-layer scalar gate. Smooth amplitude passed its
+direct-parent gate under NoPE (`-0.010644`) but not under RoPE (`-0.002604`,
+below the `0.003` practical threshold). Phase was null under both backbones;
+separate Q/K transforms were subthreshold. The NoPE amplitude arm remained
+`0.037168` worse than matched amplitude+RoPE, so it is a conditional result for
+RoPE-free work rather than a replacement for the default backbone.
 
 ## Optimization-aware evaluation
 
@@ -139,7 +147,7 @@ Do not reopen a broad sweep immediately. New ideas should first satisfy:
 6. longer or repeated runs only for a materially favorable, non-collapsing
    candidate.
 
-The active follow-up is a rank-4 smooth static amplitude/phase deformation of
-the pre-Q/K carrier, implemented with low-order DCT modes over log-frequency
-index. It is screened as a tied amplitude ladder, a tied polar ladder, and an
-untied Q/K polar rung under both fixed RoPE and NoPE.
+The rank-4 smooth static amplitude/phase follow-up is complete. No further run
+is active. New work should begin from a distinct hypothesis; repeating phase
+or Q/K-untying variants without such a reason is not warranted by the healthy
+null optimization traces.

@@ -1,6 +1,6 @@
 # Phase 35: smooth sinusoidal-carrier screen
 
-_Frozen protocol, 2026-09-04._
+_Completed protocol and result, 2026-09-04._
 
 ## Question
 
@@ -17,7 +17,6 @@ RoPE frequencies are uniformly spaced in log frequency, so low-order DCT-II
 modes over pair index provide a smooth orthogonal basis. The columns are scaled
 to unit RMS rather than unit L2 norm, giving coordinates a width-independent
 functional meaning. For `P` Fourier pairs, let
-let
 
 ```text
 B_amp[i,r] = sqrt(2) cos(pi (i+1/2) (r+1) / P)
@@ -35,9 +34,8 @@ A_i^b   = g_b exp(delta_b[i]) R(phi_b[i]).
 
 `B_amp` excludes the constant mode, so `mean(delta_b)=0` and it cannot
 duplicate the global gain `g_b`. Both bases have mutually orthogonal,
-unit-RMS columns. All
-coordinates initialize to zero and all gains to one, giving exact equality to
-the fixed tied carrier.
+unit-RMS columns. All coordinates initialize to zero and all gains to one,
+giving exact equality to the fixed tied carrier.
 
 This differs from Phase 33 in two useful ways. First, tied smooth modes alter
 the carrier without simultaneously introducing Q/K disagreement. Second,
@@ -99,3 +97,39 @@ This phase does not vary rank, frequency, mapper family, head granularity,
 content conditioning, or AddRoPE location. It does not combine pre-Q/K and
 AddRoPE carriers. Those axes remain deferred unless this coherent static test
 produces a clear signal.
+
+## Result and disposition
+
+All eight arms completed. Here the `tied_scalar` parent has a learned scalar
+gate in each layer; “fixed” refers to its spectral shape, not a frozen global
+amplitude. The smooth amplitude rung therefore isolates four zero-mean DCT
+coordinates per layer.
+
+- With NoPE, smooth amplitude improved final loss by `-0.010644`, paired-example
+  95% CI `[-0.011700,-0.009589]`, and passed the direct-parent screen gate.
+- With fixed RoPE, smooth amplitude improved by `-0.002604`, CI
+  `[-0.003194,-0.002013]`. This is likely a real seed-123 early-training effect,
+  but it missed the predeclared `0.003` practical threshold.
+- Adding phase changed loss by `+0.000141/+0.000142` under RoPE/NoPE. It was
+  null despite finite, substantial parameter and carrier-function movement.
+- Splitting Q/K changed loss by `-0.000264/-0.001506` under RoPE/NoPE. Neither
+  cleared the practical threshold.
+- Smooth amplitude recovered about 17.8% of the scalar-carrier RoPE-versus-NoPE
+  gap, but amplitude+RoPE still beat amplitude+NoPE by `0.037168` nats.
+- The RoPE amplitude arm emphasized the lowest-frequency quartile over the
+  highest by 1.54x--3.48x in every layer. NoPE learned heterogeneous layer
+  profiles spanning 0.26x--3.19x. The spectral coordinates therefore did real
+  work beyond the scalar gate, though this one-seed pattern is descriptive.
+
+All optimizer traces were finite and unclipped. Median descent-update/current-
+gradient cosine was positive for every arm, and 78.6%--96.4% of sampled
+nonzero updates had positive alignment. Late negative samples occurred as the
+linear learning rate approached zero, including in scalar controls, with tiny
+functional steps. The phase null is therefore scientific evidence rather than
+an obvious optimization failure.
+
+No seed or 200k expansion is automatic. Smooth NoPE amplitude is retained as a
+conditional candidate only if a specifically RoPE-free architecture becomes
+the target; it is not the best absolute model. Phase and Q/K splitting are not
+promoted. Full paired curves and compact reconstructible DCT profiles are in
+[`results/phase35_smooth_carrier_20k/PHASE35_RESULTS.md`](results/phase35_smooth_carrier_20k/PHASE35_RESULTS.md).

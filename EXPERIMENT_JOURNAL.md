@@ -3200,3 +3200,31 @@ compile-time bf16-input/fp32-LayerNorm-weight fusion warning; training and
 compilation succeeded, so it is a possible common kernel optimization rather
 than an arm-specific blocker. The 50-step losses are health checks only.
 Compact evidence is under `results/phase33_static_qkpre_preflight/`.
+
+## 2026-09-04 — Phase 35 smooth carrier shape
+
+After removing learned-RoPE and EMA machinery from the active runtime, Phase 35
+tested a narrow carrier-only question. Each layer retained the established
+learned tied scalar gate and optionally added four low-order, unit-RMS DCT
+modes over log-frequency index for zero-mean log amplitude, phase, or separate
+Q/K polar transforms. Standard RoPE was either fixed and present or absent;
+none of these parameters modified RoPE itself. All eight variants shared the
+same seed, initialization, data order, and 20k linear schedule.
+
+On the disjoint 1,024-example final holdout, smooth amplitude improved the
+NoPE carrier by `-0.010644`, paired-example 95% CI
+`[-0.011700,-0.009589]`. It improved the RoPE carrier by a smaller `-0.002604`,
+CI `[-0.003194,-0.002013]`, below the predeclared `0.003` practical gate.
+Phase added `+0.000141/+0.000142` under RoPE/NoPE. Splitting Q/K added
+`-0.000264/-0.001506`; neither cleared its gate. Smooth amplitude recovered
+17.8% of the RoPE-versus-NoPE gap, while matched amplitude+RoPE still beat
+amplitude+NoPE by `0.037168`.
+
+All sparse optimizer traces were finite and unclipped, every adapter produced
+nonzero carrier-function movement, and most sampled updates aligned with the
+current descent direction. The learned spectra moved substantially, especially
+without RoPE. Thus phase and Q/K-untying are well-optimized null/subthreshold
+results rather than inactive coordinates. No automatic seed or 200k expansion
+is planned; NoPE amplitude remains conditional on a specifically RoPE-free
+research objective. Durable results are in
+`results/phase35_smooth_carrier_20k/`.
