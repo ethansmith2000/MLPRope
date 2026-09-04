@@ -1036,19 +1036,14 @@ class GeometryAndContentTest(unittest.TestCase):
         actuator = channel.content_actuator
         self.assertGreater(actuator.q_up.grad.abs().sum().item(), 0)
 
-    def test_additive_adaptive_gain_is_an_exact_null_at_initialization(self):
-        content = torch.randn(2, 4, 9, 8)
-        gain_channel = self._channel(
+    def test_noncarrier_adaptive_qk_gain_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "adaptive_gain.*unsupported"):
             qk_config(
                 "additive",
                 "amplitude_phase",
                 conditioning="adaptive_gain",
                 conditioning_source="dedicated",
             )
-        )
-        gain = gain_channel(9, q_content=content, k_content=content)
-        torch.testing.assert_close(gain.q_gain, torch.ones_like(gain.q_gain))
-        torch.testing.assert_close(gain.k_gain, torch.ones_like(gain.k_gain))
 
     def test_dedicated_position_content_is_low_rank_and_configurable(self):
         torch.manual_seed(0)

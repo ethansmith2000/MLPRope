@@ -5,11 +5,12 @@ construction. The active runtime deliberately supports three core families:
 
 1. fixed standard RoPE, or a NoPE control;
 2. additive Fourier features on projected Q/K (AddRoPE); and
-3. a frozen sinusoid added immediately before the Q/K projections.
+3. a sinusoid added immediately before the Q/K projections.
 
-One research-only extension can replace either fixed RoPE frequencies or the
-pre-Q/K carrier frequencies with a small static bank shared by every layer and
-attention head. It never depends on token content.
+Learned amplitude, phase, or frequency acts only on a sinusoidal carrier. RoPE
+is always standard and fixed when enabled; otherwise the backbone is NoPE. The
+active design contract is
+[`SINUSOID_INTERVENTION_POLICY.md`](SINUSOID_INTERVENTION_POLICY.md).
 
 The research rationale and experiment plan are in
 [`CONSOLIDATION_PLAN.md`](CONSOLIDATION_PLAN.md). Historical implementations
@@ -26,15 +27,14 @@ position_content_dim: 64
 position_content_coupling: separate # shared | separate
 
 qk_preprojection: {enabled: false}
-rope_frequency: {mode: fixed}
 qk: {enabled: false}
 logit_bias: {enabled: false}
 ```
 
-`use_rope=true` applies fixed split-half RoPE unless an additive `qk` channel
-is enabled. AddRoPE replaces multiplicative RoPE; this preserves the
-historical experiment semantics. `use_rope=false` with both additive paths
-disabled is the NoPE control.
+`use_rope=true` always applies fixed split-half RoPE. Carrier interventions are
+orthogonal: an enabled additive `qk` channel no longer disables RoPE.
+`use_rope=false` selects NoPE whether or not a carrier is active. This behavior
+differs from historical AddRoPE configs, which implicitly replaced RoPE.
 
 `qk_norm_mode=method_aware_rms` composes an additive Q/K position signal with
 the raw projections and then applies one learned per-head RMSNorm:
@@ -58,21 +58,21 @@ q'_i(p) = R(omega_i p) q_i(p)
 ```
 
 RoPE angles and cached sine/cosine tables remain fp32 even when model weights
-are converted to bf16/fp16. In `fixed` mode there are no trainable frequency,
-phase-residual, scale, clock, or warp parameters in this path. Historical
-local/controller frequency forms still raise a clear migration error; the only
-trainable form is the globally shared bank described below.
+are converted to bf16/fp16. There are no trainable frequency, phase-residual,
+scale, clock, or warp parameters in this path. Historical learned-RoPE forms
+raise a clear migration error.
 
-## Globally shared static frequency bank
+## Carrier-only static frequency bank
 
-The same schema is available under top-level `rope_frequency` and under
+The research frequency schema is available only under
 `qk_preprojection.frequency`:
 
 ```yaml
-rope_frequency:
-  mode: fixed                 # fixed | learned_log | learned_horizon
-  reference_length: null      # resolves to the training sequence length
-  max_grad_norm: 1.0          # clips this bank independently
+qk_preprojection:
+  frequency:
+    mode: fixed                 # fixed | learned_log | learned_horizon
+    reference_length: null      # resolves to the training sequence length
+    max_grad_norm: 1.0          # clips this bank independently
 ```
 
 For each Fourier pair, `learned_log` uses
@@ -94,13 +94,13 @@ in its phase gradient is `p/L <= 1` on the training context instead of `p`.
 This is a forward parameterization, not a custom backward rule. Both learned
 modes are exact fixed-frequency anchors at initialization.
 
-Each enabled location owns exactly one top-level fp32 vector: `D_head/2`
-parameters for RoPE or `D_model/2` for the full-width pre-Q/K carrier. That
-vector is shared across Q/K, heads, and layers, excluded from weight decay, and
-clipped independently from ordinary model gradients. Diagnostics report
-frequency multipliers, endpoint phase displacement, nonpositive frequencies,
-and ordering violations. This extension preserves causality because the bank
-is static after training and its forward value does not read the sequence.
+An enabled learned carrier owns exactly one top-level fp32 vector of
+`D_model/2` parameters. It is shared across Q/K, heads, and layers, excluded
+from weight decay, and clipped independently from ordinary model gradients.
+Diagnostics report frequency multipliers, endpoint phase displacement and
+Jacobian, nonpositive frequencies, ordering violations, and actual carrier
+movement. This extension preserves causality because the bank is static after
+training and its forward value does not read the sequence.
 
 ## Pre-Q/K sinusoidal injection
 
@@ -248,7 +248,6 @@ Supported conditioning kinds are:
 - `local_residual`: zero-initialized local residual on the positional output;
 - `content_gate`: tokenwise bounded scaling;
 - `phase_rotation`: content-dependent rotation of `pair_normalized` pairs;
-- `adaptive_gain`: tokenwise Q/K gain initialized to one;
 - `additive_phase`: content-dependent phase of an additive carrier; and
 - `carrier_hypernetwork`: anchor-relative additive carrier deltas.
 
@@ -264,12 +263,39 @@ frequency multipliers were also removed because their phase sensitivity grows
 with absolute position. The retained dynamic path changes additive carrier
 amplitude/phase without changing fixed RoPE itself.
 
+## Intervention optimizer diagnostics
+
+Two training fields control sparse read-only optimizer-health sampling:
+
+```yaml
+intervention_optimizer_warmup_steps: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
+intervention_optimizer_log_every: 1000  # null disables periodic samples
+```
+
+When a learned carrier intervention is active, samples are appended to
+`intervention_optimization.jsonl` and sent to the configured tracker. Metrics
+are separated into `pre_qk_sinusoid_frequency`,
+`pre_qk_sinusoid_adapter`, `additive_qk_sinusoid`, and
+`position_content_projection`. They include raw/clipped gradient statistics,
+Adam moment diagnostics, realized parameter movement, update/gradient
+alignment, carrier-function movement for static amplitude/phase transforms,
+and phase/function movement for carrier-frequency coordinates.
+Sampling does not alter the optimizer or forward pass.
+
 ## Legacy and removed fields
 
 Legacy v1 additive configs still upgrade (`apply=add`). Enabled
 `apply=phase_residual` configs now fail with a migration message. Historical
 rotary output-scale keys remain parseable inside disabled archival config
 shapes but do not affect fixed RoPE.
+
+Historical top-level `rope_frequency` and `rope_frequency_mode` are accepted
+only when fixed, then removed from the resolved configuration. Any learned form
+fails with a migration message directing frequency experiments to
+`qk_preprojection.frequency`.
+
+The former `conditioning.kind=adaptive_gain` is also rejected: it multiplied
+the complete Q/K tensors rather than transforming the sinusoidal carrier.
 
 The following historical top-level blocks accept only their disabled form:
 

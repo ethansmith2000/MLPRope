@@ -35,16 +35,18 @@ from tqdm.auto import tqdm
 from transformers import AutoConfig, AutoTokenizer, default_data_collator, get_scheduler
 
 from position import (
+    InterventionOptimizationMonitor,
     POSITION_PRESETS,
     POSITION_SCHEMA_VERSION,
     QK_PREPROJECTION_DEFAULTS,
     V1_CHANNEL_DEFAULTS,
     deep_merge,
+    collect_intervention_parameter_groups,
+    intervention_optimization_due,
     legacy_position_run_tag,
     normalize_logit_bias_config,
     normalize_position_content_config,
     normalize_qk_preprojection_config,
-    normalize_shared_frequency_config,
     resolve_channel_config,
     v2_position_run_tag,
 )
@@ -174,6 +176,11 @@ DEFAULT_CONFIG = {
     "save_evaluation_details": False,
     "validate_every": 1000,
     "log_every_n_steps": 50,
+    # Sparse optimizer-health traces for learned positional interventions.
+    # Early powers of two expose startup transients; the periodic trace catches
+    # later Adam-moment and functional-step drift.
+    "intervention_optimizer_warmup_steps": [1, 2, 4, 8, 16, 32, 64, 128, 256, 512],
+    "intervention_optimizer_log_every": 1000,
     # CUDA-event stage timings (data / forward / backward / optimizer).
     "profile_every_n_steps": 10,
     "dry_run": False,
@@ -287,9 +294,6 @@ def position_run_tag(cfg: dict) -> str:
             attn_impl=cfg["attn_impl"],
         )
     extras = []
-    rope_frequency = cfg.get("rope_frequency", {})
-    if rope_frequency.get("mode", "fixed") != "fixed":
-        extras.append("ropefreq-" + rope_frequency["mode"].replace("_", "-"))
     preprojection = cfg.get("qk_preprojection", {})
     if preprojection.get("enabled", False):
         mode = preprojection.get("mode", "tied_scalar").replace("_", "-")
@@ -306,7 +310,6 @@ def position_run_tag(cfg: dict) -> str:
             "qk": cfg["qk"],
             "logit_bias": cfg["logit_bias"],
             "qk_preprojection": cfg.get("qk_preprojection", {}),
-            "rope_frequency": cfg.get("rope_frequency", {}),
             "model_context": {
                 "hidden_size": cfg["hidden_size"],
                 "n_head": cfg["n_head"],
@@ -433,6 +436,25 @@ def load_config(cli_args):
         raise TypeError("save_final_model must be a boolean")
     if not isinstance(cfg["save_evaluation_details"], bool):
         raise TypeError("save_evaluation_details must be a boolean")
+    raw_optimizer_warmup = cfg["intervention_optimizer_warmup_steps"]
+    if not isinstance(raw_optimizer_warmup, list):
+        raise TypeError("intervention_optimizer_warmup_steps must be a list")
+    optimizer_warmup_steps = []
+    for step in raw_optimizer_warmup:
+        if isinstance(step, bool) or not isinstance(step, int) or step <= 0:
+            raise ValueError(
+                "intervention_optimizer_warmup_steps must contain positive integers"
+            )
+        optimizer_warmup_steps.append(step)
+    cfg["intervention_optimizer_warmup_steps"] = sorted(set(optimizer_warmup_steps))
+    optimizer_log_every = cfg["intervention_optimizer_log_every"]
+    if optimizer_log_every is not None:
+        if isinstance(optimizer_log_every, bool):
+            raise TypeError("intervention_optimizer_log_every must be an integer or null")
+        optimizer_log_every = int(optimizer_log_every)
+        if optimizer_log_every <= 0:
+            raise ValueError("intervention_optimizer_log_every must be positive")
+    cfg["intervention_optimizer_log_every"] = optimizer_log_every
     for key in ("num_validation_batches", "num_final_validation_batches"):
         if cfg[key] is not None:
             value = int(cfg[key])
@@ -523,18 +545,17 @@ def load_config(cli_args):
     if not isinstance(cfg["use_rope"], bool):
         raise TypeError("use_rope must be a boolean")
     rope_frequency_mode = cfg.pop("rope_frequency_mode")
-    rope_frequency = cfg["rope_frequency"]
+    rope_frequency = cfg.pop("rope_frequency")
     if rope_frequency_mode != "fixed" or not isinstance(rope_frequency, dict):
         raise ValueError(
-            "rope_frequency_mode is a retired compatibility key; configure "
-            "the nested rope_frequency object instead"
+            "RoPE frequency interventions were removed; RoPE is standard or "
+            "disabled, and learned frequency belongs under qk_preprojection.frequency"
         )
-    cfg["rope_frequency"] = normalize_shared_frequency_config(
-        rope_frequency,
-        default_reference_length=training_length,
-    )
-    if not cfg["use_rope"] and cfg["rope_frequency"]["mode"] != "fixed":
-        raise ValueError("learned rope_frequency requires use_rope=true")
+    if rope_frequency.get("mode", "fixed") != "fixed":
+        raise ValueError(
+            "RoPE frequency interventions were removed; use standard RoPE or "
+            "NoPE and apply learned changes to the sinusoidal carrier"
+        )
     if not isinstance(cfg["post_position_qk_norm"], bool):
         raise TypeError("post_position_qk_norm must be a boolean")
     if not isinstance(cfg["exclude_position_from_decay"], bool):
@@ -612,8 +633,6 @@ def load_config(cli_args):
     if (
         cfg["qk_preprojection"]["enabled"]
     ):
-        enabled_sources.append(2)
-    if cfg["rope_frequency"]["mode"] != "fixed":
         enabled_sources.append(2)
     if not cfg["use_rope"]:
         enabled_sources.append(2)
@@ -892,7 +911,6 @@ def make_model(args, vocab_size):
         gradient_checkpointing=args.gradient_checkpointing,
         use_rope=args.use_rope,
         rope_theta=args.rope_theta,
-        rope_frequency_config=args.rope_frequency,
         qk_preprojection_config=args.qk_preprojection,
         qk_norm=args.qk_norm,
         post_position_qk_norm=args.post_position_qk_norm,
@@ -917,7 +935,6 @@ POSITION_DECAY_EXEMPT = (
     "position_content",
     "carrier_hypernetwork",
     "qk_preprojection",
-    "rope_frequency",
     "qk_preprojection_frequency",
 )
 
@@ -929,7 +946,7 @@ def make_optimizer(args, model):
     exempt_position = bool(getattr(args, "exclude_position_from_decay", False))
     frequency_parameter_ids = {
         id(parameter)
-        for module_name in ("rope_frequency", "qk_preprojection_frequency")
+        for module_name in ("qk_preprojection_frequency",)
         if (module := getattr(model, module_name, None)) is not None
         for parameter in module.parameters()
     }
@@ -954,10 +971,12 @@ def make_optimizer(args, model):
     )
 
 
-def frequency_gradient_clip_groups(model) -> list[tuple[list[torch.nn.Parameter], float]]:
-    """Return independent learned-frequency clipping groups."""
+def carrier_frequency_gradient_clip_groups(
+    model,
+) -> list[tuple[list[torch.nn.Parameter], float]]:
+    """Return independent sinusoidal-carrier frequency clipping groups."""
     groups = []
-    for module_name in ("rope_frequency", "qk_preprojection_frequency"):
+    for module_name in ("qk_preprojection_frequency",):
         module = getattr(model, module_name, None)
         if module is None or module.max_grad_norm is None:
             continue
@@ -1598,7 +1617,6 @@ def main():
             "qk": args.qk,
             "logit_bias": args.logit_bias,
             "use_rope": args.use_rope,
-            "rope_frequency": args.rope_frequency,
             "qk_preprojection": args.qk_preprojection,
             "post_position_qk_norm": args.post_position_qk_norm,
             "exclude_position_from_decay": args.exclude_position_from_decay,
@@ -1719,7 +1737,7 @@ def main():
     # Batches are shifted by one token before entering the model.
     model.prepare_flex_masks(args.training_length - 1, accelerator.device)
 
-    frequency_clip_groups = frequency_gradient_clip_groups(model)
+    frequency_clip_groups = carrier_frequency_gradient_clip_groups(model)
     frequency_clip_parameter_ids = {
         id(parameter)
         for parameters, _ in frequency_clip_groups
@@ -1731,6 +1749,10 @@ def main():
         if parameter.requires_grad and id(parameter) not in frequency_clip_parameter_ids
     ]
     optimizer = make_optimizer(args, model)
+    intervention_monitor = InterventionOptimizationMonitor(
+        collect_intervention_parameter_groups(model),
+        reference_length=args.training_length,
+    )
     steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
     max_train_steps = args.max_train_steps or args.num_train_epochs * steps_per_epoch
     lr_scheduler = get_scheduler(
@@ -1811,6 +1833,16 @@ def main():
             active_dataloader = train_dataloader
         train_iter = iter(active_dataloader)
         while True:
+            optimization_sample = None
+            optimization_logs = None
+            optimization_this_step = (
+                intervention_monitor.enabled
+                and intervention_optimization_due(
+                    completed_steps + 1,
+                    warmup_steps=args.intervention_optimizer_warmup_steps,
+                    every=args.intervention_optimizer_log_every,
+                )
+            )
             profile_this_step = _interval_due(
                 args.profile_every_n_steps, completed_steps + 1
             )
@@ -1840,6 +1872,10 @@ def main():
 
                 stage_timer.range_start("optimizer")
                 if accelerator.sync_gradients:
+                    if optimization_this_step:
+                        optimization_sample = intervention_monitor.capture_before_clip(
+                            optimizer
+                        )
                     if args.max_grad_norm is not None:
                         accelerator.clip_grad_norm_(
                             regular_clip_parameters,
@@ -1847,7 +1883,14 @@ def main():
                         )
                     for parameters, max_grad_norm in frequency_clip_groups:
                         accelerator.clip_grad_norm_(parameters, max_grad_norm)
+                    if optimization_sample is not None:
+                        intervention_monitor.capture_after_clip(optimization_sample)
                 optimizer.step()
+                if optimization_sample is not None:
+                    optimization_logs = intervention_monitor.capture_after_step(
+                        optimization_sample,
+                        optimizer,
+                    )
                 lr_scheduler.step()
                 optimizer.zero_grad(set_to_none=True)
                 stage_timer.range_end("optimizer")
@@ -1857,6 +1900,27 @@ def main():
 
             completed_steps += 1
             progress_bar.update(1)
+            if optimization_logs is not None:
+                optimization_logs = {
+                    "step": int(completed_steps),
+                    "timestamp": time.time(),
+                    **optimization_logs,
+                }
+                if accelerator.is_main_process:
+                    with open(
+                        Path(args.output_dir) / "intervention_optimization.jsonl",
+                        "a",
+                    ) as handle:
+                        handle.write(json.dumps(optimization_logs, sort_keys=True) + "\n")
+                if args.with_tracking:
+                    accelerator.log(
+                        {
+                            key: value
+                            for key, value in optimization_logs.items()
+                            if key not in {"step", "timestamp"} and value is not None
+                        },
+                        step=completed_steps,
+                    )
             if (
                 throughput_started_at is None
                 and completed_steps >= throughput_warmup_steps

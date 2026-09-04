@@ -1,9 +1,10 @@
-"""Globally shared, position-coherent frequency banks.
+"""Position-coherent frequency banks for the pre-Q/K sinusoidal carrier.
 
-The learnable coordinates in this module are shared by every attention layer,
-head, and Q/K branch that consumes the bank.  They are deliberately static:
-the resulting angle is still a deterministic function of position, so these
-mechanisms cannot read future tokens or introduce content leakage.
+These coordinates never modify RoPE.  The model's RoPE path is either the
+standard fixed rotation or disabled.  A bank here belongs only to the separate
+sinusoidal carrier and is shared by every layer and Q/K branch that consumes
+it.  It is static, so it cannot read future tokens or introduce content
+leakage.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from position.rotary import build_rope_frequencies
 FrequencyMode = Literal["fixed", "learned_log", "learned_horizon"]
 FREQUENCY_MODES = {"fixed", "learned_log", "learned_horizon"}
 
-SHARED_FREQUENCY_DEFAULTS = {
+SINUSOID_FREQUENCY_DEFAULTS = {
     "mode": "fixed",
     # Only learned_horizon uses this.  It is resolved explicitly in saved
     # configs so changing model_position_extent later cannot change its meaning.
@@ -32,7 +33,7 @@ SHARED_FREQUENCY_DEFAULTS = {
 }
 
 
-def normalize_shared_frequency_config(
+def normalize_sinusoid_frequency_config(
     config: dict | None,
     *,
     default_reference_length: int | None,
@@ -42,10 +43,10 @@ def normalize_shared_frequency_config(
         config = {}
     if not isinstance(config, dict):
         raise TypeError("frequency configuration must be an object")
-    unknown = set(config) - set(SHARED_FREQUENCY_DEFAULTS)
+    unknown = set(config) - set(SINUSOID_FREQUENCY_DEFAULTS)
     if unknown:
         raise ValueError(f"Unknown frequency configuration keys: {sorted(unknown)}")
-    normalized = copy.deepcopy(SHARED_FREQUENCY_DEFAULTS)
+    normalized = copy.deepcopy(SINUSOID_FREQUENCY_DEFAULTS)
     normalized.update(config)
 
     mode = normalized["mode"]
@@ -80,8 +81,8 @@ def normalize_shared_frequency_config(
     return normalized
 
 
-class SharedFrequencyBank(PreserveFP32BuffersMixin, torch.nn.Module):
-    """One frequency schedule shared globally by all of its consumers.
+class SinusoidFrequencyBank(PreserveFP32BuffersMixin, torch.nn.Module):
+    """One carrier-frequency schedule shared globally by all consumers.
 
     ``learned_log`` uses ``omega = omega_0 * exp(alpha)``.  It is the stable,
     positive parameterization used by LeRoPE.
@@ -162,12 +163,30 @@ class SharedFrequencyBank(PreserveFP32BuffersMixin, torch.nn.Module):
         reference_length = float(self.reference_length or 1)
         return (self.frequencies() - self.base_frequency.float()) * reference_length
 
+    def endpoint_phase_coordinate_jacobian(self) -> torch.Tensor:
+        """Derivative of endpoint phase with respect to each coordinate.
+
+        Adam may normalize coordinate gradients, but it does not normalize this
+        forward Jacobian.  This quantity therefore exposes how a similarly sized
+        optimizer step can imply very different functional phase movements.
+        """
+        if self.mode == "fixed":
+            return torch.zeros_like(self.base_frequency, dtype=torch.float32)
+        if self.mode == "learned_log":
+            return self.frequencies() * float(self.reference_length or 1)
+        if self.mode == "learned_horizon":
+            return torch.ones_like(self.base_frequency, dtype=torch.float32)
+        raise AssertionError(f"Unhandled frequency mode: {self.mode}")
+
     @torch.no_grad()
     def summarize(self) -> dict[str, float]:
         frequency = self.frequencies().detach().float()
         base = self.base_frequency.detach().float()
         multiplier = frequency / base
         endpoint_delta = self.endpoint_phase_delta().detach().float()
+        endpoint_jacobian = (
+            self.endpoint_phase_coordinate_jacobian().detach().float()
+        )
         if frequency.numel() > 1:
             order_violation = (frequency[1:] >= frequency[:-1]).float().mean()
         else:
@@ -184,4 +203,10 @@ class SharedFrequencyBank(PreserveFP32BuffersMixin, torch.nn.Module):
             "multiplier_std": multiplier.std(unbiased=False).item(),
             "endpoint_phase_delta_rms": endpoint_delta.square().mean().sqrt().item(),
             "endpoint_phase_delta_abs_max": endpoint_delta.abs().max().item(),
+            "endpoint_phase_coordinate_jacobian_rms": (
+                endpoint_jacobian.square().mean().sqrt().item()
+            ),
+            "endpoint_phase_coordinate_jacobian_abs_max": (
+                endpoint_jacobian.abs().max().item()
+            ),
         }

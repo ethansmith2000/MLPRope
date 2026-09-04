@@ -1,12 +1,11 @@
 # Learned RoPE frequency roadmap
 
-> Current update (2026-09-03): cumulative and token-local frequency mechanisms
-> were retired after negative results. Phase 34 narrowly reopens one static
-> spectrum shared across the complete model, motivated by newer evidence and by
-> the stronger coherence constraint. See
-> [`SHARED_FREQUENCY_PLAN.md`](SHARED_FREQUENCY_PLAN.md) and
-> [`CURRENT_STATUS.md`](CURRENT_STATUS.md). The remainder of this document is
-> the historical decision record for the removed mechanisms.
+> Current update (2026-09-04): learned RoPE is closed and removed from the
+> active runtime. Phase 34's globally shared carrier-frequency variants did not
+> improve the fixed carrier. RoPE is now immutable standard RoPE or disabled;
+> all learned positional changes act on a separate sinusoidal carrier. See
+> [`SINUSOID_INTERVENTION_POLICY.md`](SINUSOID_INTERVENTION_POLICY.md). The
+> remainder of this document is the historical decision record.
 
 _Consolidated 2026-08-03. Eval loss at context 1024 is the sole primary
 endpoint. Length extrapolation is not a current hypothesis._

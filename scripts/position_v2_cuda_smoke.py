@@ -96,6 +96,11 @@ CASES = {
         "qk_config": additive_qk(),
         "qk_norm_mode": "method_aware_rms",
     },
+    "addrope_static_qk_adapter_no_rope": {
+        "use_rope": False,
+        "qk_config": additive_qk(),
+        "qk_norm_mode": "method_aware_rms",
+    },
     "addrope_dynamic_pointwise": {
         "qk_config": additive_qk(
             conditioning="carrier_hypernetwork",
@@ -106,6 +111,10 @@ CASES = {
         "qk_norm_mode": "method_aware_rms",
     },
     "preprojection_rope": {
+        "qk_preprojection_config": preprojection("tied_scalar"),
+    },
+    "preprojection_no_rope": {
+        "use_rope": False,
         "qk_preprojection_config": preprojection("tied_scalar"),
     },
     "preprojection_split_scalar_rope": {

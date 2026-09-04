@@ -1,7 +1,7 @@
 # MLPRope next-experiment roadmap
 
-_Revised 2026-09-03. This roadmap implements the decision in
-[`CONSOLIDATION_PLAN.md`](CONSOLIDATION_PLAN.md)._
+_Revised 2026-09-04. This roadmap implements the decision in
+[`SINUSOID_INTERVENTION_POLICY.md`](SINUSOID_INTERVENTION_POLICY.md)._
 
 ## Stage 0 — preserve and simplify
 
@@ -115,28 +115,46 @@ RoPE contributed `-0.030773` relative to the tied no-RoPE arm. Every added
 static Q/K/pair amplitude or phase degree of freedom was within about `0.001`
 of its parent. See the Phase-33 report linked from `CURRENT_STATUS.md`.
 
-## Stage 4 — globally shared frequency screen (active)
+## Stage 4 — globally shared frequency screen (completed)
 
 New evidence supports a materially different static-frequency hypothesis from
 the removed local tables: one learned bank shared across all layers, heads, and
 Q/K branches. The implementation and five-arm protocol are specified in
 [`SHARED_FREQUENCY_PLAN.md`](SHARED_FREQUENCY_PLAN.md).
 
-The screen contains fixed and learned-log pure-RoPE arms, plus fixed,
-learned-log, and horizon-normalized versions of the tied pre-Q/K carrier. All
-use one paired seed and a common 200k horizon. No content conditioning,
-per-layer/head frequency axis, or learned-RoPE/learned-carrier combination is
-included.
+The five historical arms used one paired seed and a common 200k horizon. The
+carrier log-frequency arm was `+0.000861` worse than its fixed parent with a
+paired interval crossing zero. The horizon-normalized arm was `+0.001341`
+worse, with its interval excluding zero. Neither earned replication.
 
-The five compiled bf16 50-step preflights pass at 5,076--5,220 MiB reserved
-memory. All learned spectra were active, finite, positive, and ordered. The
-long runs are cleared to launch through `gpu-claim`; compact preflight evidence
-is in `results/phase34_shared_frequency_preflight/`.
+The learned-RoPE calibration was `-0.001431`, below the `0.002` gate, and its
+late advantage was collapsing. It is historical evidence only: current
+interventions do not modify RoPE. Full results are in
+[`results/phase34_shared_frequency_200k/PHASE34_RESULTS.md`](results/phase34_shared_frequency_200k/PHASE34_RESULTS.md).
 
-## Stage 5 — promote finalists
+## Stage 5 — carrier-only consolidation and optimization audit (active)
 
-Promote no more than two candidates. Add seeds 456 and 789 under the identical
-long-horizon protocol. A durable claim requires:
+Enforce the fixed-RoPE/NoPE backbone boundary and remove learned-RoPE launch
+machinery. Every surviving learned positional change acts on the sinusoidal
+carrier. AddRoPE and pre-Q/K carriers can be crossed explicitly with either
+backbone.
+
+For each learned intervention, persist sparse diagnostics for:
+
+- raw and clipped parameter gradients;
+- Adam first-moment alignment and second-moment concentration;
+- realized parameter updates and their current-gradient alignment;
+- the resulting functional carrier movement and, where applicable, endpoint
+  phase Jacobian and movement.
+
+This audit distinguishes poor conditioning, outlier-inflated Adam moments, and
+momentum interference from a well-optimized but scientifically null method.
+
+## Stage 6 — promote only a new clear finalist
+
+Start a new idea with one seed and a 10k--20k horizon. Add seeds 456 and 789
+only after a materially favorable, non-collapsing result under healthy
+optimization. A durable claim requires:
 
 - favorable signs across all paired seeds;
 - a practically material late-horizon mean improvement;
@@ -148,17 +166,18 @@ Only after this gate consider model-width transfer or longer-context testing.
 
 ## Explicitly deferred
 
-- content-dependent RoPE frequencies or frequency multipliers;
+- any learned or content-dependent RoPE frequencies or frequency multipliers;
 - backward-only surrogate gradients for dynamic frequencies;
 - cumulative clocks or arbitrary tokenwise warps;
 - EMA/linear-RNN conditioning;
 - per-head post-projection sinusoidal branches;
 - full or low-rank mixing between Fourier pairs;
-- combinations of AddRoPE and pre-Q/K injection;
+- combinations of AddRoPE and pre-Q/K injection, absent a specific factorial
+  hypothesis;
 - broad mapper or coupling sweeps.
 
-Also defer smooth/order-preserving shared spectra and combined learned
-RoPE+carrier arms until the free globally shared banks clear Phase 34.
+Also defer smooth/order-preserving carrier spectra. Learned RoPE+carrier arms
+are outside the active architectural boundary.
 
 These are recoverable from history if new evidence creates a specific reason to
 reopen them.

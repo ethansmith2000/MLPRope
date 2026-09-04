@@ -1,0 +1,22 @@
+{
+  "base_config": "../phase34_shared_frequency_200k/preflight/phase34-preflight-qkpre-frequency-horizon-seed123-s50-h768d8.json",
+  "base_output_dir": "/workspace/MLPRope/model-output/carrier_optimization_smoke",
+  "output_dir": "/workspace/MLPRope/model-output/carrier_optimization_smoke/carrier-horizon-s12",
+  "run_name": "carrier-horizon-optimization-smoke-s12",
+  "max_train_steps": 12,
+  "num_warmup_steps": 2,
+  "per_device_train_batch_size": 2,
+  "num_workers": 2,
+  "persistent_workers": true,
+  "validate_every": 100,
+  "num_validation_batches": 1,
+  "num_final_validation_batches": 1,
+  "intervention_optimizer_warmup_steps": [1, 2, 4, 8, 12],
+  "intervention_optimizer_log_every": null,
+  "profile_every_n_steps": 0,
+  "checkpointing_steps": null,
+  "checkpoint_keep_latest": null,
+  "resume_from_checkpoint": null,
+  "save_final_model": false,
+  "with_tracking": false
+}

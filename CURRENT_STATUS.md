@@ -1,27 +1,27 @@
 # MLPRope current status
 
-_Authoritative as of 2026-09-03. The detailed active decision is
-[`CONSOLIDATION_PLAN.md`](CONSOLIDATION_PLAN.md). Older protocols and roadmap
-sections are historical records._
+_Authoritative as of 2026-09-04. The active architectural contract is
+[`SINUSOID_INTERVENTION_POLICY.md`](SINUSOID_INTERVENTION_POLICY.md). Older
+protocols and roadmap sections are historical records._
 
 ## Bottom line
 
-Two attention-local additive mechanisms have earned longer evaluation:
+Two attention-local sinusoidal mechanisms have earned longer evaluation:
 
 1. **AddRoPE**: a learned additive Fourier carrier on projected Q/K;
 2. **pre-Q/K sinusoidal injection**: add a sinusoid only to the inputs of the Q
    and K projections, usually followed by fixed RoPE.
 
-The 200k static-adapter experiment is complete. The tied pre-Q/K carrier plus
-fixed RoPE remains strongly favorable, while separate Q/K amplitude, pairwise
-amplitude, and pairwise phase are null. Dynamic RoPE, cumulative clocks, and
-EMA remain closed.
+The 200k static-adapter and shared-frequency experiments are complete. The tied
+pre-Q/K carrier plus fixed RoPE remains strongly favorable. Separate Q/K
+amplitude, pairwise amplitude, pairwise phase, and learned carrier frequency
+did not improve it. Dynamic RoPE, learned RoPE, cumulative clocks, and EMA are
+closed in the active runtime.
 
-Phase 34 narrowly reopens **static frequency learning** under a different
-inductive bias prompted by new external evidence: one bank is shared globally
-across Q, K, heads, and layers. This is not a return to token-dependent or
-per-head frequency controllers. See
-[`SHARED_FREQUENCY_PLAN.md`](SHARED_FREQUENCY_PLAN.md).
+The repository now treats the backbone and carrier as orthogonal axes: every
+intervention uses either immutable standard RoPE or NoPE, while learned
+amplitude, phase, or frequency acts only on the sinusoidal carrier. AddRoPE no
+longer implicitly replaces RoPE.
 
 ## Strongest completed evidence
 
@@ -37,6 +37,8 @@ per-head frequency controllers. See
 | tied pre-Q/K + RoPE vs fixed RoPE | 200k, 1 paired seed | `-0.062831` |
 | tied pre-Q/K + RoPE vs no RoPE | 200k, 1 paired seed | `-0.030773` |
 | split/pair amplitude/pair phase ladder | 200k, 1 paired seed | all within about `0.001` |
+| shared log-frequency carrier vs fixed carrier | 200k, 1 paired seed | `+0.000861`, null |
+| horizon-frequency carrier vs fixed carrier | 200k, 1 paired seed | `+0.001341`, slightly worse |
 
 The EMA result is not being promoted. Its estimated equal-wall-clock advantage
 is only about `-0.0015`, and per-head/per-dimension decays did not improve over
@@ -82,39 +84,45 @@ model width 64 the four modes use 1, 2, 64, and 128 parameters per layer.
 All adapter state with angular or scale meaning stays fp32 under bf16/fp16
 module conversion.
 
+## Phase 34 conclusion
+
+All five historical Phase-34 arms reached 200k. The fixed carrier finished at
+`3.324979`; learned-log finished at `3.325839`, and horizon-normalized finished
+at `3.326320`. The normalized form successfully kept the endpoint phase
+Jacobian at one, demonstrating that it fixes the absolute-position
+conditioning problem, but it did not improve modeling loss. No carrier
+frequency arm clears the replication gate.
+
+The learned-RoPE calibration arm finished `-0.001431` below fixed RoPE, but
+failed the `0.002` promotion threshold and its late advantage was shrinking.
+It is preserved as historical evidence, not retained as active machinery. See
+[`results/phase34_shared_frequency_200k/PHASE34_RESULTS.md`](results/phase34_shared_frequency_200k/PHASE34_RESULTS.md).
+
 ## Next execution
 
-Run the five-arm Phase-34 shared-frequency matrix to a common 200k horizon:
-fixed versus globally shared learned RoPE, and fixed versus globally shared
-log/horizon frequency banks on the tied pre-Q/K carrier. Replicate only a
-candidate that clears the documented endpoint, late-curve, and spectral-health
+First validate the carrier-only refactor and its optimizer-health trace. Any
+new learned carrier parameterization should use a one-seed 10k--20k screen
+before replication and should report both loss and functional update health.
+There is no automatic Phase-34 seed expansion because no candidate cleared its
 gate.
-
-All runs must begin with the same 200k learning-rate horizon. A short run whose
-linear schedule has decayed to zero cannot be treated as the prefix of a long
-run.
-
-The five resolved Phase-34 configs are frozen under
-`sweep_configs/phase34_shared_frequency_200k/`. Rolling completion-marked
-checkpoint retention, periodic paired-loss persistence, and per-launch source,
-config, package/GPU, and dataset provenance are inherited from Phase 33.
-All five Phase-34 compiled bf16 preflights now pass. The learned coordinates
-moved within 50 steps, every spectrum remained finite, positive, and ordered,
-and peak reserved memory was 5,076--5,220 MiB. Compact evidence is in
-`results/phase34_shared_frequency_preflight/`.
 
 ## Repository state
 
 - Phase 29-32 code, configs, compact results, and analyses are preserved in
   provenance commit `c8362c3`.
-- The active runtime remains consolidated around RoPE, NoPE, AddRoPE, frozen
-  Fourier bases, and the pre-Q/K carrier. The former local/dynamic frequency
-  controllers, rotary phase residuals/clocks, EMA, residual/write channels, and
-  completed position-gain path remain removed. Phase 34 adds only two tiny
-  top-level static shared-bank parameterizations.
-- All retained sweep JSONs load. The CPU suite passes 120 tests with one
-  explicitly CUDA-gated skip, and all nine consolidated bf16 CUDA cases pass
-  eager and compiled forward/backward.
+- The active runtime is consolidated around fixed RoPE or NoPE, AddRoPE,
+  frozen Fourier bases, and the pre-Q/K carrier. Learned frequency remains
+  available only inside the carrier as a diagnostic/research coordinate;
+  model-wide learned-RoPE machinery is removed.
+- The old content-conditioned `adaptive_gain` escape hatch is removed because
+  it scaled complete Q/K tensors rather than the sinusoidal carrier.
+- Sparse intervention diagnostics distinguish raw/clipped gradients, Adam
+  moment behavior, actual parameter updates, and functional carrier movement.
+- The consolidated CPU suite passes 122 tests with one explicitly CUDA-gated
+  skip. A 12-step compiled-bf16 optimizer-monitor smoke passed on an RTX 5090;
+  all five scheduled traces were finite. All eleven retained carrier/backbone
+  cases also pass eager and compiled bf16 forward/backward. Compact evidence is in
+  `results/carrier_optimization_monitor_smoke/`.
 - Phase 33 operational preflights passed on all six h768/d8 arms at
   185.6k-190.8k tokens/s and 5.08-5.36 GiB reserved memory. The real
   Accelerate checkpoint save/prune/resume integration also passed.

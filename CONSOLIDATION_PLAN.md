@@ -1,30 +1,31 @@
 # MLPRope research and repository consolidation
 
-_Decision record, 2026-09-03; amended after Phase 33 and the globally shared
-frequency review. Historical protocols, configs, and the experiment journal
-remain evidence, not current priorities._
+_Decision record, 2026-09-03; amended 2026-09-04 after Phases 33 and 34.
+Historical protocols, configs, and the experiment journal remain evidence, not
+current priorities. The current architecture is defined in
+[`SINUSOID_INTERVENTION_POLICY.md`](SINUSOID_INTERVENTION_POLICY.md)._
 
 ## Research focus
 
 The active question is now deliberately narrow:
 
-> Can the successful tied pre-Q/K carrier, or RoPE itself, be improved by one
-> static frequency bank shared across the entire model while retaining a
-> coherent Q/K coordinate system?
+> With standard RoPE or NoPE fixed as the backbone, can a small, coherent
+> transformation of an attention-local sinusoidal carrier improve on the tied
+> pre-Q/K anchor?
 
 The active mechanism families are:
 
-1. fixed standard RoPE;
+1. fixed standard RoPE or NoPE as an explicit backbone choice;
 2. additive Fourier Q/K position (AddRoPE), with amplitude 1.0 as the active
    initialization;
 3. a sinusoidal signal injected only before the Q/K projections, optionally
    followed by fixed RoPE; and
-4. one static frequency bank shared globally across Q/K, heads, and layers.
+4. carrier-only amplitude, phase, or globally coherent frequency coordinates.
 
-Dynamic RoPE frequency, tokenwise rotary phase, cumulative rotary clocks, and
-EMA controllers are closed as active directions. The globally shared static
-bank is the only reopened frequency mechanism; it should not revive the old
-local/controller API.
+Dynamic and learned RoPE frequency, tokenwise rotary phase, cumulative rotary
+clocks, and EMA controllers are closed as active directions. The Phase-34
+carrier frequency bank remains only as a compact research coordinate and
+optimization diagnostic; it did not earn promotion.
 
 ## Implemented preprojection adapter
 
@@ -131,12 +132,18 @@ simple tied carrier plus fixed RoPE. See
 
 ## Phase 34 globally shared frequency follow-up
 
-The only reopened frequency question is whether one model-wide static spectrum
-can improve RoPE or the tied carrier without introducing token-, head-, layer-,
-or Q/K-specific coordinate drift. The five-arm protocol, parameterizations,
-and promotion gates are frozen in
-[`SHARED_FREQUENCY_PLAN.md`](SHARED_FREQUENCY_PLAN.md). All arms retain the
-Phase 33 200k schedule; additional seeds remain reserved for a clear winner.
+All five arms completed at 200k. Learned carrier log frequency was `+0.000861`
+relative to the fixed carrier with a paired interval crossing zero;
+horizon-normalized frequency was `+0.001341` and its interval excluded zero in
+the harmful direction. The horizon coordinate successfully removed the raw
+position multiplier from its endpoint derivative, but that optimization
+improvement did not produce a modeling gain.
+
+The historical learned-RoPE calibration was `-0.001431` at the endpoint, below
+the promotion threshold, and its advantage was shrinking late. No Phase-34 arm
+earns replication. Learned RoPE is now outside the active runtime; the carrier
+results remain in
+[`results/phase34_shared_frequency_200k/PHASE34_RESULTS.md`](results/phase34_shared_frequency_200k/PHASE34_RESULTS.md).
 
 ## Repository consolidation policy
 
@@ -150,7 +157,9 @@ runtime does not need to execute every historical configuration.
 - frozen Fourier basis utilities;
 - static AddRoPE and its promoted mapped-carrier reference;
 - the current pre-Q/K sinusoid and the new constrained Q/K spectral adapter;
-- the narrowly scoped model-wide static frequency bank used by Phase 34;
+- the narrowly scoped carrier-only static frequency bank used by Phase 34;
+- optimizer-health traces at parameter-gradient, Adam-state, realized-update,
+  and functional-carrier levels;
 - fused SDPA training, evaluation, diagnostics, and paired initialization;
 - compact result reports and analysis JSON.
 
@@ -162,6 +171,7 @@ not part of the next sweep. Reconsider it only after the static consolidation.
 
 - old per-layer/per-head learned frequency tables and content-dependent
   multiplicative RoPE frequencies;
+- the model-wide learned-RoPE bank used by the historical Phase-34 calibration;
 - rotary phase-residual special cases;
 - cumulative rotary clocks and their pointwise/convolution/EMA controllers;
 - EMA conditioning for AddRoPE;

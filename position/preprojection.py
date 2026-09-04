@@ -11,8 +11,8 @@ import torch
 
 from position.basis import FrozenFourierBasis
 from position.frequency import (
-    SHARED_FREQUENCY_DEFAULTS,
-    normalize_shared_frequency_config,
+    SINUSOID_FREQUENCY_DEFAULTS,
+    normalize_sinusoid_frequency_config,
 )
 from position.precision import PreserveFP32BuffersMixin
 
@@ -39,7 +39,7 @@ QK_PREPROJECTION_DEFAULTS = {
     "learnable_gate": True,
     # The parameterized bank itself lives once on Transformer and is shared by
     # all of these per-layer carrier adapters.
-    "frequency": copy.deepcopy(SHARED_FREQUENCY_DEFAULTS),
+    "frequency": copy.deepcopy(SINUSOID_FREQUENCY_DEFAULTS),
 }
 
 
@@ -97,7 +97,7 @@ def normalize_qk_preprojection_config(
         raise ValueError("qk_preprojection.gate_init must be finite")
     if not isinstance(normalized["learnable_gate"], bool):
         raise TypeError("qk_preprojection.learnable_gate must be a boolean")
-    normalized["frequency"] = normalize_shared_frequency_config(
+    normalized["frequency"] = normalize_sinusoid_frequency_config(
         normalized["frequency"],
         default_reference_length=frequency_reference_length,
     )

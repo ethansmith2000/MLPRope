@@ -162,7 +162,7 @@ class BasisAndRotaryTest(unittest.TestCase):
                 )
                 references = {
                     name: getattr(channel, name).clone()
-                    for name in ("base_sin", "base_cos", "base_angle")
+                    for name in ("base_sin", "base_cos")
                 }
                 channel.to(dtype=dtype)
                 for name, reference in references.items():
@@ -182,7 +182,7 @@ class PositionChannelTest(unittest.TestCase):
                     if feature_map in ADDITIVE_SINUSOID_MAPS:
                         self.assertGreater(torch.count_nonzero(output.q).item(), 0)
 
-    def test_additive_skips_multiplicative_rope(self):
+    def test_additive_carrier_respects_explicit_rope_backbone_choice(self):
         common = {
             "dim": 32,
             "depth": 1,
@@ -194,16 +194,24 @@ class PositionChannelTest(unittest.TestCase):
             "logit_bias_config": {"enabled": False},
         }
         rope = Transformer(**common, qk_config={"enabled": False}).eval()
-        additive = Transformer(
+        additive_with_rope = Transformer(
             **common,
             qk_config=_v1_qk("identity", "per_head", "add"),
         ).eval()
+        additive_without_rope = Transformer(
+            **common,
+            use_rope=False,
+            qk_config=_v1_qk("identity", "per_head", "add"),
+        ).eval()
         self.assertTrue(rope.blocks[0].attn.multiplicative_rope)
-        self.assertFalse(additive.blocks[0].attn.multiplicative_rope)
+        self.assertTrue(additive_with_rope.blocks[0].attn.multiplicative_rope)
+        self.assertFalse(additive_without_rope.blocks[0].attn.multiplicative_rope)
 
-        additive.load_state_dict(rope.state_dict(), strict=False)
+        additive_with_rope.load_state_dict(rope.state_dict(), strict=False)
         input_ids = torch.randint(0, 64, (2, 8))
-        self.assertFalse(torch.allclose(rope(input_ids), additive(input_ids)))
+        self.assertFalse(
+            torch.allclose(rope(input_ids), additive_with_rope(input_ids))
+        )
 
     def test_additive_residual_maps_match_identity_at_init(self):
         for feature_map in ("low_rank", "bottleneck_mlp", "mlp"):

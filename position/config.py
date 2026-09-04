@@ -764,7 +764,6 @@ def normalize_position_config_v2(
         "local_residual",
         "content_gate",
         "phase_rotation",
-        "adaptive_gain",
         "additive_phase",
         "carrier_hypernetwork",
     }
@@ -972,8 +971,6 @@ def normalize_position_config_v2(
             f"{channel_name}: phase_rotation conditioning requires "
             "application='additive', geometry='pair_normalized'"
         )
-    if conditioning_kind == "adaptive_gain" and channel_name != "qk":
-        raise ValueError("adaptive_gain conditioning is only valid for Q/K")
     if conditioning_kind == "additive_phase" and not (
         channel_name == "qk"
         and application == "additive"

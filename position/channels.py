@@ -10,7 +10,6 @@ from typing import Literal
 
 import torch
 
-from position.autograd import exp_with_identity_grad
 from position.basis import build_position_basis
 from position.precision import PreserveFP32BuffersMixin
 from position.config import (
@@ -32,14 +31,10 @@ class QKPositionOutput:
     application: Literal["additive"]
     q: torch.Tensor
     k: torch.Tensor
-    q_gain: torch.Tensor | None = None
-    k_gain: torch.Tensor | None = None
     q_amplitude_delta: torch.Tensor | None = None
     k_amplitude_delta: torch.Tensor | None = None
     q_hyper_phase_delta: torch.Tensor | None = None
     k_hyper_phase_delta: torch.Tensor | None = None
-    q_frequency_delta: torch.Tensor | None = None
-    k_frequency_delta: torch.Tensor | None = None
     q_cartesian_real_delta: torch.Tensor | None = None
     k_cartesian_real_delta: torch.Tensor | None = None
     q_cartesian_imag_delta: torch.Tensor | None = None
@@ -50,7 +45,6 @@ class QKPositionOutput:
 class CarrierDeltas:
     amplitude: torch.Tensor | None = None
     phase: torch.Tensor | None = None
-    frequency: torch.Tensor | None = None
     cartesian_real: torch.Tensor | None = None
     cartesian_imag: torch.Tensor | None = None
 
@@ -914,7 +908,7 @@ def _expand_shared_readout(
 class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
     """Q/K absolute-position channel with configurable coupling and geometry."""
 
-    _fp32_buffer_names = ("base_sin", "base_cos", "base_angle")
+    _fp32_buffer_names = ("base_sin", "base_cos")
 
     def __init__(
         self,
@@ -1044,12 +1038,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
         inverse_frequency = 1.0 / (
             rope_theta ** (frequencies / (head_dim // 2))
         )
-        base_angle = torch.outer(
-            torch.arange(extent, dtype=torch.float32),
-            inverse_frequency,
-        )
-        self.register_buffer("base_angle", base_angle, persistent=False)
-
         if self.application == "additive" and self.geometry in {
             "free",
             "pair_normalized",
@@ -1145,17 +1133,11 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                 coupling=self.conditioning_config["coupling"],
                 phase_bound=self.conditioning_config["phase_bound"],
             )
-        elif conditioning_kind in {
-            "adaptive_gain",
-            "additive_phase",
-        }:
-            output_dim = (
-                1 if conditioning_kind == "adaptive_gain" else head_dim // 2
-            )
+        elif conditioning_kind == "additive_phase":
             self.content_actuator = GroupedContentActuator(
                 groups=readout_groups,
                 content_dim=content_dim,
-                output_dim=output_dim,
+                output_dim=head_dim // 2,
                 hidden_dim=self.conditioning_config["hidden_dim"],
                 target=self.conditioning_config["target"],
                 coupling=self.conditioning_config["coupling"],
@@ -1379,7 +1361,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
         phase_conditioner: GroupedContentConditioner | None = None,
         amplitude_delta: torch.Tensor | None = None,
         hyper_phase_delta: torch.Tensor | None = None,
-        frequency_delta: torch.Tensor | None = None,
         cartesian_real_delta: torch.Tensor | None = None,
         cartesian_imag_delta: torch.Tensor | None = None,
         amplitude_raw_override: torch.Tensor | None = None,
@@ -1445,24 +1426,16 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
         if hyper_phase_delta is not None:
             phase = phase + hyper_phase_delta
         phase = phase * self.output_config["phase_scale"]
-        if frequency_delta is not None:
-            base_angle = self.base_angle[:sequence_length][None]
-            total_phase = (1.0 + frequency_delta.float()) * (
-                base_angle + phase.float()
-            )
-            sin = total_phase.sin().to(dtype=phase.dtype)
-            cos = total_phase.cos().to(dtype=phase.dtype)
-        else:
-            base_sin = self.base_sin[:sequence_length].float()[None]
-            base_cos = self.base_cos[:sequence_length].float()[None]
-            delta_sin = phase.float().sin()
-            delta_cos = phase.float().cos()
-            sin = (base_sin * delta_cos + base_cos * delta_sin).to(
-                dtype=phase.dtype
-            )
-            cos = (base_cos * delta_cos - base_sin * delta_sin).to(
-                dtype=phase.dtype
-            )
+        base_sin = self.base_sin[:sequence_length].float()[None]
+        base_cos = self.base_cos[:sequence_length].float()[None]
+        delta_sin = phase.float().sin()
+        delta_cos = phase.float().cos()
+        sin = (base_sin * delta_cos + base_cos * delta_sin).to(
+            dtype=phase.dtype
+        )
+        cos = (base_cos * delta_cos - base_sin * delta_sin).to(
+            dtype=phase.dtype
+        )
         return torch.cat((amplitude * cos, amplitude * sin), dim=-1)
 
     def _condition_outputs(
@@ -1475,7 +1448,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
         if self.conditioning_config["kind"] in {
             "none",
             "phase_rotation",
-            "adaptive_gain",
             "additive_phase",
             "carrier_hypernetwork",
         }:
@@ -1526,8 +1498,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
         k_amplitude_delta = None
         q_hyper_phase_delta = None
         k_hyper_phase_delta = None
-        q_frequency_delta = None
-        k_frequency_delta = None
         q_cartesian_real_delta = None
         k_cartesian_real_delta = None
         q_cartesian_imag_delta = None
@@ -1546,8 +1516,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
             k_amplitude_delta = k_deltas.amplitude
             q_hyper_phase_delta = q_deltas.phase
             k_hyper_phase_delta = k_deltas.phase
-            q_frequency_delta = q_deltas.frequency
-            k_frequency_delta = k_deltas.frequency
             q_cartesian_real_delta = q_deltas.cartesian_real
             k_cartesian_real_delta = k_deltas.cartesian_real
             q_cartesian_imag_delta = q_deltas.cartesian_imag
@@ -1630,7 +1598,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     phase_conditioner=self.conditioner,
                     amplitude_delta=q_amplitude_delta,
                     hyper_phase_delta=q_hyper_phase_delta,
-                    frequency_delta=q_frequency_delta,
                     cartesian_real_delta=q_cartesian_real_delta,
                     cartesian_imag_delta=q_cartesian_imag_delta,
                     amplitude_raw_override=q_direct_amplitude,
@@ -1648,7 +1615,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     phase_conditioner=self.conditioner,
                     amplitude_delta=k_amplitude_delta,
                     hyper_phase_delta=k_hyper_phase_delta,
-                    frequency_delta=k_frequency_delta,
                     cartesian_real_delta=k_cartesian_real_delta,
                     cartesian_imag_delta=k_cartesian_imag_delta,
                     amplitude_raw_override=k_direct_amplitude,
@@ -1667,7 +1633,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     phase_conditioner=self.q_conditioner,
                     amplitude_delta=q_amplitude_delta,
                     hyper_phase_delta=q_hyper_phase_delta,
-                    frequency_delta=q_frequency_delta,
                     cartesian_real_delta=q_cartesian_real_delta,
                     cartesian_imag_delta=q_cartesian_imag_delta,
                     amplitude_raw_override=q_direct_amplitude,
@@ -1685,7 +1650,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     phase_conditioner=self.k_conditioner,
                     amplitude_delta=k_amplitude_delta,
                     hyper_phase_delta=k_hyper_phase_delta,
-                    frequency_delta=k_frequency_delta,
                     cartesian_real_delta=k_cartesian_real_delta,
                     cartesian_imag_delta=k_cartesian_imag_delta,
                     amplitude_raw_override=k_direct_amplitude,
@@ -1723,29 +1687,14 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                 k_output = self._normalize_additive_output(
                     k_output, self.k_additive_gain
                 )
-        q_gain = None
-        k_gain = None
-        if self.conditioning_config["kind"] == "adaptive_gain":
-            if q_content is None or k_content is None:
-                raise ValueError("adaptive_gain conditioning requires dedicated content")
-            q_gain = exp_with_identity_grad(
-                self.content_actuator(q_content, "q")
-            )
-            k_gain = exp_with_identity_grad(
-                self.content_actuator(k_content, "k")
-            )
         return QKPositionOutput(
             "additive",
             q_output,
             k_output,
-            q_gain=q_gain,
-            k_gain=k_gain,
             q_amplitude_delta=q_amplitude_delta,
             k_amplitude_delta=k_amplitude_delta,
             q_hyper_phase_delta=q_hyper_phase_delta,
             k_hyper_phase_delta=k_hyper_phase_delta,
-            q_frequency_delta=q_frequency_delta,
-            k_frequency_delta=k_frequency_delta,
             q_cartesian_real_delta=q_cartesian_real_delta,
             k_cartesian_real_delta=k_cartesian_real_delta,
             q_cartesian_imag_delta=q_cartesian_imag_delta,
@@ -1884,9 +1833,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
         if self.conditioning_config["kind"] == "additive_phase":
             _stats("content_phase_q", self.content_actuator(q_content, "q"))
             _stats("content_phase_k", self.content_actuator(k_content, "k"))
-        if output.q_gain is not None:
-            _stats("content_gain_q", output.q_gain)
-            _stats("content_gain_k", output.k_gain)
         for branch, phase_delta in (
             ("q", output.q_hyper_phase_delta),
             ("k", output.k_hyper_phase_delta),
@@ -1908,22 +1854,6 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
                     .float()
                     .max()
                     .item()
-                )
-        for branch, frequency_delta in (
-            ("q", output.q_frequency_delta),
-            ("k", output.k_frequency_delta),
-        ):
-            if frequency_delta is not None:
-                _delta_stats(
-                    f"hyper_frequency_delta_{branch}",
-                    frequency_delta,
-                )
-                multiplier = 1.0 + frequency_delta.detach().float()
-                metrics[f"hyper_frequency_multiplier_{branch}/min"] = (
-                    multiplier.min().item()
-                )
-                metrics[f"hyper_frequency_multiplier_{branch}/max"] = (
-                    multiplier.max().item()
                 )
         for name, q_delta, k_delta in (
             (
@@ -2123,7 +2053,6 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
 
     qk_total = 0
     qk_preprojection_total = 0
-    rope_frequency_total = _unique_numel(getattr(model, "rope_frequency", None))
     qk_preprojection_frequency_total = _unique_numel(
         getattr(model, "qk_preprojection_frequency", None)
     )
@@ -2146,7 +2075,6 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
     position_total = (
         qk_total
         + qk_preprojection_total
-        + rope_frequency_total
         + qk_preprojection_frequency_total
         + logit_total
         + content_total
@@ -2154,7 +2082,6 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
     return {
         "qk_position_params": qk_total,
         "qk_preprojection_params": qk_preprojection_total,
-        "rope_frequency_params": rope_frequency_total,
         "qk_preprojection_frequency_params": qk_preprojection_frequency_total,
         "logit_bias_params": logit_total,
         "position_content_params": content_total,

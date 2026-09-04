@@ -1,6 +1,21 @@
-# Globally shared frequency experiment
+# Globally shared frequency experiment (completed)
 
-_Decision and protocol, 2026-09-03. Phase 34._
+_Historical Phase-34 decision and protocol, 2026-09-03; results added
+2026-09-04. Current interventions are carrier-only; see
+[`SINUSOID_INTERVENTION_POLICY.md`](SINUSOID_INTERVENTION_POLICY.md)._
+
+## Result
+
+All five arms completed at 200k steps. Relative to the fixed pre-Q/K carrier,
+learned-log frequency was `+0.000861` worse with 95% paired CI
+`[-0.000339,+0.002060]`; horizon-normalized frequency was `+0.001341` worse
+with CI `[+0.000300,+0.002382]`. Neither clears the promotion gate.
+
+The learned-RoPE calibration was `-0.001431` at the endpoint, below the
+`0.002` threshold, and its late advantage was shrinking. That arm is preserved
+in the report but learned-RoPE support has been removed from the active model.
+See
+[`results/phase34_shared_frequency_200k/PHASE34_RESULTS.md`](results/phase34_shared_frequency_200k/PHASE34_RESULTS.md).
 
 ## Research question
 
@@ -8,7 +23,7 @@ Can frequency learning help when it changes one position coordinate system
 coherently, rather than allowing every layer, head, Q/K branch, or token to
 invent a different clock?
 
-This is a static experiment. The learned frequencies depend only on global
+This was a static experiment. The learned frequencies depend only on global
 parameters and position, never on token content. It therefore introduces no
 future-token leakage and does not invalidate causal KV caching.
 
@@ -153,4 +168,3 @@ screening rule, not a substitute for additional training seeds.
 
 The first two become interesting only after a globally shared free bank shows
 that frequency adaptation is useful in this training regime.
-

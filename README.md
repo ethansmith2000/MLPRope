@@ -1,6 +1,7 @@
 # MLPRope
 
 - [Current status and decisions](CURRENT_STATUS.md)
+- [Active sinusoidal intervention policy](SINUSOID_INTERVENTION_POLICY.md)
 - [Next experiment roadmap](NEXT_EXPERIMENT_ROADMAP.md)
 - [Active research and repository consolidation plan](CONSOLIDATION_PLAN.md)
 - [Globally shared frequency experiment](SHARED_FREQUENCY_PLAN.md)

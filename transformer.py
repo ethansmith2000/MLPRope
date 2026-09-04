@@ -13,12 +13,11 @@ from torch.nn.attention.flex_attention import (
 from position import (
     PositionChannel,
     QKPreprojectionPosition,
-    SharedFrequencyBank,
+    SinusoidFrequencyBank,
     adapt_legacy_position_state_dict,
     apply_rotary,
     build_qk_position_channel,
     build_rope_cache,
-    build_rope_cache_from_frequencies,
     build_rope_frequencies,
     count_position_parameters,
     ensure_channel_v2,
@@ -26,7 +25,6 @@ from position import (
     interleaved_fourier_from_frequencies,
     normalize_logit_bias_config,
     normalize_qk_preprojection_config,
-    normalize_shared_frequency_config,
     normalize_position_content_config,
 )
 from position.precision import PreserveFP32BuffersMixin
@@ -253,9 +251,10 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             if self.qk_preprojection_config["enabled"]
             else None
         )
-        # Additive Fourier Q/K replaces multiplicative RoPE. Explicit
-        # use_rope=False enables the no-explicit-PE control.
-        self.multiplicative_rope = bool(use_rope) and self.qk_position is None
+        # RoPE is an immutable, orthogonal backbone choice. Learned positional
+        # changes live in the sinusoidal carrier and never replace or alter the
+        # standard rotation implicitly.
+        self.multiplicative_rope = bool(use_rope)
 
         if qk_norm:
             norm_type = (
@@ -281,20 +280,12 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             build_rope_frequencies(self.head_dim, self.rope_theta),
             persistent=False,
         )
-    def _apply_rope(
-        self,
-        q,
-        k,
-        rope_sin: torch.Tensor | None = None,
-        rope_cos: torch.Tensor | None = None,
-    ):
-        if (rope_sin is None) != (rope_cos is None):
-            raise ValueError("rope_sin and rope_cos must be provided together")
+    def _apply_rope(self, q, k):
         return apply_rotary(
             q,
             k,
-            self.rope_sin if rope_sin is None else rope_sin,
-            self.rope_cos if rope_cos is None else rope_cos,
+            self.rope_sin,
+            self.rope_cos,
         )
 
     def _split_heads(self, x):
@@ -348,8 +339,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
     def forward(
         self,
         x,
-        rope_sin: torch.Tensor | None = None,
-        rope_cos: torch.Tensor | None = None,
         qk_preprojection_basis: torch.Tensor | None = None,
     ):
         if self.qk_preprojection is not None:
@@ -390,8 +379,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 position_q_content, position_k_content = content_for(
                     self.qk_config
                 )
-        q_gain = None
-        k_gain = None
         position_output = None
         if self.qk_position is not None:
             position_output = self.qk_position(
@@ -400,8 +387,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 q_content=position_q_content,
                 k_content=position_k_content,
             )
-            q_gain = position_output.q_gain
-            k_gain = position_output.k_gain
 
         if self.qk_norm_mode == "method_aware_rms":
             q = q_projected
@@ -441,11 +426,7 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 q = q + q_addend
                 k = k + k_addend
         if self.multiplicative_rope:
-            q, k = self._apply_rope(q, k, rope_sin, rope_cos)
-        if q_gain is not None:
-            q = q * q_gain.to(dtype=q.dtype)
-        if k_gain is not None:
-            k = k * k_gain.to(dtype=k.dtype)
+            q, k = self._apply_rope(q, k)
         if self.post_position_qk_norm:
             q = self._unit_rms(q)
             k = self._unit_rms(k)
@@ -538,9 +519,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             final_k = self.k_norm(k_projected + k_add)
         else:
             final_q, final_k = q + q_add, k + k_add
-        if position.q_gain is not None:
-            final_q = final_q * position.q_gain
-            final_k = final_k * position.k_gain
         summary["final_q_rms"] = (
             final_q.detach().float().square().mean().sqrt().item()
         )
@@ -617,14 +595,10 @@ class TransformerBlock(torch.nn.Module):
     def forward(
         self,
         x,
-        rope_sin: torch.Tensor | None = None,
-        rope_cos: torch.Tensor | None = None,
         qk_preprojection_basis: torch.Tensor | None = None,
     ):
         x = self.attn(
             self.norm1(x),
-            rope_sin,
-            rope_cos,
             qk_preprojection_basis,
         ) + x
         x = self.ff(self.norm2(x)) + x
@@ -657,7 +631,6 @@ class Transformer(torch.nn.Module):
         ff_widened_hidden_dim: int | None = None,
         ff_widened_layers: list[int] | tuple[int, ...] | None = None,
         qk_preprojection_config: dict | None = None,
-        rope_frequency_config: dict | None = None,
     ):
         super().__init__()
 
@@ -669,24 +642,9 @@ class Transformer(torch.nn.Module):
             rope_theta=rope_theta,
             frequency_reference_length=max_seq_len,
         )
-        self.rope_frequency_config = normalize_shared_frequency_config(
-            rope_frequency_config,
-            default_reference_length=max_seq_len,
-        )
-        if not use_rope and self.rope_frequency_config["mode"] != "fixed":
-            raise ValueError("learned rope_frequency requires use_rope=true")
-        self.rope_frequency = (
-            SharedFrequencyBank(
-                dim // heads,
-                rope_theta,
-                self.rope_frequency_config,
-            )
-            if self.rope_frequency_config["mode"] != "fixed"
-            else None
-        )
         preprojection_frequency_config = normalized_qk_preprojection["frequency"]
         self.qk_preprojection_frequency = (
-            SharedFrequencyBank(
+            SinusoidFrequencyBank(
                 dim,
                 float(normalized_qk_preprojection["theta"]),
                 preprojection_frequency_config,
@@ -730,13 +688,6 @@ class Transformer(torch.nn.Module):
             )
             for layer_idx in range(depth)
         ])
-        if self.rope_frequency is not None and any(
-            not block.attn.multiplicative_rope for block in self.blocks
-        ):
-            raise ValueError(
-                "learned rope_frequency requires multiplicative RoPE to be active; "
-                "it cannot be combined with an additive Q/K position channel"
-            )
         self.in_proj = torch.nn.Sequential(
             torch.nn.LayerNorm(dim),
             torch.nn.Linear(dim, dim, bias=True),
@@ -832,20 +783,6 @@ class Transformer(torch.nn.Module):
         diagnostic_x = None
         if input_ids is not None:
             diagnostic_x = self.in_proj(self.token_embedding(input_ids))
-        rope_sin = rope_cos = None
-        if self.rope_frequency is not None and seq_len is not None:
-            rope_sin, rope_cos = build_rope_cache_from_frequencies(
-                seq_len,
-                self.rope_frequency(),
-            )
-            for key, value in self.rope_frequency.summarize().items():
-                metrics[f"position/shared_rope_frequency/{key}"] = value
-            profiles["shared_rope_frequency/frequency"] = (
-                self.rope_frequency().detach().cpu()
-            )
-            profiles["shared_rope_frequency/endpoint_phase_delta"] = (
-                self.rope_frequency.endpoint_phase_delta().detach().cpu()
-            )
         qk_preprojection_basis = None
         if self.qk_preprojection_frequency is not None and seq_len is not None:
             qk_preprojection_basis = interleaved_fourier_from_frequencies(
@@ -935,8 +872,6 @@ class Transformer(torch.nn.Module):
             if diagnostic_x is not None:
                 diagnostic_x = block(
                     diagnostic_x,
-                    rope_sin,
-                    rope_cos,
                     qk_preprojection_basis,
                 )
             if seq_len is None:
@@ -960,12 +895,6 @@ class Transformer(torch.nn.Module):
     def forward(self, input_ids, targets=None, *, return_logits: bool = False):
         """Training path returns loss only so torch.compile need not keep vocab logits live."""
         x = self.in_proj(self.token_embedding(input_ids))
-        rope_sin = rope_cos = None
-        if self.rope_frequency is not None:
-            rope_sin, rope_cos = build_rope_cache_from_frequencies(
-                input_ids.shape[1],
-                self.rope_frequency(),
-            )
         qk_preprojection_basis = None
         if self.qk_preprojection_frequency is not None:
             qk_preprojection_basis = interleaved_fourier_from_frequencies(
@@ -977,15 +906,13 @@ class Transformer(torch.nn.Module):
                 x = torch.utils.checkpoint.checkpoint(
                     block,
                     x,
-                    rope_sin,
-                    rope_cos,
                     qk_preprojection_basis,
                     preserve_rng_state=False,
                     use_reentrant=False,
                     determinism_check="none",
                 )
             else:
-                x = block(x, rope_sin, rope_cos, qk_preprojection_basis)
+                x = block(x, qk_preprojection_basis)
         logits = self.out_proj(x)
         if targets is None:
             return logits
@@ -1025,7 +952,6 @@ def count_parameters(model: torch.nn.Module) -> dict[str, int]:
         "position_params": position_counts["position_params"],
         "qk_position_params": position_counts["qk_position_params"],
         "qk_preprojection_params": position_counts["qk_preprojection_params"],
-        "rope_frequency_params": position_counts["rope_frequency_params"],
         "qk_preprojection_frequency_params": position_counts[
             "qk_preprojection_frequency_params"
         ],

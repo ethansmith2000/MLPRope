@@ -39,21 +39,6 @@ def build_rope_cache(
     return angles.sin(), angles.cos()
 
 
-def build_rope_cache_from_frequencies(
-    length: int,
-    inverse_frequency: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Build an fp32 RoPE cache from an explicit shared frequency bank."""
-    if length <= 0:
-        raise ValueError("length must be positive.")
-    if inverse_frequency.ndim != 1 or inverse_frequency.numel() == 0:
-        raise ValueError("inverse_frequency must be a non-empty vector")
-    frequency = inverse_frequency.float()
-    positions = torch.arange(length, device=frequency.device, dtype=torch.float32)
-    angles = torch.outer(positions, frequency)
-    return angles.sin(), angles.cos()
-
-
 def rotate_half(
     x: torch.Tensor,
     sin: torch.Tensor,
