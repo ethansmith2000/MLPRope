@@ -114,13 +114,62 @@ class SinusoidFrequencyBankTest(unittest.TestCase):
         )
         return SinusoidFrequencyBank(dimension, 10_000.0, config)
 
-    def test_both_learned_parameterizations_start_at_exact_fixed_frequency(self):
+    def test_all_learned_parameterizations_start_at_exact_fixed_frequency(self):
         fixed = self._bank("fixed").frequencies()
-        for mode in ("learned_log", "learned_horizon"):
+        for mode in (
+            "learned_log",
+            "learned_horizon",
+            "learned_global_direct",
+            "learned_hybrid_direct",
+        ):
             with self.subTest(mode=mode):
                 bank = self._bank(mode)
                 torch.testing.assert_close(bank.frequencies(), fixed, rtol=0, atol=0)
                 self.assertEqual(bank.coordinate.dtype, torch.float32)
+
+    def test_global_direct_is_a_phase_normalized_coherent_dilation(self):
+        reference_length = 16
+        bank = self._bank(
+            "learned_global_direct",
+            reference_length=reference_length,
+        )
+        self.assertEqual(bank.coordinate.numel(), 1)
+        jacobian = bank.endpoint_phase_coordinate_jacobian()
+        self.assertEqual(jacobian.shape, (4, 1))
+        self.assertEqual(jacobian.abs().max().item(), 1.0)
+        with torch.no_grad():
+            bank.coordinate.fill_(2.0)
+        multiplier = bank.frequencies() / bank.base_frequency
+        torch.testing.assert_close(
+            multiplier,
+            torch.full_like(multiplier, 1.0 + 2.0 / reference_length),
+        )
+
+    def test_hybrid_direct_uses_smooth_direct_coordinates_and_fixed_gains(self):
+        config = normalize_sinusoid_frequency_config(
+            {
+                "mode": "learned_hybrid_direct",
+                "smooth_rank": 2,
+                "endpoint_phase_scale": 0.5,
+            },
+            default_reference_length=16,
+        )
+        bank = SinusoidFrequencyBank(8, 10_000.0, config)
+        self.assertEqual(bank.coordinate.numel(), 2)
+        torch.testing.assert_close(
+            bank.coordinate_basis.square().mean(dim=0),
+            torch.ones(2),
+            atol=1e-6,
+            rtol=1e-6,
+        )
+        self.assertTrue(bool((bank.direct_gain <= bank.base_frequency).all()))
+        self.assertTrue(bool((bank.direct_gain <= 0.5 / 16).all()))
+        with torch.no_grad():
+            bank.coordinate.copy_(torch.tensor([0.2, -0.1]))
+        expected = bank.base_frequency + bank.direct_gain * (
+            bank.coordinate_basis @ bank.coordinate
+        )
+        torch.testing.assert_close(bank.frequencies(), expected)
 
     def test_horizon_coordinate_has_position_normalized_phase_gradient(self):
         reference_length = 16
@@ -253,10 +302,39 @@ class QKPreprojectionTest(unittest.TestCase):
             self.assertIsNotNone(parameter.grad)
             self.assertGreater(parameter.grad.abs().sum().item(), 0)
 
+    def test_direct_smooth_amplitude_is_affine_signed_and_receives_gradients(self):
+        module = QKPreprojectionPosition(
+            _config("tied_smooth_direct_amplitude", smooth_rank=2),
+            model_dim=8,
+            extent=16,
+        )
+        torch.testing.assert_close(
+            module.amplitude_factors()[0],
+            torch.ones(4),
+            rtol=0,
+            atol=0,
+        )
+        with torch.no_grad():
+            module.amplitude_coordinates.copy_(torch.tensor([1.5, -2.0]))
+        expected_delta = (
+            module.smooth_amplitude_basis @ module.amplitude_coordinates
+        )
+        torch.testing.assert_close(
+            module.amplitude_factors()[0],
+            1.0 + expected_delta,
+            rtol=0,
+            atol=0,
+        )
+        self.assertTrue(bool((module.amplitude_factors()[0] < 0).any()))
+        output = module(9, dtype=torch.float32)
+        output.q.square().mean().backward()
+        self.assertGreater(module.amplitude_coordinates.grad.abs().sum().item(), 0)
+
     def test_mode_parameter_counts_are_nested_and_exact(self):
         expected = {
             "tied_scalar": 1,
             "tied_smooth_amplitude": 3,
+            "tied_smooth_direct_amplitude": 3,
         }
         for mode, count in expected.items():
             with self.subTest(mode=mode):
@@ -445,6 +523,43 @@ class IntegratedPreprojectionTest(unittest.TestCase):
         self.assertEqual(metrics[f"{prefix}/log_amplitude_q_rms"], 0.0)
         self.assertNotIn(f"{prefix}/phase_q_rms", metrics)
 
+    def test_direct_amplitude_and_qknorm_mixture_diagnostics_are_explicit(self):
+        model = self._model(
+            qk_norm_mode="method_aware_rms",
+            qk_preprojection_config={
+                "enabled": True,
+                "mode": "tied_smooth_direct_amplitude",
+                "smooth_rank": 2,
+            },
+        )
+        ids = torch.randint(0, 32, (2, 8))
+        metrics, profiles = model.position_diagnostics(
+            sequence_length=8,
+            input_ids=ids,
+        )
+        prefix = "position/layer_00/qk_preprojection"
+        self.assertEqual(
+            metrics[f"{prefix}/direct_amplitude_delta_q_rms"],
+            0.0,
+        )
+        self.assertNotIn(f"{prefix}/log_amplitude_q_rms", metrics)
+        torch.testing.assert_close(
+            profiles[f"{prefix}/amplitude_factor_q"],
+            torch.ones(8),
+        )
+        self.assertGreater(
+            metrics[f"{prefix}/input_mixture_position_energy_fraction"],
+            0.0,
+        )
+        self.assertGreater(
+            metrics[f"{prefix}/projected_q_mixture_position_to_content_rms_ratio"],
+            0.0,
+        )
+        self.assertLessEqual(
+            metrics[f"{prefix}/normalized_q_cosine_to_content"],
+            1.0,
+        )
+
     def test_modes_round_trip_and_receive_distinct_run_names(self):
         names = set()
         with tempfile.TemporaryDirectory() as directory:
@@ -630,6 +745,47 @@ class IntegratedPreprojectionTest(unittest.TestCase):
             {id(parameters[0]) for parameters, _ in clip_groups},
             {id(model.qk_preprojection_frequency.coordinate)},
         )
+
+    def test_position_and_frequency_lr_multipliers_make_distinct_groups(self):
+        model = self._model(
+            qk_preprojection_config={
+                "enabled": True,
+                "mode": "tied_smooth_direct_amplitude",
+                "frequency": {
+                    "mode": "learned_global_direct",
+                    "reference_length": 16,
+                },
+            },
+        )
+        optimizer_args = Namespace(
+            optimizer="adamw",
+            exclude_position_from_decay=True,
+            position_lr_multiplier=0.25,
+            frequency_lr_multiplier=4.0,
+            weight_decay=0.1,
+            learning_rate=3.0e-4,
+            beta1=0.9,
+            beta2=0.98,
+        )
+        with mock.patch("torch.cuda.is_available", return_value=False):
+            optimizer = make_optimizer(optimizer_args, model)
+        group_by_parameter = {
+            id(parameter): group
+            for group in optimizer.param_groups
+            for parameter in group["params"]
+        }
+        frequency_group = group_by_parameter[
+            id(model.qk_preprojection_frequency.coordinate)
+        ]
+        adapter_group = group_by_parameter[
+            id(model.blocks[0].attn.qk_preprojection.amplitude_coordinates)
+        ]
+        self.assertEqual(frequency_group["group_name"], "frequency")
+        self.assertAlmostEqual(frequency_group["lr"], 1.2e-3)
+        self.assertEqual(frequency_group["weight_decay"], 0.0)
+        self.assertEqual(adapter_group["group_name"], "position")
+        self.assertAlmostEqual(adapter_group["lr"], 7.5e-5)
+        self.assertEqual(adapter_group["weight_decay"], 0.0)
 
     def test_optimizer_monitor_separates_gradient_update_and_function_step(self):
         model = self._model(

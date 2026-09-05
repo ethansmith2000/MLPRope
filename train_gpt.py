@@ -206,6 +206,10 @@ DEFAULT_CONFIG = {
     "qk_norm": True,
     "post_position_qk_norm": False,
     "exclude_position_from_decay": False,
+    # Explicit optimizer speeds for positional parameters. Frequency takes the
+    # frequency multiplier rather than multiplying both values together.
+    "position_lr_multiplier": 1.0,
+    "frequency_lr_multiplier": 1.0,
     "qk_norm_mode": "legacy_layernorm",
     "position_content_dim": 64,
     "position_content_coupling": "separate",
@@ -560,6 +564,14 @@ def load_config(cli_args):
         raise TypeError("post_position_qk_norm must be a boolean")
     if not isinstance(cfg["exclude_position_from_decay"], bool):
         raise TypeError("exclude_position_from_decay must be a boolean")
+    for key in ("position_lr_multiplier", "frequency_lr_multiplier"):
+        value = cfg[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(f"{key} must be a number")
+        value = float(value)
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f"{key} must be finite and positive")
+        cfg[key] = value
     if cfg["qk_norm_mode"] not in {
         "legacy_layernorm",
         "method_aware_rms",
@@ -938,12 +950,20 @@ POSITION_DECAY_EXEMPT = (
     "qk_preprojection_frequency",
 )
 
+POSITION_PARAMETER_TAGS = POSITION_DECAY_EXEMPT
+
 
 def make_optimizer(args, model):
     if args.optimizer != "adamw":
         raise ValueError("Only AdamW is supported.")
     no_decay = ("bias", "norm")
     exempt_position = bool(getattr(args, "exclude_position_from_decay", False))
+    position_lr_multiplier = float(
+        getattr(args, "position_lr_multiplier", 1.0)
+    )
+    frequency_lr_multiplier = float(
+        getattr(args, "frequency_lr_multiplier", 1.0)
+    )
     frequency_parameter_ids = {
         id(parameter)
         for module_name in ("qk_preprojection_frequency",)
@@ -954,15 +974,38 @@ def make_optimizer(args, model):
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        exempt = id(param) in frequency_parameter_ids or any(
+        is_frequency = id(param) in frequency_parameter_ids
+        is_position = is_frequency or any(
+            tag in name for tag in POSITION_PARAMETER_TAGS
+        )
+        exempt = is_frequency or any(
             nd in name for nd in no_decay
         ) or (
             exempt_position
-            and any(tag in name for tag in POSITION_DECAY_EXEMPT)
+            and is_position
         )
         wd = 0.0 if exempt else args.weight_decay
-        grouped.setdefault(wd, []).append(param)
-    param_groups = [{"params": params, "weight_decay": wd} for wd, params in grouped.items()]
+        lr_multiplier = (
+            frequency_lr_multiplier
+            if is_frequency
+            else position_lr_multiplier
+            if is_position
+            else 1.0
+        )
+        group_name = (
+            "frequency" if is_frequency else "position" if is_position else "model"
+        )
+        grouped.setdefault((wd, lr_multiplier, group_name), []).append(param)
+    param_groups = [
+        {
+            "params": params,
+            "weight_decay": wd,
+            "lr": args.learning_rate * lr_multiplier,
+            "group_name": group_name,
+            "lr_multiplier": lr_multiplier,
+        }
+        for (wd, lr_multiplier, group_name), params in grouped.items()
+    ]
     return torch.optim.AdamW(
         param_groups,
         lr=args.learning_rate,
@@ -1620,6 +1663,8 @@ def main():
             "qk_preprojection": args.qk_preprojection,
             "post_position_qk_norm": args.post_position_qk_norm,
             "exclude_position_from_decay": args.exclude_position_from_decay,
+            "position_lr_multiplier": args.position_lr_multiplier,
+            "frequency_lr_multiplier": args.frequency_lr_multiplier,
             "qk_norm_mode": args.qk_norm_mode,
             "position_content_dim": args.position_content_dim,
             "position_content_coupling": args.position_content_coupling,

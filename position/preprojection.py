@@ -20,10 +20,12 @@ from position.precision import PreserveFP32BuffersMixin
 QKPreprojectionMode = Literal[
     "tied_scalar",
     "tied_smooth_amplitude",
+    "tied_smooth_direct_amplitude",
 ]
 QK_PREPROJECTION_MODES = {
     "tied_scalar",
     "tied_smooth_amplitude",
+    "tied_smooth_direct_amplitude",
 }
 QK_PREPROJECTION_REMOVED_MODES = {
     "tied_smooth_polar",
@@ -80,8 +82,9 @@ def normalize_qk_preprojection_config(
             raise ValueError(
                 f"qk_preprojection.mode={mode!r} was removed from the active "
                 "runtime after the Phase 33/35 null results; use "
-                "'tied_scalar' or 'tied_smooth_amplitude', or recover the "
-                "historical implementation from git history"
+                "'tied_scalar', 'tied_smooth_amplitude', or "
+                "'tied_smooth_direct_amplitude', or recover the historical "
+                "implementation from git history"
             )
         # Disabled archival blocks have no model effect. Canonicalize them so
         # old resolved configs remain understandable without dormant runtime
@@ -158,8 +161,10 @@ def _smooth_amplitude_basis(size: int, count: int) -> torch.Tensor:
 class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
     """Produce sinusoidal inputs added only before the Q and K projections.
 
-    ``tied_scalar`` is the established carrier. ``tied_smooth_amplitude`` adds
-    a few low-order DCT modes over the uniformly spaced log-frequency index.
+    ``tied_scalar`` is the established carrier. The smooth modes add a few
+    low-order DCT modes over the uniformly spaced log-frequency index.
+    ``tied_smooth_amplitude`` retains the historical exponential map;
+    ``tied_smooth_direct_amplitude`` uses the signed affine factor ``1 + Bc``.
     Its basis excludes the constant mode, so the shared global gate remains
     identifiable. Both modes give Q and K exactly the same positional input;
     their existing projections still learn separate reads of it.
@@ -172,6 +177,7 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
     _fp32_parameter_names = (
         "gate",
         "log_amplitude_coordinates",
+        "amplitude_coordinates",
     )
 
     def __init__(self, config: dict, *, model_dim: int, extent: int) -> None:
@@ -198,7 +204,10 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
                 self.pair_dim,
                 (
                     self.smooth_rank
-                    if self.mode == "tied_smooth_amplitude"
+                    if self.mode in {
+                        "tied_smooth_amplitude",
+                        "tied_smooth_direct_amplitude",
+                    }
                     else 0
                 ),
             ),
@@ -219,6 +228,12 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
             )
         else:
             self.register_parameter("log_amplitude_coordinates", None)
+        if self.mode == "tied_smooth_direct_amplitude":
+            self.amplitude_coordinates = torch.nn.Parameter(
+                torch.zeros(self.smooth_rank, dtype=torch.float32)
+            )
+        else:
+            self.register_parameter("amplitude_coordinates", None)
 
     def _apply(self, fn, recurse: bool = True):
         # Gate and log-amplitude are tiny parameter sets whose numerical
@@ -264,16 +279,32 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
             )
         return delta, delta
 
+    def direct_amplitude_deltas(self) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.amplitude_coordinates is None:
+            delta = self.smooth_amplitude_basis.new_zeros(self.pair_dim)
+        else:
+            delta = self.smooth_amplitude_basis @ self.amplitude_coordinates.float()
+        return delta, delta
+
+    def amplitude_factors(self) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.log_amplitude_coordinates is not None:
+            factor = self.log_amplitude_deltas()[0].exp()
+        elif self.amplitude_coordinates is not None:
+            factor = 1.0 + self.direct_amplitude_deltas()[0]
+        else:
+            factor = self.smooth_amplitude_basis.new_ones(self.pair_dim)
+        return factor, factor
+
     @staticmethod
     def _transform_pairs(
         basis: torch.Tensor,
         *,
         gain: torch.Tensor,
-        log_amplitude_delta: torch.Tensor,
+        amplitude_factor: torch.Tensor,
         dtype: torch.dtype,
     ) -> torch.Tensor:
         pairs = basis.float().reshape(basis.shape[0], -1, 2)
-        amplitude = gain.float() * log_amplitude_delta.float().exp()
+        amplitude = gain.float() * amplitude_factor.float()
         return (pairs * amplitude[None, :, None]).flatten(-2).to(dtype=dtype)
 
     def forward(
@@ -305,11 +336,11 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
 
         # Keep the stored carrier and amplitude transform in fp32; cast
         # only the completed coefficients used by the model-width branches.
-        amplitude_delta = self.log_amplitude_deltas()[0]
+        amplitude_factor = self.amplitude_factors()[0]
         positional = self._transform_pairs(
             basis_fp32,
             gain=gate,
-            log_amplitude_delta=amplitude_delta,
+            amplitude_factor=amplitude_factor,
             dtype=dtype,
         )
         return QKPreprojectionOutput(q=positional, k=positional)
@@ -321,3 +352,5 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
                 self.gate.fill_(gate_init)
             if self.log_amplitude_coordinates is not None:
                 self.log_amplitude_coordinates.zero_()
+            if self.amplitude_coordinates is not None:
+                self.amplitude_coordinates.zero_()

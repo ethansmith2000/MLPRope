@@ -813,23 +813,56 @@ class Transformer(torch.nn.Module):
                 metrics[f"{pre_prefix}/gate_k"] = k_gate.detach().float().item()
                 if preprojection.mode == "tied_scalar":
                     metrics[f"{pre_prefix}/gate"] = q_gate.detach().float().item()
-                q_log_amplitude, k_log_amplitude = (
-                    preprojection.log_amplitude_deltas()
+                q_amplitude_factor, k_amplitude_factor = (
+                    preprojection.amplitude_factors()
                 )
-                profiles[f"{pre_prefix}/log_amplitude_q"] = (
-                    q_log_amplitude.detach().float().cpu()
-                )
-                profiles[f"{pre_prefix}/log_amplitude_k"] = (
-                    k_log_amplitude.detach().float().cpu()
-                )
-                for branch, log_amplitude in (
-                    ("q", q_log_amplitude),
-                    ("k", k_log_amplitude),
+                for branch, amplitude_factor in (
+                    ("q", q_amplitude_factor),
+                    ("k", k_amplitude_factor),
                 ):
-                    log_amplitude = log_amplitude.detach().float()
-                    metrics[f"{pre_prefix}/log_amplitude_{branch}_rms"] = (
-                        log_amplitude.square().mean().sqrt().item()
+                    amplitude_factor = amplitude_factor.detach().float()
+                    profiles[f"{pre_prefix}/amplitude_factor_{branch}"] = (
+                        amplitude_factor.cpu()
                     )
+                    metrics[f"{pre_prefix}/amplitude_factor_{branch}_min"] = (
+                        amplitude_factor.min().item()
+                    )
+                    metrics[f"{pre_prefix}/amplitude_factor_{branch}_max"] = (
+                        amplitude_factor.max().item()
+                    )
+                    metrics[
+                        f"{pre_prefix}/amplitude_factor_{branch}_nonpositive_fraction"
+                    ] = (amplitude_factor <= 0).float().mean().item()
+                if preprojection.log_amplitude_coordinates is not None:
+                    q_log_amplitude, k_log_amplitude = (
+                        preprojection.log_amplitude_deltas()
+                    )
+                    for branch, log_amplitude in (
+                        ("q", q_log_amplitude),
+                        ("k", k_log_amplitude),
+                    ):
+                        log_amplitude = log_amplitude.detach().float()
+                        profiles[f"{pre_prefix}/log_amplitude_{branch}"] = (
+                            log_amplitude.cpu()
+                        )
+                        metrics[f"{pre_prefix}/log_amplitude_{branch}_rms"] = (
+                            log_amplitude.square().mean().sqrt().item()
+                        )
+                if preprojection.amplitude_coordinates is not None:
+                    q_amplitude_delta, k_amplitude_delta = (
+                        preprojection.direct_amplitude_deltas()
+                    )
+                    for branch, amplitude_delta in (
+                        ("q", q_amplitude_delta),
+                        ("k", k_amplitude_delta),
+                    ):
+                        amplitude_delta = amplitude_delta.detach().float()
+                        profiles[f"{pre_prefix}/direct_amplitude_delta_{branch}"] = (
+                            amplitude_delta.cpu()
+                        )
+                        metrics[
+                            f"{pre_prefix}/direct_amplitude_delta_{branch}_rms"
+                        ] = amplitude_delta.square().mean().sqrt().item()
                 if seq_len is not None:
                     positional_input = preprojection(
                         seq_len,
@@ -867,6 +900,92 @@ class Transformer(torch.nn.Module):
                     metrics[f"{pre_prefix}/projected_k_rms"] = (
                         k_branch.square().mean().sqrt().item()
                     )
+                if normalized_diagnostic_x is not None:
+                    diagnostic_position = preprojection(
+                        normalized_diagnostic_x.shape[1],
+                        dtype=normalized_diagnostic_x.dtype,
+                        basis_override=qk_preprojection_basis,
+                    ).q
+
+                    def add_mixture_metrics(
+                        name: str,
+                        content: torch.Tensor,
+                        position: torch.Tensor,
+                    ) -> None:
+                        position = position.expand_as(content)
+                        content_float = content.detach().float()
+                        position_float = position.detach().float()
+                        content_ms = content_float.square().mean()
+                        position_ms = position_float.square().mean()
+                        denominator = (content_ms + position_ms).clamp_min(1e-30)
+                        metrics[f"{pre_prefix}/{name}_content_rms"] = (
+                            content_ms.sqrt().item()
+                        )
+                        metrics[f"{pre_prefix}/{name}_position_rms"] = (
+                            position_ms.sqrt().item()
+                        )
+                        metrics[
+                            f"{pre_prefix}/{name}_position_to_content_rms_ratio"
+                        ] = (position_ms / content_ms.clamp_min(1e-30)).sqrt().item()
+                        metrics[f"{pre_prefix}/{name}_position_energy_fraction"] = (
+                            position_ms / denominator
+                        ).item()
+                        dot = (content_float * position_float).sum()
+                        cosine_denominator = (
+                            content_float.square().sum()
+                            * position_float.square().sum()
+                        ).sqrt().clamp_min(1e-30)
+                        metrics[f"{pre_prefix}/{name}_content_position_cosine"] = (
+                            dot / cosine_denominator
+                        ).item()
+                        metrics[f"{pre_prefix}/{name}_combined_rms"] = (
+                            (content_float + position_float)
+                            .square()
+                            .mean()
+                            .sqrt()
+                            .item()
+                        )
+
+                    add_mixture_metrics(
+                        "input_mixture",
+                        normalized_diagnostic_x,
+                        diagnostic_position[None],
+                    )
+                    q_content = block.attn._split_heads(
+                        block.attn.to_q(normalized_diagnostic_x)
+                    )
+                    k_content = block.attn._split_heads(
+                        block.attn.to_k(normalized_diagnostic_x)
+                    )
+                    q_position = block.attn._split_heads(
+                        block.attn.to_q(diagnostic_position[None])
+                    )
+                    k_position = block.attn._split_heads(
+                        block.attn.to_k(diagnostic_position[None])
+                    )
+                    for branch, content, position, norm in (
+                        ("q", q_content, q_position, block.attn.q_norm),
+                        ("k", k_content, k_position, block.attn.k_norm),
+                    ):
+                        add_mixture_metrics(
+                            f"projected_{branch}_mixture",
+                            content,
+                            position,
+                        )
+                        content_normalized = norm(content).detach().float()
+                        combined_normalized = norm(content + position).detach().float()
+                        angular_cosine = F.cosine_similarity(
+                            content_normalized,
+                            combined_normalized,
+                            dim=-1,
+                            eps=1e-12,
+                        )
+                        metrics[
+                            f"{pre_prefix}/normalized_{branch}_cosine_to_content"
+                        ] = angular_cosine.mean().item()
+                        metrics[f"{pre_prefix}/normalized_{branch}_rms"] = (
+                            combined_normalized.square().mean().sqrt().item()
+                        )
             if diagnostic_x is not None:
                 diagnostic_x = block(
                     diagnostic_x,

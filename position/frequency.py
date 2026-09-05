@@ -19,8 +19,20 @@ from position.precision import PreserveFP32BuffersMixin
 from position.rotary import build_rope_frequencies
 
 
-FrequencyMode = Literal["fixed", "learned_log", "learned_horizon"]
-FREQUENCY_MODES = {"fixed", "learned_log", "learned_horizon"}
+FrequencyMode = Literal[
+    "fixed",
+    "learned_log",
+    "learned_horizon",
+    "learned_global_direct",
+    "learned_hybrid_direct",
+]
+FREQUENCY_MODES = {
+    "fixed",
+    "learned_log",
+    "learned_horizon",
+    "learned_global_direct",
+    "learned_hybrid_direct",
+}
 
 SINUSOID_FREQUENCY_DEFAULTS = {
     "mode": "fixed",
@@ -30,6 +42,12 @@ SINUSOID_FREQUENCY_DEFAULTS = {
     # Learned frequency coordinates are clipped as a group, independently of
     # ordinary model parameters.  Null disables their dedicated clipping.
     "max_grad_norm": 1.0,
+    # Direct modes measure their fixed gains in radians of phase at the
+    # reference horizon. This is a coordinate scale, not a bound or
+    # saturating nonlinearity.
+    "endpoint_phase_scale": 1.0,
+    # Only learned_hybrid_direct uses this low-order DCT coordinate count.
+    "smooth_rank": 4,
 }
 
 
@@ -64,8 +82,12 @@ def normalize_sinusoid_frequency_config(
         reference_length = int(reference_length)
         if reference_length <= 0:
             raise ValueError("frequency reference_length must be positive")
-    if mode == "learned_horizon" and reference_length is None:
-        raise ValueError("learned_horizon requires a reference_length")
+    if mode in {
+        "learned_horizon",
+        "learned_global_direct",
+        "learned_hybrid_direct",
+    } and reference_length is None:
+        raise ValueError(f"{mode} requires a reference_length")
     normalized["reference_length"] = reference_length
 
     max_grad_norm = normalized["max_grad_norm"]
@@ -78,7 +100,43 @@ def normalize_sinusoid_frequency_config(
         if not math.isfinite(max_grad_norm) or max_grad_norm <= 0:
             raise ValueError("frequency max_grad_norm must be finite and positive")
     normalized["max_grad_norm"] = max_grad_norm
+
+    endpoint_phase_scale = normalized["endpoint_phase_scale"]
+    if isinstance(endpoint_phase_scale, bool) or not isinstance(
+        endpoint_phase_scale,
+        (int, float),
+    ):
+        raise TypeError("frequency endpoint_phase_scale must be a number")
+    endpoint_phase_scale = float(endpoint_phase_scale)
+    if not math.isfinite(endpoint_phase_scale) or endpoint_phase_scale <= 0:
+        raise ValueError(
+            "frequency endpoint_phase_scale must be finite and positive"
+        )
+    normalized["endpoint_phase_scale"] = endpoint_phase_scale
+
+    smooth_rank = normalized["smooth_rank"]
+    if isinstance(smooth_rank, bool) or not isinstance(smooth_rank, int):
+        raise TypeError("frequency smooth_rank must be an integer")
+    if smooth_rank <= 0:
+        raise ValueError("frequency smooth_rank must be positive")
+    normalized["smooth_rank"] = smooth_rank
     return normalized
+
+
+def _smooth_frequency_basis(size: int, count: int) -> torch.Tensor:
+    """Unit-RMS DCT-II coordinates over the ordered frequency index.
+
+    The constant mode is included because the frequency bank has no separate
+    learned offset. Nonconstant modes use the usual sqrt(2) normalization.
+    """
+    if count > size:
+        raise ValueError("frequency smooth_rank cannot exceed the pair dimension")
+    index = torch.arange(size, dtype=torch.float32)[:, None] + 0.5
+    modes = torch.arange(count, dtype=torch.float32)[None, :]
+    basis = torch.cos(math.pi * index * modes / size)
+    if count > 1:
+        basis[:, 1:] *= math.sqrt(2.0)
+    return basis
 
 
 class SinusoidFrequencyBank(PreserveFP32BuffersMixin, torch.nn.Module):
@@ -92,9 +150,23 @@ class SinusoidFrequencyBank(PreserveFP32BuffersMixin, torch.nn.Module):
     ``p*omega_0 + (p/L_ref)*rho`` and its derivative with respect to ``rho`` is
     at most one over the reference context.  This is normalized rather than
     bounded: it contains no tanh or other saturation.
+
+    ``learned_global_direct`` learns one direct coordinate that dilates the
+    whole schedule. Its fixed gain makes one coordinate unit equal
+    ``endpoint_phase_scale`` radians for the highest-frequency pair at the
+    reference horizon.
+
+    ``learned_hybrid_direct`` learns a few smooth direct coordinates. Pair
+    ``i`` uses gain ``min(omega_i, endpoint_phase_scale / L_ref)``: low
+    frequencies therefore move relatively, while high-frequency endpoint
+    phase sensitivity is capped in scale without a nonlinear parameter map.
     """
 
-    _fp32_buffer_names = ("base_frequency",)
+    _fp32_buffer_names = (
+        "base_frequency",
+        "coordinate_basis",
+        "direct_gain",
+    )
     _fp32_parameter_names = ("coordinate",)
 
     def __init__(
@@ -110,16 +182,56 @@ class SinusoidFrequencyBank(PreserveFP32BuffersMixin, torch.nn.Module):
         self.mode: FrequencyMode = config["mode"]
         self.reference_length = config["reference_length"]
         self.max_grad_norm = config["max_grad_norm"]
+        self.endpoint_phase_scale = float(config["endpoint_phase_scale"])
+        self.smooth_rank = int(config["smooth_rank"])
         self.register_buffer(
             "base_frequency",
             build_rope_frequencies(self.dimension, self.theta),
             persistent=False,
         )
+        pair_dim = self.dimension // 2
+        if self.mode == "learned_hybrid_direct":
+            coordinate_basis = _smooth_frequency_basis(
+                pair_dim,
+                self.smooth_rank,
+            )
+            direct_gain = torch.minimum(
+                self.base_frequency,
+                self.base_frequency.new_tensor(
+                    self.endpoint_phase_scale / float(self.reference_length)
+                ),
+            )
+        elif self.mode == "learned_global_direct":
+            coordinate_basis = torch.ones((pair_dim, 1), dtype=torch.float32)
+            direct_gain = (
+                self.base_frequency
+                * self.endpoint_phase_scale
+                / (
+                    float(self.reference_length)
+                    * self.base_frequency.max()
+                )
+            )
+        else:
+            coordinate_basis = torch.empty((pair_dim, 0), dtype=torch.float32)
+            direct_gain = torch.empty((pair_dim,), dtype=torch.float32)
+        self.register_buffer(
+            "coordinate_basis",
+            coordinate_basis,
+            persistent=False,
+        )
+        self.register_buffer("direct_gain", direct_gain, persistent=False)
         if self.mode == "fixed":
             self.register_parameter("coordinate", None)
         else:
+            coordinate_count = (
+                1
+                if self.mode == "learned_global_direct"
+                else self.smooth_rank
+                if self.mode == "learned_hybrid_direct"
+                else pair_dim
+            )
             self.coordinate = torch.nn.Parameter(
-                torch.zeros(self.dimension // 2, dtype=torch.float32)
+                torch.zeros(coordinate_count, dtype=torch.float32)
             )
 
     def _apply(self, fn, recurse: bool = True):
@@ -154,6 +266,9 @@ class SinusoidFrequencyBank(PreserveFP32BuffersMixin, torch.nn.Module):
             return base * coordinate.exp()
         if self.mode == "learned_horizon":
             return base + coordinate / float(self.reference_length)
+        if self.mode in {"learned_global_direct", "learned_hybrid_direct"}:
+            deformation = self.coordinate_basis @ coordinate
+            return base + self.direct_gain * deformation
         raise AssertionError(f"Unhandled frequency mode: {self.mode}")
 
     def forward(self) -> torch.Tensor:
@@ -176,6 +291,12 @@ class SinusoidFrequencyBank(PreserveFP32BuffersMixin, torch.nn.Module):
             return self.frequencies() * float(self.reference_length or 1)
         if self.mode == "learned_horizon":
             return torch.ones_like(self.base_frequency, dtype=torch.float32)
+        if self.mode in {"learned_global_direct", "learned_hybrid_direct"}:
+            return (
+                float(self.reference_length)
+                * self.direct_gain[:, None]
+                * self.coordinate_basis
+            )
         raise AssertionError(f"Unhandled frequency mode: {self.mode}")
 
     @torch.no_grad()
@@ -201,6 +322,9 @@ class SinusoidFrequencyBank(PreserveFP32BuffersMixin, torch.nn.Module):
             "multiplier_max": multiplier.max().item(),
             "multiplier_mean": multiplier.mean().item(),
             "multiplier_std": multiplier.std(unbiased=False).item(),
+            "coordinate_count": float(
+                0 if self.coordinate is None else self.coordinate.numel()
+            ),
             "endpoint_phase_delta_rms": endpoint_delta.square().mean().sqrt().item(),
             "endpoint_phase_delta_abs_max": endpoint_delta.abs().max().item(),
             "endpoint_phase_coordinate_jacobian_rms": (

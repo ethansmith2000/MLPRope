@@ -267,6 +267,12 @@ class InterventionOptimizationMonitor:
 
     @torch.no_grad()
     def capture_before_clip(self, optimizer) -> InterventionOptimizationSample:
+        optimizer_base = _optimizer_base(optimizer)
+        learning_rate_by_parameter = {
+            id(parameter): float(optimizer_group["lr"])
+            for optimizer_group in optimizer_base.param_groups
+            for parameter in optimizer_group["params"]
+        }
         parameter_before = {}
         raw_gradients = {}
         frequency_before = {}
@@ -279,6 +285,13 @@ class InterventionOptimizationMonitor:
                 parameter_before[id(parameter)] = parameter.detach().float().clone()
                 raw_gradients[id(parameter)] = gradient
             prefix = f"optimization/{group.name}"
+            learning_rates = [
+                learning_rate_by_parameter[id(parameter)]
+                for parameter in parameters
+            ]
+            if learning_rates:
+                metrics[f"{prefix}/learning_rate_min"] = min(learning_rates)
+                metrics[f"{prefix}/learning_rate_max"] = max(learning_rates)
             _prefixed(metrics, f"{prefix}/raw_gradient", _vector_stats(gradients))
             parameter_values = [p.detach().float() for p in parameters]
             _prefixed(metrics, f"{prefix}/parameter", _vector_stats(parameter_values))
