@@ -1,6 +1,6 @@
 # Sinusoidal intervention policy
 
-_Active design contract, 2026-09-04. This supersedes learned-RoPE proposals in
+_Active design contract, 2026-09-05. This supersedes learned-RoPE proposals in
 older roadmaps; those documents and results remain historical evidence._
 
 ## Architectural boundary
@@ -95,12 +95,24 @@ separate Q/K transforms were subthreshold. The NoPE amplitude arm remained
 `0.037168` worse than matched amplitude+RoPE, so it is a conditional result for
 RoPE-free work rather than a replacement for the default backbone.
 
-The active pre-Q/K runtime therefore contains only a shared scalar carrier and
-its tied rank-4 smooth-amplitude extension. Phase and Q/K-split implementations
-were removed after the Phase 35 provenance commit. This is an evidence-based
+Phase 36 then separated parameterization failure from the carrier-shape
+hypothesis. A direct signed rank-4 amplitude map, initialized exactly at the
+scalar carrier, improved the RoPE parent by `-0.003661`, CI
+`[-0.004247,-0.003074]`, at 20k. Its exponential Phase-35 predecessor reached
+only `-0.002604`; that cross-phase difference is suggestive rather than paired.
+Direct global and smooth hybrid frequency maps had endpoint-conditioned
+Jacobians and healthy optimization, but were null or subthreshold. Increasing
+the hybrid frequency LR induced `6.27%` adjacent-order violations without
+clearing the loss gate. Frequency therefore remains unpromoted.
+
+The active pre-Q/K runtime therefore contains a shared scalar carrier and tied
+rank-4 exponential/direct smooth-amplitude extensions. Phase and Q/K-split
+implementations were removed after the Phase 35 provenance commit. This is an
+evidence-based
 implementation prune, not a claim that those taxonomy axes are impossible;
 their protocols and results remain available if a genuinely new hypothesis
-warrants recovering them from history.
+warrants recovering them from history. The Phase-36 direct frequency modes are
+retained for exact reproduction of the completed screen, not as finalists.
 
 ## Optimization-aware evaluation
 
@@ -154,7 +166,7 @@ Do not reopen a broad sweep immediately. New ideas should first satisfy:
 6. longer or repeated runs only for a materially favorable, non-collapsing
    candidate.
 
-The rank-4 smooth static amplitude/phase follow-up is complete. No further run
-is active. New work should begin from a distinct hypothesis; repeating phase
-or Q/K-untying variants without such a reason is not warranted by the healthy
-null optimization traces.
+The rank-4 direct-amplitude follow-up is the only current candidate for longer
+confirmation. Repeating frequency, phase, or Q/K-untying variants without a
+new structural hypothesis is not warranted by the healthy null/subthreshold
+optimization traces.

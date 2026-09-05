@@ -3249,3 +3249,38 @@ The ten-case retained matrix also passes two optimizer steps in both eager and
 compiled bf16 through `gpu-claim`, including scalar and smooth carriers with
 fixed RoPE and NoPE and the supported AddRoPE combination. All losses and
 gradients were finite, and the GPU claim was released normally.
+
+## 2026-09-05 — Phase 36 direct amplitude/frequency screen
+
+Phase 36 replaced transform-mediated amplitude/frequency coordinates with
+direct, nonsaturating ones while preserving the scalar carrier as an exact
+initial anchor. Rank-4 amplitude used `1 + Bc`; global and rank-4 hybrid
+frequency used fixed gains chosen to control endpoint-phase derivatives. The
+carrier remained tied across Q/K, fixed RoPE stayed enabled, and method-aware
+QKNorm diagnostics measured the actual content/position mixture.
+
+Eight 512-step calibration runs selected amplitude LR1, global-frequency LR4,
+and hybrid-frequency LR1, with LR4 hybrid retained as a speed sensitivity.
+Seven h768/d8/context-1024 arms then completed 20k steps from clean commit
+`d7991d9`. Direct amplitude improved its scalar parent by `-0.003661`, paired
+CI `[-0.004247,-0.003074]`, and was still improving over the late development
+window. The amplitude+frequency arm reached `-0.004118` versus scalar, but
+frequency added only `-0.000457` beyond amplitude.
+
+Global frequency was null (`+0.000253`). Hybrid LR1 was `-0.000941`; hybrid
+LR4 was `-0.002258` but produced `6.27%` adjacent-order violations. All
+frequency optimization traces were finite and unclipped. Direct amplitude is
+therefore the only Phase-36 component promoted to longer confirmation; the
+frequency paths are retained only for reproducibility pending later cleanup.
+
+## 2026-09-05 — Phase 37 long-horizon matrix frozen
+
+The Phase-36 direct-amplitude result met its screen gate, so the next run is a
+narrow 200k confirmation with the scalar, exponential rank-4, and direct
+rank-4 carrier-amplitude arms. All three share fixed RoPE, method-aware QKNorm,
+the same seed/data order/schedule, and no positional weight decay. This makes
+direct versus exponential a paired parameterization comparison and omits the
+unpromoted frequency variants. The primary long-horizon gate is a `0.002`-nat
+direct-over-scalar improvement with a below-zero paired interval, a
+non-collapsing late curve, and healthy carrier diagnostics. The frozen protocol
+is `DIRECT_AMPLITUDE_CONFIRMATION_PLAN.md`.

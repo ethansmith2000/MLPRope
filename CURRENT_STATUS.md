@@ -1,6 +1,6 @@
 # MLPRope current status
 
-_Authoritative as of 2026-09-04. The active architectural contract is
+_Authoritative as of 2026-09-05. The active architectural contract is
 [`SINUSOID_INTERVENTION_POLICY.md`](SINUSOID_INTERVENTION_POLICY.md). Older
 protocols and roadmap sections are historical records._
 
@@ -23,11 +23,19 @@ intervention uses either immutable standard RoPE or NoPE, while learned
 amplitude, phase, or frequency acts only on the sinusoidal carrier. AddRoPE no
 longer implicitly replaces RoPE.
 
-Phase 35 is complete. Rank-4 smooth spectral amplitude helped the carrier
+Phase 35 found that rank-4 smooth spectral amplitude helped the carrier
 materially under NoPE (`-0.010644`) but remained `0.037168` worse than its
 matched RoPE model. Under RoPE the amplitude gain was a smaller `-0.002604`,
 below the predeclared practical gate. Learned phase and separate Q/K transforms
-did not earn promotion. There is no automatic follow-up run queued.
+did not earn promotion.
+
+Phase 36 revisited amplitude and carrier frequency with direct, nonsaturating,
+endpoint-conditioned coordinates under RoPE. Direct signed rank-4 amplitude
+improved the scalar carrier by `-0.003661`, paired-example 95% CI
+`[-0.004247,-0.003074]`, clearing the `0.003` screen threshold. A conservative
+rank-4 frequency deformation added only `-0.000457` beyond amplitude; global
+frequency was null, and the faster rank-4 frequency arm violated spectral
+ordering. Direct amplitude is the sole new candidate for longer confirmation.
 
 ## Strongest completed evidence
 
@@ -47,6 +55,9 @@ did not earn promotion. There is no automatic follow-up run queued.
 | horizon-frequency carrier vs fixed carrier | 200k, 1 paired seed | `+0.001341`, slightly worse |
 | smooth amplitude vs scalar carrier, NoPE | 20k, 1 paired seed | `-0.010644`, gate pass |
 | smooth amplitude vs scalar carrier, RoPE | 20k, 1 paired seed | `-0.002604`, below gate |
+| direct smooth amplitude vs scalar carrier, RoPE | 20k, 1 paired seed | `-0.003661`, gate pass |
+| direct amplitude + hybrid frequency vs direct amplitude | 20k, 1 paired seed | `-0.000457`, below gate |
+| global/hybrid direct frequency vs scalar carrier | 20k, 1 paired seed | null/subthreshold; fast hybrid broke ordering |
 
 The EMA result is not being promoted. Its estimated equal-wall-clock advantage
 is only about `-0.0015`, and per-head/per-dimension decays did not improve over
@@ -72,19 +83,27 @@ multi-seed or compute-optimal scaling result.
 
 ## Active pre-Q/K adapter
 
-The runtime now exposes only `tied_scalar` and `tied_smooth_amplitude`. Both add
-one shared sinusoidal carrier before the Q and K projections; `W_q` and `W_k`
-still learn separate reads. The smooth mode adds rank-4, unit-RMS DCT
-log-amplitude coordinates over the frequency-pair axis. Its basis omits the
-constant mode, so the learned scalar gate controls global strength without a
-scale gauge. Its zero-coordinate state exactly equals `tied_scalar`.
+The runtime exposes `tied_scalar`, the historical exponential
+`tied_smooth_amplitude`, and the Phase-36
+`tied_smooth_direct_amplitude`. All add one shared sinusoidal carrier before
+the Q and K projections; `W_q` and `W_k` still learn separate reads. The direct
+mode uses `a_i = g(1 + (Bc)_i)` with rank-4, zero-mean, unit-RMS DCT coordinates.
+It starts exactly at the scalar carrier, is nonsaturating, permits signed
+factors, and leaves the global strength identifiable through `g`. At 20k its
+factors remained positive but spanned `0.057--1.698`, so longer runs must retain
+the signed-factor diagnostics.
 
 The Phase 33 split-scalar/free-pair ladder and Phase 35 phase/QK-split modes are
 preserved in configs and result reports but removed from active execution.
 Enabled historical modes fail with a direct migration message; disabled
 archival blocks canonicalize to `tied_scalar`. This removes separate Q/K gates,
 phase tensors, and full per-pair tables from the model while retaining the only
-shape variant with positive evidence.
+shape variants with positive evidence.
+
+Phase 36 also added direct global and rank-4 hybrid carrier-frequency
+coordinates with bounded endpoint-phase Jacobians, independent LR multipliers,
+no weight decay, and a dedicated gradient group. They remain executable for
+reproducibility but did not earn scientific promotion.
 
 ## Phase 34 conclusion
 
@@ -102,13 +121,14 @@ It is preserved as historical evidence, not retained as active machinery. See
 
 ## Next execution
 
-No GPU experiment is automatically next. The default remains the scalar
-pre-Q/K carrier with standard fixed RoPE. Phase and Q/K-untying variants can be
-shelved; smooth NoPE amplitude should be extended only for a deliberate
-RoPE-free research question. Otherwise the appropriate next step is repository
-consolidation or a new hypothesis with an independent reason to expect a
-material effect. See the
-[`Phase-35 result`](results/phase35_smooth_carrier_20k/PHASE35_RESULTS.md).
+The default anchor remains the scalar pre-Q/K carrier with standard fixed RoPE.
+The one candidate that has earned confirmation is direct rank-4 amplitude.
+Phase 37 is a frozen 200k comparison of the scalar parent, historical
+exponential rank-4 amplitude, and direct rank-4 amplitude. The exponential arm
+turns the parameterization question into a same-source, same-schedule contrast.
+Additional seeds wait on the long-horizon result. Frequency, phase, and
+Q/K-untying variants remain shelved. See the
+[`Phase-37 plan`](DIRECT_AMPLITUDE_CONFIRMATION_PLAN.md).
 
 ## Repository state
 
@@ -138,6 +158,12 @@ material effect. See the
   18 parent runs. This freed 92.8GB (87GiB). The 18 final weights, completion
   markers, configs, metrics, summaries, final evaluation details, position
   profiles, and compact phase reports remain.
+- All seven Phase-36 20k arms completed from clean source commit `d7991d9`.
+  Throughput was 179.5k--184.5k target tokens/s and peak memory was
+  5.08--5.22 GiB. The runs used direct nonsaturating amplitude/frequency
+  coordinates, explicit positional/frequency LR groups, and full QKNorm
+  mixture diagnostics. The CPU suite passes 125 tests with one CUDA-only skip;
+  all new mechanisms also passed eager and compiled bf16 GPU checks.
 - `/workspace` is not a persistent Vast volume. Copy irreplaceable weights
   off-box before deleting them or destroying/recycling this instance.
 

@@ -4,6 +4,8 @@
 - [Active sinusoidal intervention policy](SINUSOID_INTERVENTION_POLICY.md)
 - [Phase-35 smooth carrier protocol and conclusion](SMOOTH_CARRIER_PLAN.md)
 - [Phase-35 paired results](results/phase35_smooth_carrier_20k/PHASE35_RESULTS.md)
+- [Phase-36 direct amplitude/frequency results](results/phase36_direct_carrier_20k/PHASE36_RESULTS.md)
+- [Phase-37 direct-amplitude confirmation plan](DIRECT_AMPLITUDE_CONFIRMATION_PLAN.md)
 - [Next experiment roadmap](NEXT_EXPERIMENT_ROADMAP.md)
 - [Active research and repository consolidation plan](CONSOLIDATION_PLAN.md)
 - [Globally shared frequency experiment](SHARED_FREQUENCY_PLAN.md)

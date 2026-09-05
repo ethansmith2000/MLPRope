@@ -1,6 +1,6 @@
 # MLPRope next-experiment roadmap
 
-_Revised 2026-09-04. This roadmap implements the decision in
+_Revised 2026-09-05. This roadmap implements the decision in
 [`SINUSOID_INTERVENTION_POLICY.md`](SINUSOID_INTERVENTION_POLICY.md)._
 
 ## Stage 0 — preserve and simplify
@@ -183,9 +183,57 @@ Otherwise Phase 35 closes the current carrier-shape ladder. Protocol and result
 are in [`SMOOTH_CARRIER_PLAN.md`](SMOOTH_CARRIER_PLAN.md) and the
 [`Phase-35 report`](results/phase35_smooth_carrier_20k/PHASE35_RESULTS.md).
 
-## Explicitly deferred
+## Stage 7 — direct-coordinate screen (completed)
+
+Phase 36 tested whether the Phase-35 amplitude result or the Phase-34 frequency
+null was an artifact of exponential/log coordinates. The new parameters used
+no positivity or saturation transform:
+
+```text
+amplitude: a_i = g * (1 + (B c)_i)
+global frequency: omega_i' = omega_i + omega_i * tau/(L*omega_max) * u
+hybrid frequency: omega_i' = omega_i + min(omega_i, tau/L) * (B c)_i
+```
+
+All modes started at the live scalar carrier (`g=1`, zero deformation), used
+fixed RoPE, method-aware QKNorm, fp32 coordinates, no positional weight decay,
+and separately calibrated LR groups. Seven seed-123 arms ran for 20k steps.
+
+Direct amplitude passed at `-0.003661`, CI `[-0.004247,-0.003074]`. Global
+frequency was null. Hybrid frequency at LR1 reached `-0.000941`; LR4 reached
+`-0.002258` but broke `6.27%` of adjacent spectral ordering. Adding LR1 hybrid
+frequency to direct amplitude improved it by only `-0.000457`. Optimizer traces
+were finite and frequency gradients were never clipped, so frequency's result
+is a scientific null/subthreshold result rather than obvious optimizer failure.
+
+Disposition:
+
+- promote only direct rank-4 amplitude to longer confirmation;
+- keep the scalar carrier as its paired parent;
+- do not promote frequency or the amplitude+frequency combination as a distinct
+  mechanism;
+- retain factor-sign, spectrum, QKNorm-mixture, and optimizer diagnostics;
+- add seeds only after the longer run shows a material, non-collapsing gap.
+
+See the [Phase-36 report](results/phase36_direct_carrier_20k/PHASE36_RESULTS.md).
+
+## Stage 8 — long-horizon amplitude confirmation (queued)
+
+Phase 36 promotes one narrow comparison to 200k: scalar pre-Q/K versus
+exponential rank-4 amplitude versus direct rank-4 amplitude, all with fixed
+RoPE. The exponential arm makes the parameterization question paired rather
+than relying on the exploratory Phase-35/36 comparison. Frequency is excluded.
+
+The primary gate is direct amplitude versus scalar: at least `-0.002` nats on
+the disjoint final holdout, paired interval below zero, non-collapsing late
+trajectory, and healthy signed-factor/QKNorm/optimizer diagnostics. Only a pass
+earns additional seeds. The protocol and frozen matrix are in
+[`DIRECT_AMPLITUDE_CONFIRMATION_PLAN.md`](DIRECT_AMPLITUDE_CONFIRMATION_PLAN.md).
+
+## Explicitly deferred after Phase 36
 
 - any learned or content-dependent RoPE frequencies or frequency multipliers;
+- further carrier-frequency maps without a new structural hypothesis;
 - backward-only surrogate gradients for dynamic frequencies;
 - cumulative clocks or arbitrary tokenwise warps;
 - EMA/linear-RNN conditioning;
@@ -196,8 +244,6 @@ are in [`SMOOTH_CARRIER_PLAN.md`](SMOOTH_CARRIER_PLAN.md) and the
   hypothesis;
 - broad mapper or coupling sweeps.
 
-Also defer smooth/order-preserving carrier spectra. Learned RoPE+carrier arms
-are outside the active architectural boundary.
-
-These are recoverable from history if new evidence creates a specific reason to
-reopen them.
+Learned RoPE+carrier arms remain outside the active architectural boundary.
+These paths are recoverable from history if new evidence creates a specific
+reason to reopen them.
