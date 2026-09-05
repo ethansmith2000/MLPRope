@@ -56,7 +56,7 @@ def main() -> int:
         raise SystemExit("gpu-claim is required; see /workspace/GPU_QUEUEING.md")
     config_dir = CONFIG_ROOT / "calibration" if args.calibration else CONFIG_ROOT
     configs = sorted(config_dir.glob("arm-*.json"))
-    expected = 8 if args.calibration else 6
+    expected = 8 if args.calibration else 7
     if len(configs) != expected:
         raise SystemExit(
             f"Expected {expected} Phase-36 configs in {config_dir}, "

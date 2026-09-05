@@ -68,8 +68,15 @@ MAIN_ARMS = {
     "rope-fixed": {"qk_preprojection": {"enabled": False}},
     "qkpre-scalar": {"qk_preprojection": SCALAR},
     "qkpre-direct-amplitude-r4": {"qk_preprojection": DIRECT_AMPLITUDE},
-    "qkpre-global-frequency": {"qk_preprojection": GLOBAL_FREQUENCY},
+    "qkpre-global-frequency-lr4": {
+        "qk_preprojection": GLOBAL_FREQUENCY,
+        "frequency_lr_multiplier": 4.0,
+    },
     "qkpre-hybrid-frequency-r4": {"qk_preprojection": HYBRID_FREQUENCY},
+    "qkpre-hybrid-frequency-r4-lr4": {
+        "qk_preprojection": HYBRID_FREQUENCY,
+        "frequency_lr_multiplier": 4.0,
+    },
     "qkpre-direct-amplitude-hybrid-frequency-r4": {
         "qk_preprojection": DIRECT_AMPLITUDE_HYBRID_FREQUENCY
     },
@@ -198,6 +205,13 @@ def generate() -> list[Path]:
     calibration_dir = CONFIG_DIR / "calibration"
     calibration_dir.mkdir(parents=True, exist_ok=True)
     written = []
+
+    expected_main_paths = {
+        CONFIG_DIR / f"arm-{arm}.json" for arm in MAIN_ARMS
+    }
+    for stale_path in CONFIG_DIR.glob("arm-*.json"):
+        if stale_path not in expected_main_paths:
+            stale_path.unlink()
 
     for arm, arm_payload in MAIN_ARMS.items():
         run_name = f"phase36-{arm}-seed123-s20000-h768d8"
