@@ -66,8 +66,61 @@ claim to the architecture where the method works.
 
 ## Phase 39 — mechanism and generalization
 
-Run only after Phase 38 artifacts are checked. This stage should primarily
-evaluate trained models rather than retrain variants:
+Run only after Phase 38 artifacts are checked. Split this phase into one small
+architectural comparison and analyses of the trained checkpoints.
+
+### Phase 39A — carrier location and AddRoPE comparison
+
+The phrase "post-Q/K sinusoid" is ambiguous. If the post-projection carrier is
+`W_q z/W_k z`, it is algebraically identical to pre-Q/K injection. A distinct
+post-projection arm must use a native head-space carrier. The immediate screen
+should answer two questions without reopening amplitude/frequency search:
+
+1. is repeated attention-local access responsible for the gain, rather than
+   merely supplying the network with another sinusoidal input; and
+2. how does the promoted method compare with a native AddRoPE carrier, both as
+   a replacement for RoPE and in composition with it?
+
+Use h768/d8, seed 123, 30k steps, paired initialization and data order, and the
+same disjoint 1,024-example holdout. The proposed cells are:
+
+| Cell | Operation (normalization suppressed) | Scientific role |
+| --- | --- | --- |
+| fixed RoPE | `R_p W_q x_p` | common control |
+| input sinusoid + RoPE | add `beta z(p)` once at the residual-stream entrance | classic-input/location control |
+| pre-Q/K sinusoid + RoPE | `R_p W_q(x_p + alpha z(p))` | promoted method |
+| scalar AddRoPE + RoPE | `R_p(W_q x_p + beta e_q(p))` | low-capacity native head-space placement control |
+| static AddRoPE | `W_q x_p + e_q(p)` | strongest historical method family, replacing RoPE |
+| static AddRoPE + RoPE | `R_p(W_q x_p + e_q(p))` | tests whether the two geometries compose |
+
+The input arm should restore only a minimal one-shot residual carrier after
+`in_proj`, with a learned scalar initialized to 1.0; do not restore the former
+generic residual/per-layer machinery. The scalar post-projection control
+should likewise add only a tied fixed head-space Fourier carrier and one
+learned scalar per layer. For the two static AddRoPE cells, freeze one
+historically supported configuration before launch rather than tuning it
+inside the comparison.
+
+Raw amplitudes are not comparable across sites. Before launch, report the
+initial carrier/content RMS ratio and positional energy fraction at the actual
+mixture point. Use gate 1.0 where it reproduces the promoted method's roughly
+one-third initial positional energy; otherwise choose a predeclared
+RMS-matched scale. Keep the scale fixed across the paired AddRoPE cells.
+
+This is a breadth screen, not publication evidence. Promote only cells that
+beat their direct control materially and remain competitive in throughput. In
+particular, do not spend mature runs on both static AddRoPE orderings if the
+30k screen clearly resolves them.
+
+An addend applied *after* standard RoPE,
+`R_p W_q x_p + e_q(p)`, is a useful secondary ordering ablation only if
+AddRoPE+RoPE survives. It requires new runtime placement machinery and should
+not block the primary screen.
+
+### Phase 39B — mechanism analyses
+
+This stage should primarily evaluate trained models rather than retrain
+variants:
 
 1. **position-length profile:** loss by token position and contiguous context
    length, separating startup tokens from late-context behavior;
@@ -81,16 +134,60 @@ evaluate trained models rather than retrain variants:
    candidate, clearly labeled as a distribution-shift diagnostic rather than
    a matched training control.
 
+Add one carrier-logit attribution analysis. Ignoring Q/K normalization, the
+pre-Q/K attention logit contains content-content, content-position,
+position-content, and position-position terms. With method-aware RMSNorm this
+decomposition is not exactly linear, so report both pre-normalization term
+magnitudes and counterfactual full-attention changes. This can test whether the
+gain is associated with a pure positional prior, cross terms, attention sinks,
+or position-dependent entropy.
+
 The mechanism analysis should use identical examples and bootstrap at the
 example/document level. Token-level samples within a document are not
 independent and must not be treated as such.
 
-## Later evidence, not automatic
+## Paper-strength evidence, conditional on Phases 38--39
 
-- longer training closer to compute-optimal tokens per parameter;
-- context-length transfer above 1024 after allocating matching caches;
-- a second dataset or modality;
-- a direct mature AddRoPE-versus-pre-Q/K comparison under the same protocol.
+The paper claim should determine the breadth. For the narrow claim—an
+attention-local sinusoidal carrier improves a RoPE decoder—the minimum
+evidence package is:
 
-These are paper-strength extensions, but Phase 38 should determine whether the
-core result merits their cost.
+1. **mature replication:** three paired seeds at the main scale and horizon;
+2. **scale transfer:** at least one larger model under the frozen method;
+3. **architecture robustness:** QKNorm on/off, with normalization order stated;
+4. **method comparison:** RoPE, residual-input sinusoid+RoPE, standalone
+   AddRoPE, AddRoPE+RoPE if it survives, and pre-Q/K+RoPE under one protocol;
+5. **mechanism:** position-stratified loss, attention entropy/distance/sink
+   profiles, and carrier-logit attribution;
+6. **efficiency:** tokens/s, memory, parameter count, and equal-wall-clock as
+   well as equal-step comparisons where throughput differs.
+
+A broader positional-encoding paper should additionally include NoPE, learned
+absolute position, classic sinusoidal input, and at least one recognized
+relative-bias baseline such as ALiBi. Partial RoPE/p-RoPE and a dedicated
+Fourier-prior construction are more informative modern comparisons than a
+large collection of theta/rescaling variants. Every added baseline must be
+implemented under the same decoder, tokenizer, data order, token budget, and
+evaluation protocol.
+
+After the principal comparison is frozen, the highest-value transfer tests
+are:
+
+- a second text corpus, before claiming modality generality;
+- training at context 512 or 2048 plus evaluation across context lengths;
+- one learning-rate robustness pair, rather than a broad hyperparameter sweep;
+- longer training closer to a compute-appropriate token budget.
+
+Cross-modality experiments are optional and should be attempted only if the
+claim is deliberately expanded beyond autoregressive language modeling.
+
+## Explicitly deferred
+
+- further learned phase, amplitude-envelope, or frequency searches;
+- new Q/K coupling or mapper sweeps;
+- EMA, scan, recurrent, or content-dependent RoPE controllers;
+- a full after-RoPE carrier implementation unless the pre-RoPE hybrid survives;
+- three-seed replication of every Phase 39A cell.
+
+These do not presently answer a higher-value question than the fixed-method
+robustness, location, AddRoPE, and mechanism comparisons above.

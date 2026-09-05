@@ -67,6 +67,28 @@ q_p = W_q x_p + e_q(p)
 k_p = W_k x_p + e_k(p)
 ```
 
+This is a genuinely distinct intervention only when `e_q/e_k` are native
+head-space carriers, or are produced by parameters separate from `W_q/W_k`.
+If `e_q(p) = alpha W_q z(p)` and `e_k(p) = alpha W_k z(p)`, then linearity
+gives
+
+```text
+W_q(x_p + alpha z(p)) = W_q x_p + alpha W_q z(p),
+```
+
+so the apparent post-projection form is exactly the promoted pre-Q/K method,
+not a new comparison. A clean placement control therefore uses a fixed
+head-space sinusoid with only a scalar gate; the strongest historical AddRoPE
+is a broader method comparison because it also learns the carrier map and
+separate Q/K readouts.
+
+With `use_rope=false`, the native carrier is the historical AddRoPE
+replacement for RoPE. With `use_rope=true`, the active runtime adds the
+carrier to projected Q/K, applies method-aware Q/K normalization when selected,
+and then applies standard RoPE. This is an AddRoPE+RoPE hybrid, not the
+historical standalone method. Adding a carrier *after* the RoPE rotation would
+be a third ordering and is not currently an active option.
+
 The active generic channel supports the static additive carrier and retains
 the pointwise content-conditioned reference because it produced a replicated
 30k increment. EMA/scan conditioning and content-dependent RoPE frequency are
