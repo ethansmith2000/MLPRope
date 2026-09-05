@@ -3284,3 +3284,23 @@ unpromoted frequency variants. The primary long-horizon gate is a `0.002`-nat
 direct-over-scalar improvement with a below-zero paired interval, a
 non-collapsing late curve, and healthy carrier diagnostics. The frozen protocol
 is `DIRECT_AMPLITUDE_CONFIRMATION_PLAN.md`.
+
+## 2026-09-05 — Phase 37 completed
+
+All three Phase-37 arms completed 200k steps. The initial interactive launcher
+exited after step 70k; complete checkpoints were present for every arm, and a
+supervisor-managed launch restored model, optimizer, scheduler, sampler, and
+RNG state. Both launches recorded the same clean commit `781a8ae` and canonical
+dataset fingerprints.
+
+On the primary disjoint 1,024-example holdout, direct amplitude was `+0.000111`
+versus scalar, paired CI `[-0.001041,+0.001263]`. Exponential amplitude was
+`-0.000363`, CI `[-0.001559,+0.000833]`; direct versus exponential was
+`+0.000474`, CI `[-0.000589,+0.001537]`. None passed the `0.002` gate.
+
+The repeated 128-example development slice favored direct by `-0.002427` on
+average over 150k--200k, but its per-step uncertainty was large and the larger
+frozen holdout did not reproduce it. Direct factors reached `0.004--2.664` and
+exponential factors `0.290--4.368`; all optimization traces were finite and
+active. Smooth amplitude is therefore closed as a mature-model refinement,
+not dismissed for lack of optimization. No seed or scale expansion is queued.

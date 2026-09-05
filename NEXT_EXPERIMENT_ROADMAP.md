@@ -217,7 +217,7 @@ Disposition:
 
 See the [Phase-36 report](results/phase36_direct_carrier_20k/PHASE36_RESULTS.md).
 
-## Stage 8 — long-horizon amplitude confirmation (queued)
+## Stage 8 — long-horizon amplitude confirmation (completed)
 
 Phase 36 promotes one narrow comparison to 200k: scalar pre-Q/K versus
 exponential rank-4 amplitude versus direct rank-4 amplitude, all with fixed
@@ -229,6 +229,14 @@ the disjoint final holdout, paired interval below zero, non-collapsing late
 trajectory, and healthy signed-factor/QKNorm/optimizer diagnostics. Only a pass
 earns additional seeds. The protocol and frozen matrix are in
 [`DIRECT_AMPLITUDE_CONFIRMATION_PLAN.md`](DIRECT_AMPLITUDE_CONFIRMATION_PLAN.md).
+
+The final holdout closed the branch. Direct amplitude was `+0.000111` versus
+scalar, CI `[-0.001041,+0.001263]`; exponential amplitude was `-0.000363`, CI
+`[-0.001559,+0.000833]`. Direct versus exponential was also null. The late
+128-example development slice favored direct amplitude, but the larger disjoint
+primary holdout did not. No amplitude arm earns additional seeds or transfer
+experiments. Full results are in the
+[`Phase-37 report`](results/phase37_direct_amplitude_200k/PHASE37_RESULTS.md).
 
 ## Explicitly deferred after Phase 36
 

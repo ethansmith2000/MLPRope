@@ -6,6 +6,7 @@
 - [Phase-35 paired results](results/phase35_smooth_carrier_20k/PHASE35_RESULTS.md)
 - [Phase-36 direct amplitude/frequency results](results/phase36_direct_carrier_20k/PHASE36_RESULTS.md)
 - [Phase-37 direct-amplitude confirmation plan](DIRECT_AMPLITUDE_CONFIRMATION_PLAN.md)
+- [Phase-37 paired results](results/phase37_direct_amplitude_200k/PHASE37_RESULTS.md)
 - [Next experiment roadmap](NEXT_EXPERIMENT_ROADMAP.md)
 - [Active research and repository consolidation plan](CONSOLIDATION_PLAN.md)
 - [Globally shared frequency experiment](SHARED_FREQUENCY_PLAN.md)

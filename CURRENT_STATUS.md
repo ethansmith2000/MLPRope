@@ -35,7 +35,13 @@ improved the scalar carrier by `-0.003661`, paired-example 95% CI
 `[-0.004247,-0.003074]`, clearing the `0.003` screen threshold. A conservative
 rank-4 frequency deformation added only `-0.000457` beyond amplitude; global
 frequency was null, and the faster rank-4 frequency arm violated spectral
-ordering. Direct amplitude is the sole new candidate for longer confirmation.
+ordering.
+
+Phase 37 completed the required 200k confirmation. Direct amplitude was
+`+0.000111` versus scalar, CI `[-0.001041,+0.001263]`; exponential amplitude
+was `-0.000363`, CI `[-0.001559,+0.000833]`. Direct versus exponential was also
+null. The short-horizon amplitude result did not survive the mature primary
+holdout, so no carrier-shape refinement remains a promotion candidate.
 
 ## Strongest completed evidence
 
@@ -58,6 +64,8 @@ ordering. Direct amplitude is the sole new candidate for longer confirmation.
 | direct smooth amplitude vs scalar carrier, RoPE | 20k, 1 paired seed | `-0.003661`, gate pass |
 | direct amplitude + hybrid frequency vs direct amplitude | 20k, 1 paired seed | `-0.000457`, below gate |
 | global/hybrid direct frequency vs scalar carrier | 20k, 1 paired seed | null/subthreshold; fast hybrid broke ordering |
+| direct smooth amplitude vs scalar carrier | 200k, 1 paired seed | `+0.000111`, null |
+| exponential smooth amplitude vs scalar carrier | 200k, 1 paired seed | `-0.000363`, null |
 
 The EMA result is not being promoted. Its estimated equal-wall-clock advantage
 is only about `-0.0015`, and per-head/per-dimension decays did not improve over
@@ -103,7 +111,9 @@ shape variants with positive evidence.
 Phase 36 also added direct global and rank-4 hybrid carrier-frequency
 coordinates with bounded endpoint-phase Jacobians, independent LR multipliers,
 no weight decay, and a dedicated gradient group. They remain executable for
-reproducibility but did not earn scientific promotion.
+reproducibility but did not earn scientific promotion. Phase 37 likewise
+leaves both smooth-amplitude maps executable for reproduction, but neither is
+an active scientific finalist.
 
 ## Phase 34 conclusion
 
@@ -122,13 +132,12 @@ It is preserved as historical evidence, not retained as active machinery. See
 ## Next execution
 
 The default anchor remains the scalar pre-Q/K carrier with standard fixed RoPE.
-The one candidate that has earned confirmation is direct rank-4 amplitude.
-Phase 37 is a frozen 200k comparison of the scalar parent, historical
-exponential rank-4 amplitude, and direct rank-4 amplitude. The exponential arm
-turns the parameterization question into a same-source, same-schedule contrast.
-Additional seeds wait on the long-horizon result. Frequency, phase, and
-Q/K-untying variants remain shelved. See the
-[`Phase-37 plan`](DIRECT_AMPLITUDE_CONFIRMATION_PLAN.md).
+No GPU experiment is automatically next. Phase 37 closes the smooth carrier-
+shape branch, and the default remains the scalar pre-Q/K carrier with fixed
+RoPE. Frequency, amplitude shape, phase, and Q/K-untying refinements should be
+shelved. The appropriate next action is repository consolidation or a distinct
+hypothesis about the broader pre-Q/K/AddRoPE mechanisms. See the
+[`Phase-37 result`](results/phase37_direct_amplitude_200k/PHASE37_RESULTS.md).
 
 ## Repository state
 
@@ -164,6 +173,11 @@ Q/K-untying variants remain shelved. See the
   coordinates, explicit positional/frequency LR groups, and full QKNorm
   mixture diagnostics. The CPU suite passes 125 tests with one CUDA-only skip;
   all new mechanisms also passed eager and compiled bf16 GPU checks.
+- All three Phase-37 arms completed 200k steps from clean source commit
+  `781a8ae`. Each resumed once from its complete step-70k checkpoint with model,
+  optimizer, scheduler, sampler, and RNG state restored. The primary holdout,
+  full development trajectories, learned-factor/QKNorm diagnostics, and
+  optimizer traces are preserved in `results/` and `model-output/`.
 - `/workspace` is not a persistent Vast volume. Copy irreplaceable weights
   off-box before deleting them or destroying/recycling this instance.
 

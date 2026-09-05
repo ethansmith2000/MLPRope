@@ -108,11 +108,20 @@ clearing the loss gate. Frequency therefore remains unpromoted.
 The active pre-Q/K runtime therefore contains a shared scalar carrier and tied
 rank-4 exponential/direct smooth-amplitude extensions. Phase and Q/K-split
 implementations were removed after the Phase 35 provenance commit. This is an
-evidence-based
-implementation prune, not a claim that those taxonomy axes are impossible;
+evidence-based implementation prune, not a claim that those taxonomy axes are
+impossible;
 their protocols and results remain available if a genuinely new hypothesis
 warrants recovering them from history. The Phase-36 direct frequency modes are
 retained for exact reproduction of the completed screen, not as finalists.
+
+Phase 37 tested scalar, exponential rank-4 amplitude, and direct rank-4
+amplitude on one common 200k schedule. The disjoint 1,024-example endpoint was
+null for both shape maps: direct was `+0.000111` versus scalar, CI
+`[-0.001041,+0.001263]`, and exponential was `-0.000363`, CI
+`[-0.001559,+0.000833]`. Direct factors ranged from `0.004` to `2.664` and
+exponential factors from `0.290` to `4.368`, with finite active optimizer
+traces. The negative result therefore closes smooth amplitude as a promotion
+candidate despite real functional movement.
 
 ## Optimization-aware evaluation
 
@@ -166,7 +175,8 @@ Do not reopen a broad sweep immediately. New ideas should first satisfy:
 6. longer or repeated runs only for a materially favorable, non-collapsing
    candidate.
 
-The rank-4 direct-amplitude follow-up is the only current candidate for longer
-confirmation. Repeating frequency, phase, or Q/K-untying variants without a
-new structural hypothesis is not warranted by the healthy null/subthreshold
-optimization traces.
+No carrier-shape refinement is currently a candidate for longer confirmation.
+Repeating amplitude, frequency, phase, or Q/K-untying variants without a new
+structural hypothesis is not warranted by the healthy null/subthreshold
+optimization traces. The scalar pre-Q/K carrier with fixed RoPE remains the
+default within this mechanism family.

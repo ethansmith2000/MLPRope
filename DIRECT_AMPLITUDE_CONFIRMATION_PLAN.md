@@ -57,3 +57,15 @@ Direct amplitude earns seed replication only if, at 200k:
 Negative direct factors are permitted by the stated signed parameterization;
 they are reported rather than silently clipped. Extra seeds are not launched
 until this long-horizon gate is evaluated.
+
+## Result
+
+All three arms completed. Direct amplitude was `+0.000111` versus scalar on the
+primary holdout, paired-example 95% CI `[-0.001041,+0.001263]`. Exponential
+amplitude was `-0.000363`, CI `[-0.001559,+0.000833]`. Direct versus
+exponential was `+0.000474`, CI `[-0.000589,+0.001537]`. No contrast passed.
+
+The 128-example development slice favored direct amplitude late, but its paired
+uncertainty was large and the disjoint 1,024-example holdout did not reproduce
+the ranking. Both amplitude maps were active and finite. See the
+[Phase-37 report](results/phase37_direct_amplitude_200k/PHASE37_RESULTS.md).
