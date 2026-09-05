@@ -206,9 +206,10 @@ DEFAULT_CONFIG = {
     "qk_norm": True,
     "post_position_qk_norm": False,
     "exclude_position_from_decay": False,
-    # Explicit optimizer speeds for positional parameters. Frequency takes the
-    # frequency multiplier rather than multiplying both values together.
+    # Explicit optimizer speed for positional parameters.
     "position_lr_multiplier": 1.0,
+    # Compatibility-only key for archived Phase-34/36 resolved configs. It is
+    # validated and discarded during loading because learned frequency is gone.
     "frequency_lr_multiplier": 1.0,
     "qk_norm_mode": "legacy_layernorm",
     "position_content_dim": 64,
@@ -302,12 +303,6 @@ def position_run_tag(cfg: dict) -> str:
     if preprojection.get("enabled", False):
         mode = preprojection.get("mode", "tied_scalar").replace("_", "-")
         extras.append(f"qkpre-{mode}")
-        preprojection_frequency = preprojection.get("frequency", {})
-        if preprojection_frequency.get("mode", "fixed") != "fixed":
-            extras.append(
-                "qkpre-freq-"
-                + preprojection_frequency["mode"].replace("_", "-")
-            )
     tag = base if not extras else "+".join((base, *extras))
     if source == 2:
         canonical = {
@@ -553,25 +548,30 @@ def load_config(cli_args):
     if rope_frequency_mode != "fixed" or not isinstance(rope_frequency, dict):
         raise ValueError(
             "RoPE frequency interventions were removed; RoPE is standard or "
-            "disabled, and learned frequency belongs under qk_preprojection.frequency"
+            "disabled"
         )
     if rope_frequency.get("mode", "fixed") != "fixed":
         raise ValueError(
-            "RoPE frequency interventions were removed; use standard RoPE or "
-            "NoPE and apply learned changes to the sinusoidal carrier"
+            "RoPE frequency interventions were removed; use standard RoPE or NoPE"
         )
     if not isinstance(cfg["post_position_qk_norm"], bool):
         raise TypeError("post_position_qk_norm must be a boolean")
     if not isinstance(cfg["exclude_position_from_decay"], bool):
         raise TypeError("exclude_position_from_decay must be a boolean")
-    for key in ("position_lr_multiplier", "frequency_lr_multiplier"):
-        value = cfg[key]
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise TypeError(f"{key} must be a number")
-        value = float(value)
-        if not math.isfinite(value) or value <= 0:
-            raise ValueError(f"{key} must be finite and positive")
-        cfg[key] = value
+    value = cfg["position_lr_multiplier"]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("position_lr_multiplier must be a number")
+    value = float(value)
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError("position_lr_multiplier must be finite and positive")
+    cfg["position_lr_multiplier"] = value
+    legacy_frequency_lr = cfg.pop("frequency_lr_multiplier")
+    if isinstance(legacy_frequency_lr, bool) or not isinstance(
+        legacy_frequency_lr, (int, float)
+    ):
+        raise TypeError("frequency_lr_multiplier must be a number")
+    if not math.isfinite(float(legacy_frequency_lr)) or legacy_frequency_lr <= 0:
+        raise ValueError("frequency_lr_multiplier must be finite and positive")
     if cfg["qk_norm_mode"] not in {
         "legacy_layernorm",
         "method_aware_rms",
@@ -596,7 +596,6 @@ def load_config(cli_args):
         overrides.get("qk_preprojection", cfg["qk_preprojection"]),
         model_dim=model_dim,
         rope_theta=rope_theta,
-        frequency_reference_length=training_length,
     )
     for removed_key in ("rotary_clock", "position_gain"):
         removed_config = cfg.pop(removed_key)
@@ -947,7 +946,6 @@ POSITION_DECAY_EXEMPT = (
     "position_content",
     "carrier_hypernetwork",
     "qk_preprojection",
-    "qk_preprojection_frequency",
 )
 
 POSITION_PARAMETER_TAGS = POSITION_DECAY_EXEMPT
@@ -961,40 +959,18 @@ def make_optimizer(args, model):
     position_lr_multiplier = float(
         getattr(args, "position_lr_multiplier", 1.0)
     )
-    frequency_lr_multiplier = float(
-        getattr(args, "frequency_lr_multiplier", 1.0)
-    )
-    frequency_parameter_ids = {
-        id(parameter)
-        for module_name in ("qk_preprojection_frequency",)
-        if (module := getattr(model, module_name, None)) is not None
-        for parameter in module.parameters()
-    }
     grouped = {}
     for name, param in model.named_parameters():
         if not param.requires_grad:
             continue
-        is_frequency = id(param) in frequency_parameter_ids
-        is_position = is_frequency or any(
-            tag in name for tag in POSITION_PARAMETER_TAGS
-        )
-        exempt = is_frequency or any(
-            nd in name for nd in no_decay
-        ) or (
+        is_position = any(tag in name for tag in POSITION_PARAMETER_TAGS)
+        exempt = any(nd in name for nd in no_decay) or (
             exempt_position
             and is_position
         )
         wd = 0.0 if exempt else args.weight_decay
-        lr_multiplier = (
-            frequency_lr_multiplier
-            if is_frequency
-            else position_lr_multiplier
-            if is_position
-            else 1.0
-        )
-        group_name = (
-            "frequency" if is_frequency else "position" if is_position else "model"
-        )
+        lr_multiplier = position_lr_multiplier if is_position else 1.0
+        group_name = "position" if is_position else "model"
         grouped.setdefault((wd, lr_multiplier, group_name), []).append(param)
     param_groups = [
         {
@@ -1012,22 +988,6 @@ def make_optimizer(args, model):
         betas=(args.beta1, args.beta2),
         fused=torch.cuda.is_available(),
     )
-
-
-def carrier_frequency_gradient_clip_groups(
-    model,
-) -> list[tuple[list[torch.nn.Parameter], float]]:
-    """Return independent sinusoidal-carrier frequency clipping groups."""
-    groups = []
-    for module_name in ("qk_preprojection_frequency",):
-        module = getattr(model, module_name, None)
-        if module is None or module.max_grad_norm is None:
-            continue
-        parameters = [parameter for parameter in module.parameters() if parameter.requires_grad]
-        if parameters:
-            groups.append((parameters, float(module.max_grad_norm)))
-    return groups
-
 
 TOKENIZED_CACHE_MANIFEST = "mlprope_cache_manifest.json"
 TOKENIZED_CACHE_MANIFEST_CANDIDATES = (
@@ -1664,7 +1624,6 @@ def main():
             "post_position_qk_norm": args.post_position_qk_norm,
             "exclude_position_from_decay": args.exclude_position_from_decay,
             "position_lr_multiplier": args.position_lr_multiplier,
-            "frequency_lr_multiplier": args.frequency_lr_multiplier,
             "qk_norm_mode": args.qk_norm_mode,
             "position_content_dim": args.position_content_dim,
             "position_content_coupling": args.position_content_coupling,
@@ -1782,16 +1741,10 @@ def main():
     # Batches are shifted by one token before entering the model.
     model.prepare_flex_masks(args.training_length - 1, accelerator.device)
 
-    frequency_clip_groups = carrier_frequency_gradient_clip_groups(model)
-    frequency_clip_parameter_ids = {
-        id(parameter)
-        for parameters, _ in frequency_clip_groups
-        for parameter in parameters
-    }
     regular_clip_parameters = [
         parameter
         for parameter in model.parameters()
-        if parameter.requires_grad and id(parameter) not in frequency_clip_parameter_ids
+        if parameter.requires_grad
     ]
     optimizer = make_optimizer(args, model)
     intervention_monitor = InterventionOptimizationMonitor(
@@ -1926,8 +1879,6 @@ def main():
                             regular_clip_parameters,
                             args.max_grad_norm,
                         )
-                    for parameters, max_grad_norm in frequency_clip_groups:
-                        accelerator.clip_grad_norm_(parameters, max_grad_norm)
                     if optimization_sample is not None:
                         intervention_monitor.capture_after_clip(optimization_sample)
                 optimizer.step()

@@ -1,13 +1,12 @@
 """Optimization diagnostics for learned sinusoidal interventions.
 
-Parameter-gradient magnitude alone is not a functional step-size metric.  Adam
-rescales coordinates with running moments, while a parameterization Jacobian
-can amplify the resulting update in phase or carrier space.  This module logs
-all three levels without altering optimization:
+Parameter-gradient magnitude alone is not a functional step-size metric. Adam
+rescales coordinates with running moments, so this module logs three levels
+without altering optimization:
 
 1. raw and clipped parameter gradients;
 2. Adam momentum/second-moment state and the realized parameter update; and
-3. exact carrier-space movement for a learned pre-Q/K frequency bank.
+3. exact functional movement of a static sinusoidal carrier.
 """
 
 from __future__ import annotations
@@ -18,7 +17,6 @@ from dataclasses import dataclass, field
 import torch
 
 from position.channels import QKPositionChannel
-from position.frequency import SinusoidFrequencyBank
 from position.preprojection import QKPreprojectionPosition
 
 
@@ -26,7 +24,6 @@ from position.preprojection import QKPreprojectionPosition
 class InterventionParameterGroup:
     name: str
     parameters: list[torch.nn.Parameter]
-    frequency_bank: SinusoidFrequencyBank | None = None
     static_carrier_modules: list[torch.nn.Module] = field(default_factory=list)
 
 
@@ -35,7 +32,6 @@ class InterventionOptimizationSample:
     groups: list[InterventionParameterGroup]
     parameter_before: dict[int, torch.Tensor]
     raw_gradients: dict[int, torch.Tensor]
-    frequency_before: dict[str, torch.Tensor]
     static_carrier_before: dict[str, list[torch.Tensor]]
     metrics: dict[str, float | None]
 
@@ -45,7 +41,6 @@ def collect_intervention_parameter_groups(
 ) -> list[InterventionParameterGroup]:
     """Collect disjoint parameter groups for active sinusoidal interventions."""
     buckets: dict[str, list[torch.nn.Parameter]] = {
-        "pre_qk_sinusoid_frequency": [],
         "pre_qk_sinusoid_adapter": [],
         "additive_qk_sinusoid": [],
         "position_content_projection": [],
@@ -55,9 +50,7 @@ def collect_intervention_parameter_groups(
         if not parameter.requires_grad or id(parameter) in seen:
             continue
         group_name = None
-        if name.startswith("qk_preprojection_frequency."):
-            group_name = "pre_qk_sinusoid_frequency"
-        elif ".qk_preprojection." in name:
+        if ".qk_preprojection." in name:
             group_name = "pre_qk_sinusoid_adapter"
         elif ".qk_position." in name:
             group_name = "additive_qk_sinusoid"
@@ -67,7 +60,6 @@ def collect_intervention_parameter_groups(
             buckets[group_name].append(parameter)
             seen.add(id(parameter))
 
-    frequency_bank = getattr(model, "qk_preprojection_frequency", None)
     preprojection_modules = [
         module
         for module in model.modules()
@@ -83,9 +75,6 @@ def collect_intervention_parameter_groups(
         InterventionParameterGroup(
             name=name,
             parameters=parameters,
-            frequency_bank=(
-                frequency_bank if name == "pre_qk_sinusoid_frequency" else None
-            ),
             static_carrier_modules=(
                 preprojection_modules
                 if name == "pre_qk_sinusoid_adapter"
@@ -275,7 +264,6 @@ class InterventionOptimizationMonitor:
         }
         parameter_before = {}
         raw_gradients = {}
-        frequency_before = {}
         static_carrier_before = {}
         metrics: dict[str, float | None] = {}
         for group in self.groups:
@@ -301,16 +289,11 @@ class InterventionOptimizationMonitor:
                     InterventionParameterGroup(
                         group.name,
                         parameters,
-                        group.frequency_bank,
                     ),
                     gradients,
                     f"{prefix}/adam_before",
                 )
             )
-            if group.frequency_bank is not None:
-                frequency_before[group.name] = (
-                    group.frequency_bank.frequencies().detach().float().clone()
-                )
             if group.static_carrier_modules:
                 static_carrier_before[group.name] = _sample_static_carriers(
                     group.static_carrier_modules,
@@ -320,7 +303,6 @@ class InterventionOptimizationMonitor:
             groups=self.groups,
             parameter_before=parameter_before,
             raw_gradients=raw_gradients,
-            frequency_before=frequency_before,
             static_carrier_before=static_carrier_before,
             metrics=metrics,
         )
@@ -371,49 +353,11 @@ class InterventionOptimizationMonitor:
                     InterventionParameterGroup(
                         group.name,
                         parameters,
-                        group.frequency_bank,
                     ),
                     raw_gradients,
                     f"{prefix}/adam_after",
                 )
             )
-            if group.frequency_bank is not None:
-                before = sample.frequency_before[group.name]
-                after = group.frequency_bank.frequencies().detach().float()
-                phase_step = (after - before) * self.reference_length
-                _prefixed(
-                    sample.metrics,
-                    f"{prefix}/endpoint_phase_step",
-                    _vector_stats([phase_step]),
-                )
-                jacobian = (
-                    group.frequency_bank.endpoint_phase_coordinate_jacobian()
-                    .detach()
-                    .float()
-                )
-                _prefixed(
-                    sample.metrics,
-                    f"{prefix}/endpoint_phase_coordinate_jacobian",
-                    _vector_stats([jacobian]),
-                )
-                positions = torch.arange(
-                    self.reference_length,
-                    device=after.device,
-                    dtype=torch.float32,
-                )
-                angle_before = torch.outer(positions, before)
-                angle_after = torch.outer(positions, after)
-                carrier_before = torch.stack(
-                    (angle_before.cos(), angle_before.sin()), dim=-1
-                )
-                carrier_after = torch.stack(
-                    (angle_after.cos(), angle_after.sin()), dim=-1
-                )
-                _prefixed(
-                    sample.metrics,
-                    f"{prefix}/carrier_function_step",
-                    _vector_stats([carrier_after - carrier_before]),
-                )
             if group.static_carrier_modules:
                 before = sample.static_carrier_before[group.name]
                 after = _sample_static_carriers(

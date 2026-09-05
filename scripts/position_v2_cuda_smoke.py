@@ -79,14 +79,13 @@ def additive_qk(
     )
 
 
-def preprojection(mode: str, *, smooth_rank: int = 4) -> dict:
+def preprojection() -> dict:
     return {
         "enabled": True,
-        "mode": mode,
+        "mode": "tied_scalar",
         "basis_dim": 64,
         "gate_init": 1.0,
         "learnable_gate": True,
-        "smooth_rank": smooth_rank,
     }
 
 
@@ -112,58 +111,15 @@ CASES = {
         "qk_norm_mode": "method_aware_rms",
     },
     "preprojection_rope": {
-        "qk_preprojection_config": preprojection("tied_scalar"),
+        "qk_preprojection_config": preprojection(),
     },
     "preprojection_no_rope": {
         "use_rope": False,
-        "qk_preprojection_config": preprojection("tied_scalar"),
-    },
-    "preprojection_tied_smooth_amplitude_rope": {
-        "qk_preprojection_config": preprojection("tied_smooth_amplitude"),
-    },
-    "preprojection_tied_smooth_amplitude_no_rope": {
-        "use_rope": False,
-        "qk_preprojection_config": preprojection("tied_smooth_amplitude"),
-    },
-    "preprojection_direct_amplitude_rope": {
-        "qk_preprojection_config": preprojection(
-            "tied_smooth_direct_amplitude"
-        ),
-    },
-    "preprojection_global_direct_frequency_rope": {
-        "qk_preprojection_config": {
-            **preprojection("tied_scalar"),
-            "frequency": {
-                "mode": "learned_global_direct",
-                "reference_length": 64,
-            },
-        },
-    },
-    "preprojection_hybrid_direct_frequency_rope": {
-        "qk_preprojection_config": {
-            **preprojection("tied_scalar"),
-            "frequency": {
-                "mode": "learned_hybrid_direct",
-                "reference_length": 64,
-                "smooth_rank": 4,
-                "endpoint_phase_scale": 1.0,
-            },
-        },
-    },
-    "preprojection_direct_amplitude_hybrid_frequency_rope": {
-        "qk_preprojection_config": {
-            **preprojection("tied_smooth_direct_amplitude"),
-            "frequency": {
-                "mode": "learned_hybrid_direct",
-                "reference_length": 64,
-                "smooth_rank": 4,
-                "endpoint_phase_scale": 1.0,
-            },
-        },
+        "qk_preprojection_config": preprojection(),
     },
     "preprojection_addrope": {
         "qk_config": additive_qk(),
-        "qk_preprojection_config": preprojection("tied_scalar"),
+        "qk_preprojection_config": preprojection(),
         "qk_norm_mode": "method_aware_rms",
     },
 }

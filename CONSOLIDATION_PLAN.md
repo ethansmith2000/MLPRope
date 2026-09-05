@@ -1,231 +1,89 @@
-# MLPRope research and repository consolidation
+# MLPRope repository consolidation
 
-_Decision record, 2026-09-03; amended 2026-09-04 after Phases 33--35.
-Historical protocols, configs, and the experiment journal remain evidence, not
-current priorities. The current architecture is defined in
-[`SINUSOID_INTERVENTION_POLICY.md`](SINUSOID_INTERVENTION_POLICY.md)._
+_Decision record, 2026-09-05. Git history is the archive for superseded code
+and protocols; `results/` is the durable evidence layer._
 
-## Research focus
+## Scientific focus
 
-The active question is now deliberately narrow:
+The local design search is complete. The active question is now:
 
-> With standard RoPE or NoPE fixed as the backbone, can a small, coherent
-> transformation of an attention-local sinusoidal carrier improve on the tied
-> pre-Q/K anchor?
+> Does a tied scalar sinusoid injected before Q/K projection provide a robust,
+> transferable improvement when composed with standard fixed RoPE?
 
-The active mechanism families are:
+AddRoPE remains a second interesting mechanism. Frequency, phase, smooth
+spectral amplitude, separate Q/K preprojection transforms, dynamic RoPE,
+cumulative clocks, and EMA/scan controllers did not earn continued active
+runtime support.
 
-1. fixed standard RoPE or NoPE as an explicit backbone choice;
-2. additive Fourier Q/K position (AddRoPE), with amplitude 1.0 as the active
-   initialization;
-3. a sinusoidal signal injected only before the Q/K projections, optionally
-   followed by fixed RoPE; and
-4. tied carrier-only amplitude or globally coherent frequency coordinates.
+## Keep active
 
-Dynamic and learned RoPE frequency, tokenwise rotary phase, cumulative rotary
-clocks, and EMA controllers are closed as active directions. The Phase-34
-carrier frequency bank remains only as a compact research coordinate and
-optimization diagnostic; it did not earn promotion.
-
-## Historical preprojection ladder
-
-_Implemented 2026-09-03 and evaluated in Phases 33/35. The split, free-pair,
-and phase variants were removed from active execution after their null or
-subthreshold results; this section records the tested design._
-
-For Fourier pair `i`, let
-
-```text
-z_i(p) = [cos(omega_i p), sin(omega_i p)]
-A_i^q = a_i^q R(phi_i^q)
-A_i^k = a_i^k R(phi_i^k)
-
-q = W_q(x + A_q z(p))
-k = W_k(x + A_k z(p))
-```
-
-`A_q` and `A_k` act only on the positional carrier. `W_q` and `W_k` still read
-content and position jointly afterward; the proposal does not add an
-unrestricted independent positional projection.
-
-The exact current pre-Q/K anchor is `a_i^q=a_i^k=1` and
-`phi_i^q=phi_i^k=0`. Use nested variants:
-
-1. one gate tied across Q/K (the original anchor);
-2. separate scalar Q/K amplitudes;
-3. separate Q/K amplitudes per Fourier pair; and
-4. separate Q/K amplitude and phase per Fourier pair.
-
-Keep these parameters per layer. Do not add a per-head axis at this injection
-site: heads are defined only after the Q/K projections. A per-head carrier is a
-different, post-projection mechanism and should not be folded into this test.
-
-The implementation removes global/spectral scale redundancy with an
-orthonormal basis for the zero-sum subspace:
-
-```text
-a_i = g * exp(delta_i),  sum_i delta_i = 0.
-```
-
-Here `g` controls total carrier strength and `P-1` independent coordinates
-generate the centered `delta_i` values that redistribute strength across the
-spectrum. The initialization is `g=1`, `delta=0`, and `phi=0`.
-
-The active implementation is now only `tied_scalar` plus
-`tied_smooth_amplitude`. The latter uses a rank-4, zero-mean, unit-RMS DCT basis
-over log-frequency index and is retained because it materially helped the NoPE
-carrier in Phase 35. Both modes feed the same carrier to Q and K; their existing
-projection matrices provide separate learned reads.
-
-## Evidence motivating the focus
-
-- Phase 25: compact AddRoPE initialized at amplitude 1.0 beat fixed RoPE by
-  `-0.076867` mean held-out loss at 30k steps and beat amplitude 0.3 by
-  `-0.014895`, favorable in all three seeds.
-- Phase 28: pre-Q/K sinusoid plus RoPE beat fixed RoPE by `-0.065235` mean at
-  30k steps, favorable in all three seeds, with essentially equal throughput.
-- Phase 30: AddRoPE and the pre-Q/K carrier were strongly sub-additive at 15k;
-  their combination was `+0.004934` worse than AddRoPE alone. This is evidence
-  of overlap, not a mature-model conclusion.
-- Position-only Q/K gains explained a reproducible but smaller portion of the
-  benefit (`-0.024215` mean versus RoPE at 5k across three seeds).
-- Cumulative rotary clocks were null at 15k (`-0.00036` versus RoPE), with or
-  without EMA.
-- AddRoPE content EMA improved step-matched 15k loss by `-0.010626` over the
-  pointwise controller, but its estimated equal-wall-clock advantage was only
-  about `-0.0015`. Per-head and per-dimension EMA coefficients did not improve
-  meaningfully over one scalar decay.
-- Direct token-dependent RoPE frequency multipliers were unstable, and
-  bounded phase interventions were materially null. These are different from
-  static positional-carrier amplitude and phase.
-
-## Evidence limitation: the models are still below compute-optimal training
-
-At batch 8 and sequence length 1024, each step consumes 8,192 tokens. The
-h768/d8 baseline has approximately 153.4M parameters:
-
-| Steps | Training tokens | Tokens per parameter |
-| ---: | ---: | ---: |
-| 5k | 41.0M | 0.27 |
-| 15k | 122.9M | 0.80 |
-| 30k | 245.8M | 1.60 |
-| 100k | 819.2M | 5.34 |
-| 200k | 1.638B | 10.68 |
-
-The 200k runs are substantially more informative than the earlier 5k--30k
-screens, but 10.68 tokens per parameter is still below a conventional
-compute-optimal budget. One paired seed can establish a long-horizon mechanism
-ranking, not seed robustness; only a promoted candidate should receive repeats.
-
-## Phase 33 long-horizon result
-
-The six-arm, one-seed consolidation screen completed at 200k steps on the same
-box and cache. Paired per-example evaluation gave:
-
-| Contrast | Candidate minus reference loss | 95% paired CI |
-| --- | ---: | ---: |
-| tied carrier, no RoPE vs fixed RoPE | -0.032058 | [-0.033636, -0.030480] |
-| tied carrier + RoPE vs fixed RoPE | -0.062831 | [-0.064426, -0.061237] |
-| tied carrier + RoPE vs no-RoPE carrier | -0.030773 | [-0.032424, -0.029123] |
-| split Q/K scalar vs tied carrier | +0.000990 | [-0.000096, +0.002076] |
-| pair amplitude vs split scalar | -0.000116 | [-0.001212, +0.000979] |
-| pair amplitude + phase vs pair amplitude | +0.000165 | [-0.000847, +0.001178] |
-
-The carrier remains useful at long horizon, and fixed RoPE contributes another
-large, complementary gain. Separate Q/K amplitudes, per-pair amplitudes, and
-per-pair phase are all materially null. The active anchor is therefore the
-simple tied carrier plus fixed RoPE. See
-[`results/phase33_static_qkpre_200k/PHASE33_RESULTS.md`](results/phase33_static_qkpre_200k/PHASE33_RESULTS.md).
-
-## Phase 34 globally shared frequency follow-up
-
-All five arms completed at 200k. Learned carrier log frequency was `+0.000861`
-relative to the fixed carrier with a paired interval crossing zero;
-horizon-normalized frequency was `+0.001341` and its interval excluded zero in
-the harmful direction. The horizon coordinate successfully removed the raw
-position multiplier from its endpoint derivative, but that optimization
-improvement did not produce a modeling gain.
-
-The historical learned-RoPE calibration was `-0.001431` at the endpoint, below
-the promotion threshold, and its advantage was shrinking late. No Phase-34 arm
-earns replication. Learned RoPE is now outside the active runtime; the carrier
-results remain in
-[`results/phase34_shared_frequency_200k/PHASE34_RESULTS.md`](results/phase34_shared_frequency_200k/PHASE34_RESULTS.md).
-
-## Repository consolidation policy
-
-The repository should distinguish active implementation from historical
-evidence. Git history and durable result reports provide the archive; the
-runtime does not need to execute every historical configuration.
-
-### Keep active
-
-- fixed RoPE and NoPE controls;
+- standard fixed RoPE and NoPE;
 - frozen Fourier basis utilities;
-- static AddRoPE and its promoted mapped-carrier reference;
-- the tied pre-Q/K sinusoid and its smooth spectral-amplitude adapter;
-- the narrowly scoped carrier-only static frequency bank used by Phase 34;
-- optimizer-health traces at parameter-gradient, Adam-state, realized-update,
-  and functional-carrier levels;
-- fused SDPA training, evaluation, diagnostics, and paired initialization;
-- compact result reports and analysis JSON.
+- tied-scalar pre-Q/K injection;
+- static AddRoPE and its replicated pointwise content-conditioned reference;
+- method-aware and legacy Q/K normalization controls;
+- position-specific LR groups and optimizer/function-step diagnostics;
+- fused SDPA, paired initialization, disjoint evaluation, checkpointing, and
+  provenance.
 
-Retain the pointwise content-conditioned AddRoPE implementation initially as a
-frozen reference because it produced a real, replicated 30k increment. It is
-not part of the next sweep. Reconsider it only after the static consolidation.
+The AddRoPE framework remains generic for now because simplifying it risks the
+best historical mechanism and is orthogonal to the immediate evidence runs.
 
-### Remove from the active runtime after a provenance commit
+## Removed in this pass
 
-- old per-layer/per-head learned frequency tables and content-dependent
-  multiplicative RoPE frequencies;
-- the model-wide learned-RoPE bank used by the historical Phase-34 calibration;
-- rotary phase-residual special cases;
-- cumulative rotary clocks and their pointwise/convolution/EMA controllers;
-- EMA conditioning for AddRoPE;
-- residual-stream positional channels and attention-output write channels,
-  which were already retired experimentally;
-- position-only Q/K gain machinery after preserving its attribution result;
-- pre-Q/K split-Q/K, phase, and fully free per-pair adapters after preserving
-  the Phase 33/35 results;
-- launch, preparation, and smoke code used only by those removed mechanisms.
+- the shared learned carrier-frequency module and all frequency-specific
+  clipping, optimizer groups, diagnostics, and basis overrides;
+- exponential and direct smooth pre-Q/K amplitude modes;
+- phase, split-Q/K, and free-pair pre-Q/K modes already retired earlier;
+- phase-35/36/37 launch and preparation scripts used only by closed modes;
+- their cases in the active CUDA smoke test;
+- superseded root-level design briefs and protocols whose results are already
+  summarized in phase reports and the experiment journal.
 
-For removed top-level config blocks, prefer a small compatibility validator
-that accepts only the historical disabled/fixed form and raises a clear error
-for an enabled removed mechanism. Do not retain dormant model machinery merely
-to execute old sweep JSONs.
+The active pre-Q/K implementation now contains one learnable scalar per layer.
+Compatibility validators recognize historical disabled blocks and raise an
+explicit error for enabled removed modes. Historical configs remain under
+`sweep_configs/`; historical implementations remain recoverable by commit.
 
-### Consider in a second simplification pass
+## Evidence retained
 
-- extract the surviving AddRoPE implementation from the generic
-  `position/channels.py` framework;
-- retain only AddRoPE geometries and mapper forms supported by durable results;
-- remove v1 upgrade paths and historical presets from the active loader;
-- move superseded protocols out of the repository root or rely on git history;
-- reduce top-level phase-specific prepare/launch/analyze scripts after their
-  compact result reports are verified.
+The key closed-branch results remain in:
 
-This second pass should follow, not precede, the first long-horizon config
-freeze. It is higher risk because the generic AddRoPE code also contains the
-best historical mechanisms.
+- `results/phase33_static_qkpre_200k/`;
+- `results/phase34_shared_frequency_200k/`;
+- `results/phase35_smooth_carrier_20k/`;
+- `results/phase36_direct_carrier_20k/`;
+- `results/phase37_direct_amplitude_200k/`.
+
+Each contains a narrative report and machine-readable analysis. The complete
+chronology and design rationale remain in `EXPERIMENT_JOURNAL.md`.
 
 ## Storage cleanup
 
-_Completed 2026-09-03: all 50 intermediate `step_*` directories were removed
-after the checks below, freeing 92.8GB (87GiB). All 18 final model weights and
-compact evidence artifacts remain._
+Two verified cleanup passes have been performed:
 
-Before cleanup, the checkout was about 97GB. Approximately 87GiB was in 50
-intermediate checkpoint directories; 18 final model files used another
-10.37GB, while configs, metrics, position profiles, summaries, and per-example
-evidence used only a few megabytes.
+1. 2026-09-03: 50 intermediate checkpoints removed, reclaiming 87 GiB;
+2. 2026-09-05: 14 redundant completed step-200k resume states plus one smoke
+   checkpoint removed, reclaiming about 24 GiB.
 
-This workspace is not a persistent Vast volume. Before deleting model states:
+Before the second pass, every research checkpoint's parent had a completion
+marker, final standalone weights, training summary, metrics, provenance, and
+21 context-1024 evaluation files. Only optimizer/scheduler/sampler/RNG resume
+state at already-completed endpoints was deleted. Final weights and compact
+evidence remain.
 
-1. commit the Phase 29-32 code/config/result state;
-2. verify every retained run has `COMPLETED`, a final evaluation, resolved
-   config, metrics, summary, and compact result report;
-3. copy any irreplaceable final weights off-box; then
-4. delete intermediate checkpoints first. Final weights are a separate
-   retention decision.
+`/workspace` is not a persistent Vast volume. Final weights are a separate
+retention decision and should be copied off-box before recycling the instance.
 
-No model artifacts should be deleted merely as a side effect of code cleanup.
+## Next cleanup boundary
+
+Do not simplify `position/channels.py` until the next AddRoPE evidence decision.
+After the new pre-Q/K robustness experiments, reassess:
+
+- whether the pointwise content-conditioned AddRoPE reference still merits
+  active support;
+- whether historical v1 config upgrades and presets can be retired;
+- whether completed phase-specific analyzers are better kept in-tree or
+  recoverable only from git.
+
+No model artifact should be deleted as a side effect of code cleanup.

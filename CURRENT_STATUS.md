@@ -1,185 +1,134 @@
 # MLPRope current status
 
-_Authoritative as of 2026-09-05. The active architectural contract is
-[`SINUSOID_INTERVENTION_POLICY.md`](SINUSOID_INTERVENTION_POLICY.md). Older
-protocols and roadmap sections are historical records._
+_Authoritative as of 2026-09-05. Older mechanisms and protocols are preserved
+in git history; compact experimental evidence remains under `results/`._
 
 ## Bottom line
 
-Two attention-local sinusoidal mechanisms have earned longer evaluation:
+Two attention-local sinusoidal mechanisms remain scientifically interesting:
 
-1. **AddRoPE**: a learned additive Fourier carrier on projected Q/K;
-2. **pre-Q/K sinusoidal injection**: add a sinusoid only to the inputs of the Q
-   and K projections, usually followed by fixed RoPE.
+1. **AddRoPE:** an additive Fourier carrier on projected Q/K;
+2. **pre-Q/K sinusoid:** add one tied, gated sinusoid to the inputs of the Q
+   and K projections, then apply standard RoPE.
 
-The 200k static-adapter and shared-frequency experiments are complete. The tied
-pre-Q/K carrier plus fixed RoPE remains strongly favorable. Separate Q/K
-amplitude, pairwise amplitude, pairwise phase, and learned carrier frequency
-did not improve it. Dynamic RoPE, learned RoPE, cumulative clocks, and EMA are
-closed in the active runtime.
+The clearest current result is the second method. At h768/d8 and 200k steps,
+pre-Q/K + RoPE beat its paired fixed-RoPE baseline by `-0.062831` validation
+loss. The carrier alone also helped, but standard RoPE contributed another
+`-0.030773`, so the method is complementary to rather than a replacement for
+RoPE.
 
-The repository now treats the backbone and carrier as orthogonal axes: every
-intervention uses either immutable standard RoPE or NoPE, while learned
-amplitude, phase, or frequency acts only on the sinusoidal carrier. AddRoPE no
-longer implicitly replaces RoPE.
-
-Phase 35 found that rank-4 smooth spectral amplitude helped the carrier
-materially under NoPE (`-0.010644`) but remained `0.037168` worse than its
-matched RoPE model. Under RoPE the amplitude gain was a smaller `-0.002604`,
-below the predeclared practical gate. Learned phase and separate Q/K transforms
-did not earn promotion.
-
-Phase 36 revisited amplitude and carrier frequency with direct, nonsaturating,
-endpoint-conditioned coordinates under RoPE. Direct signed rank-4 amplitude
-improved the scalar carrier by `-0.003661`, paired-example 95% CI
-`[-0.004247,-0.003074]`, clearing the `0.003` screen threshold. A conservative
-rank-4 frequency deformation added only `-0.000457` beyond amplitude; global
-frequency was null, and the faster rank-4 frequency arm violated spectral
-ordering.
-
-Phase 37 completed the required 200k confirmation. Direct amplitude was
-`+0.000111` versus scalar, CI `[-0.001041,+0.001263]`; exponential amplitude
-was `-0.000363`, CI `[-0.001559,+0.000833]`. Direct versus exponential was also
-null. The short-horizon amplitude result did not survive the mature primary
-holdout, so no carrier-shape refinement remains a promotion candidate.
+The carrier should remain simple. Separate Q/K gains, per-pair amplitude,
+phase, smooth spectral amplitude, and globally shared learned frequencies did
+not improve the scalar anchor at mature horizon. Content-dependent RoPE,
+cumulative clocks, and EMA/linear-RNN controllers are also closed.
 
 ## Strongest completed evidence
 
 | Result | Protocol | Finding |
 | --- | --- | ---: |
-| AddRoPE amplitude 1.0 vs fixed RoPE | 30k, 3 paired seeds | `-0.076867` mean loss |
-| AddRoPE amplitude 1.0 vs 0.3 | 30k, 3 paired seeds | `-0.014895` mean loss |
-| pre-Q/K sinusoid + RoPE vs RoPE | 30k, 3 paired seeds | `-0.065235` mean loss |
-| position Q/K gain vs RoPE | 5k, 3 paired seeds | `-0.024215` mean loss |
-| pointwise AddRoPE content vs position only | 30k, 3 paired seeds | `-0.010812` mean loss |
-| rotary clock vs RoPE | 15k, 1 paired seed | `-0.000360`, unresolved |
-| AddRoPE scalar EMA vs pointwise | 15k, 1 paired seed | `-0.010626` step-matched |
-| tied pre-Q/K + RoPE vs fixed RoPE | 200k, 1 paired seed | `-0.062831` |
-| tied pre-Q/K + RoPE vs no RoPE | 200k, 1 paired seed | `-0.030773` |
+| AddRoPE amplitude 1.0 vs fixed RoPE | 30k, 3 paired seeds | `-0.076867` mean |
+| AddRoPE amplitude 1.0 vs 0.3 | 30k, 3 paired seeds | `-0.014895` mean |
+| pre-Q/K + RoPE vs fixed RoPE | 30k, 3 paired seeds | `-0.065235` mean |
+| pre-Q/K + RoPE vs fixed RoPE | 200k, 1 paired seed | `-0.062831` |
+| pre-Q/K + RoPE vs pre-Q/K + NoPE | 200k, 1 paired seed | `-0.030773` |
 | split/pair amplitude/pair phase ladder | 200k, 1 paired seed | all within about `0.001` |
-| shared log-frequency carrier vs fixed carrier | 200k, 1 paired seed | `+0.000861`, null |
-| horizon-frequency carrier vs fixed carrier | 200k, 1 paired seed | `+0.001341`, slightly worse |
-| smooth amplitude vs scalar carrier, NoPE | 20k, 1 paired seed | `-0.010644`, gate pass |
-| smooth amplitude vs scalar carrier, RoPE | 20k, 1 paired seed | `-0.002604`, below gate |
-| direct smooth amplitude vs scalar carrier, RoPE | 20k, 1 paired seed | `-0.003661`, gate pass |
-| direct amplitude + hybrid frequency vs direct amplitude | 20k, 1 paired seed | `-0.000457`, below gate |
-| global/hybrid direct frequency vs scalar carrier | 20k, 1 paired seed | null/subthreshold; fast hybrid broke ordering |
-| direct smooth amplitude vs scalar carrier | 200k, 1 paired seed | `+0.000111`, null |
-| exponential smooth amplitude vs scalar carrier | 200k, 1 paired seed | `-0.000363`, null |
+| shared log-frequency carrier vs fixed | 200k, 1 paired seed | `+0.000861`, null |
+| horizon-frequency carrier vs fixed | 200k, 1 paired seed | `+0.001341`, worse |
+| direct smooth amplitude vs scalar | 200k, 1 paired seed | `+0.000111`, null |
+| exponential smooth amplitude vs scalar | 200k, 1 paired seed | `-0.000363`, null |
+| pointwise content AddRoPE vs position-only | 30k, 3 paired seeds | `-0.010812` mean |
+| AddRoPE scalar EMA vs pointwise | 15k, 1 paired seed | `-0.010626` step-matched; about `-0.0015` iso-wall-clock |
 
-The EMA result is not being promoted. Its estimated equal-wall-clock advantage
-is only about `-0.0015`, and per-head/per-dimension decays did not improve over
-one scalar decay. The EMA scan also adds code and runtime complexity.
+At 15k, AddRoPE and pre-Q/K were strongly sub-additive: their combination was
+`+0.004934` worse than AddRoPE alone. This is evidence of overlapping function,
+but the comparison is too early to support a mature exclusivity claim.
 
-At 15k, AddRoPE and the pre-Q/K carrier were strongly sub-additive: combining
-them was `+0.004934` worse than AddRoPE alone. Treat this as evidence that they
-overlap, not as a mature-model conclusion.
+## Baseline architecture
 
-## Critical limitation
+The main h768/d8 model has approximately 153.4M parameters and uses:
 
-The h768/d8 baseline contains approximately 153.4M parameters and trains on
-8,192 tokens per step. Thus 5k, 15k, and 30k runs see only 41M, 123M, and 246M
-tokens: approximately 0.27, 0.80, and 1.60 tokens per parameter. These runs
-mostly measure early optimization.
+- decoder-only causal self-attention with fused PyTorch SDPA;
+- eight 96-dimensional heads;
+- pre-norm residual blocks with LayerNorm;
+- separate bias-free Q/K/V projections and a biased output projection;
+- GeGLU feed-forwards at four times model width;
+- per-head Q/K normalization;
+- standard fixed split-half RoPE at context 1024;
+- tied paired initialization and fixed data order for comparisons;
+- AdamW with linear scheduling and bf16 autocast.
 
-The three-seed 30k effects are reproducible early-training results, not
-mature-model rankings. Phase 33 extended the pre-Q/K comparison to 200k
-(1.638B tokens, 10.68 tokens per parameter) and established that fixed RoPE
-remains materially useful on top of the carrier for seed 123. That is strong
-long-horizon evidence for the mechanism comparison, but it is not yet a
-multi-seed or compute-optimal scaling result.
+The promoted carrier uses method-aware Q/K RMSNorm: content and position are
+combined before `W_q/W_k`, then each projected head is normalized once. This
+controls the projected mixture, but it creates an important evidence gap:
+robustness to disabling QKNorm has not yet been established.
 
-## Active pre-Q/K adapter
+## Why the closed refinements are genuinely closed
 
-The runtime exposes `tied_scalar`, the historical exponential
-`tied_smooth_amplitude`, and the Phase-36
-`tied_smooth_direct_amplitude`. All add one shared sinusoidal carrier before
-the Q and K projections; `W_q` and `W_k` still learn separate reads. The direct
-mode uses `a_i = g(1 + (Bc)_i)` with rank-4, zero-mean, unit-RMS DCT coordinates.
-It starts exactly at the scalar carrier, is nonsaturating, permits signed
-factors, and leaves the global strength identifiable through `g`. At 20k its
-factors remained positive but spanned `0.057--1.698`, so longer runs must retain
-the signed-factor diagnostics.
+Phase 37 directly paired scalar, exponential smooth amplitude, and signed
+direct smooth amplitude for 200k steps. The primary disjoint 1,024-example
+holdout was null, even though both shape maps moved substantially and had
+finite gradients, Adam states, updates, and carrier-function movement. This
+rules out an obvious inactive-path explanation for their failure.
 
-The Phase 33 split-scalar/free-pair ladder and Phase 35 phase/QK-split modes are
-preserved in configs and result reports but removed from active execution.
-Enabled historical modes fail with a direct migration message; disabled
-archival blocks canonicalize to `tied_scalar`. This removes separate Q/K gates,
-phase tensors, and full per-pair tables from the model while retaining the only
-shape variants with positive evidence.
+Phase 34 similarly showed that horizon-normalized frequency coordinates remove
+the dangerous raw `p` multiplier from the endpoint derivative, but still do
+not improve modeling loss. Faster direct frequency coordinates eventually
+violated spectral ordering. The negative frequency result is therefore not
+well explained by the one optimization pathology we originally identified.
 
-Phase 36 also added direct global and rank-4 hybrid carrier-frequency
-coordinates with bounded endpoint-phase Jacobians, independent LR multipliers,
-no weight decay, and a dedicated gradient group. They remain executable for
-reproducibility but did not earn scientific promotion. Phase 37 likewise
-leaves both smooth-amplitude maps executable for reproduction, but neither is
-an active scientific finalist.
+## Evidence limitation
 
-## Phase 34 conclusion
+With batch 8 and sequence length 1024, each step consumes 8,192 tokens. The
+h768/d8 model sees:
 
-All five historical Phase-34 arms reached 200k. The fixed carrier finished at
-`3.324979`; learned-log finished at `3.325839`, and horizon-normalized finished
-at `3.326320`. The normalized form successfully kept the endpoint phase
-Jacobian at one, demonstrating that it fixes the absolute-position
-conditioning problem, but it did not improve modeling loss. No carrier
-frequency arm clears the replication gate.
+| Steps | Tokens | Tokens / parameter |
+| ---: | ---: | ---: |
+| 30k | 245.8M | 1.60 |
+| 100k | 819.2M | 5.34 |
+| 200k | 1.638B | 10.68 |
 
-The learned-RoPE calibration arm finished `-0.001431` below fixed RoPE, but
-failed the `0.002` promotion threshold and its late advantage was shrinking.
-It is preserved as historical evidence, not retained as active machinery. See
-[`results/phase34_shared_frequency_200k/PHASE34_RESULTS.md`](results/phase34_shared_frequency_200k/PHASE34_RESULTS.md).
+The three-seed result is reproducible but short; the mature result is only one
+seed and is still below a conventional compute-optimal token budget. There is
+also no architecture, scale, modality, or longer-context transfer result yet.
+Those are now more valuable than another carrier-shape sweep.
 
-## Next execution
+## Active implementation
 
-The default anchor remains the scalar pre-Q/K carrier with standard fixed RoPE.
-No GPU experiment is automatically next. Phase 37 closes the smooth carrier-
-shape branch, and the default remains the scalar pre-Q/K carrier with fixed
-RoPE. Frequency, amplitude shape, phase, and Q/K-untying refinements should be
-shelved. The appropriate next action is repository consolidation or a distinct
-hypothesis about the broader pre-Q/K/AddRoPE mechanisms. See the
-[`Phase-37 result`](results/phase37_direct_amplitude_200k/PHASE37_RESULTS.md).
+The runtime keeps:
 
-## Repository state
+- standard fixed RoPE and NoPE;
+- the tied-scalar pre-Q/K carrier, initialized at gate 1.0;
+- static AddRoPE and the pointwise content-conditioned AddRoPE reference;
+- generic positional LR control and optimizer/function-step diagnostics;
+- paired evaluation, provenance, resumable checkpoints, and fused SDPA.
 
-- Phase 29-32 code, configs, compact results, and analyses are preserved in
-  provenance commit `c8362c3`.
-- The active runtime is consolidated around fixed RoPE or NoPE, AddRoPE,
-  frozen Fourier bases, and the pre-Q/K carrier. Learned frequency remains
-  available only inside the carrier as a diagnostic/research coordinate;
-  model-wide learned-RoPE machinery is removed.
-- The old content-conditioned `adaptive_gain` escape hatch is removed because
-  it scaled complete Q/K tensors rather than the sinusoidal carrier.
-- Sparse intervention diagnostics distinguish raw/clipped gradients, Adam
-  moment behavior, actual parameter updates, and functional carrier movement.
-- The consolidated CPU suite passes 121 tests with one explicitly CUDA-gated
-  skip. A 12-step compiled-bf16 optimizer-monitor smoke passed on an RTX 5090;
-  all five scheduled traces were finite. All ten retained carrier/backbone
-  cases also pass eager and compiled bf16 forward/backward. Compact evidence is in
-  `results/carrier_optimization_monitor_smoke/`.
-- Phase 33 operational preflights passed on all six h768/d8 arms at
-  185.6k-190.8k tokens/s and 5.08-5.36 GiB reserved memory. The real
-  Accelerate checkpoint save/prune/resume integration also passed.
-- All eight Phase-35 20k arms completed from clean source commit `cee3214`.
-  Throughput was 178.9k--184.5k target tokens/s and peak reserved memory was
-  5.22--5.36 GiB. Paired final losses, every development point, compact DCT
-  profiles, and optimizer-health summaries are preserved in `results/`.
-- The 50 intermediate `step_*` checkpoints were removed after validating all
-  18 parent runs. This freed 92.8GB (87GiB). The 18 final weights, completion
-  markers, configs, metrics, summaries, final evaluation details, position
-  profiles, and compact phase reports remain.
-- All seven Phase-36 20k arms completed from clean source commit `d7991d9`.
-  Throughput was 179.5k--184.5k target tokens/s and peak memory was
-  5.08--5.22 GiB. The runs used direct nonsaturating amplitude/frequency
-  coordinates, explicit positional/frequency LR groups, and full QKNorm
-  mixture diagnostics. The CPU suite passes 125 tests with one CUDA-only skip;
-  all new mechanisms also passed eager and compiled bf16 GPU checks.
-- All three Phase-37 arms completed 200k steps from clean source commit
-  `781a8ae`. Each resumed once from its complete step-70k checkpoint with model,
-  optimizer, scheduler, sampler, and RNG state restored. The primary holdout,
-  full development trajectories, learned-factor/QKNorm diagnostics, and
-  optimizer traces are preserved in `results/` and `model-output/`.
-- `/workspace` is not a persistent Vast volume. Copy irreplaceable weights
-  off-box before deleting them or destroying/recycling this instance.
+It no longer implements learned carrier frequency, pre-Q/K smooth amplitude,
+separate Q/K preprojection transforms, dynamic RoPE, clocks, EMA, residual
+position writes, or attention-output writes. Enabled archived configurations
+fail explicitly; disabled archived blocks canonicalize to an inert active form.
 
-See [`CONSOLIDATION_PLAN.md`](CONSOLIDATION_PLAN.md) for the keep/remove map and
-[`NEXT_EXPERIMENT_ROADMAP.md`](NEXT_EXPERIMENT_ROADMAP.md) for execution order.
+## Next evidence program
+
+The next experiments should test the method, not search its local shape space:
+
+1. **mature replication:** additional paired 200k seeds for fixed RoPE versus
+   scalar pre-Q/K + RoPE;
+2. **architecture robustness:** a paired QKNorm/normalization ablation;
+3. **scale transfer:** the same fixed two-arm comparison at another model size;
+4. **mechanism:** length-stratified loss plus attention entropy, attended
+   distance, and position-correlation diagnostics from trained checkpoints.
+
+The first three should use identical data order within each pair and disjoint
+1,024-example final holdouts. No refinement arm is admitted unless a distinct,
+predeclared hypothesis emerges.
+
+## Repository and storage state
+
+- Compact phase reports and analysis JSON remain in `results/`; complete
+  historical configs remain in `sweep_configs/`.
+- Historical source and deleted protocols remain recoverable from git.
+- On 2026-09-05, 14 redundant completed endpoint checkpoints plus one smoke
+  checkpoint were deleted after verification, reclaiming about 24 GiB. Final
+  model weights, evaluations, metrics, configs, and provenance remain.
+- `/workspace` is not a persistent Vast volume. Irreplaceable weights must be
+  copied off-box before instance recycle or destruction.

@@ -41,21 +41,6 @@ def interleaved_fourier_basis(
     return torch.stack((angles.cos(), angles.sin()), dim=-1).flatten(-2)
 
 
-def interleaved_fourier_from_frequencies(
-    length: int,
-    frequencies: torch.Tensor,
-) -> torch.Tensor:
-    """Return interleaved Fourier features from an explicit frequency bank."""
-    if length <= 0:
-        raise ValueError("length must be positive.")
-    if frequencies.ndim != 1 or frequencies.numel() == 0:
-        raise ValueError("frequencies must be a non-empty vector")
-    frequency = frequencies.float()
-    positions = torch.arange(length, device=frequency.device, dtype=torch.float32)
-    angles = torch.outer(positions, frequency)
-    return torch.stack((angles.cos(), angles.sin()), dim=-1).flatten(-2)
-
-
 class FrozenFourierBasis(PreserveFP32BuffersMixin, torch.nn.Module):
     """Cached interleaved Fourier features for absolute or relative indices."""
 

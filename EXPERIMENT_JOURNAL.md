@@ -3304,3 +3304,39 @@ frozen holdout did not reproduce it. Direct factors reached `0.004--2.664` and
 exponential factors `0.290--4.368`; all optimization traces were finite and
 active. Smooth amplitude is therefore closed as a mature-model refinement,
 not dismissed for lack of optimization. No seed or scale expansion is queued.
+
+## 2026-09-05 — Scalar-carrier consolidation and Phase 38 freeze
+
+The closed carrier-shape branch was removed from the active runtime. Learned
+carrier frequency, exponential/direct smooth pre-Q/K amplitude, their
+frequency-specific optimizer/clipping/diagnostic machinery, and phase-35--37
+launch/preparation scripts were deleted. The pre-Q/K implementation now has
+only one active mode: a per-layer scalar gate multiplying a fixed, tied
+full-width Fourier carrier. Disabled historical configs canonicalize to this
+form; enabled removed modes fail explicitly. Static AddRoPE and its replicated
+pointwise content-conditioned reference remain active.
+
+Superseded root protocols and design briefs were removed after verifying that
+their decisions and numerical conclusions are present in this journal,
+`CURRENT_STATUS.md`, and compact phase reports. Git remains the source archive.
+The CPU suite passes 108 tests with one expected CUDA-only skip, and all eight
+remaining carrier/backbone smoke cases pass eager and compiled bf16.
+
+Storage was audited independently. Fourteen completed step-200k checkpoints
+all had completion markers, standalone final weights, summaries, metrics,
+provenance, and 21 context-1024 evaluations. Those resume states plus one
+checkpoint smoke artifact were deleted, reclaiming about 24 GiB; final weights
+and evidence remain.
+
+Phase 38 is a fixed-method evidence program rather than another design sweep.
+It contains four paired fixed-RoPE versus scalar-pre-Q/K comparisons: h768/d8
+seeds 456 and 789 at 200k, h768/d8 without QKNorm at seed 123 and 200k, and an
+h1024/d12 scale-up at seed 123 and 200k. The two added h768 seeds join the
+existing Phase-33 seed-123 result for mature three-seed evidence. Predeclared
+gates and the complete matrix are in `NEXT_EXPERIMENT_ROADMAP.md`.
+
+All four unique full-size operational preflights completed 20 compiled bf16
+steps through `gpu-claim`. Peak reserved memory was 4.89--5.02 GiB for the
+no-QKNorm h768 pair and 9.34--9.59 GiB for the h1024 pair. The 20-step design
+intentionally consumed the complete throughput warmup window, so it validates
+execution and memory rather than providing a throughput estimate.

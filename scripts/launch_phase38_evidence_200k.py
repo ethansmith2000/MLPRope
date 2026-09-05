@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Queue every incomplete Phase 33 long run through the shared GPU claimer."""
+"""Queue every incomplete Phase-38 run through the shared GPU claimer."""
 
 from __future__ import annotations
 
@@ -13,11 +13,11 @@ from pathlib import Path
 
 
 REPO_DIR = Path(__file__).resolve().parents[1]
-CONFIG_DIR = REPO_DIR / "sweep_configs" / "phase33_static_qkpre_200k"
-LOG_DIR = REPO_DIR / "logs" / "phase33_static_qkpre_200k"
+CONFIG_DIR = REPO_DIR / "sweep_configs" / "phase38_evidence_200k"
+LOG_DIR = REPO_DIR / "logs" / "phase38_evidence_200k"
 
 
-def _config_target(path: Path) -> tuple[str, Path, int]:
+def _target(path: Path) -> tuple[str, Path, int]:
     payload = json.loads(path.read_text())
     return (
         str(payload["run_name"]),
@@ -40,25 +40,21 @@ def _completed(output_dir: Path, target_steps: int) -> bool:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--owner", default="mlprope")
-    parser.add_argument(
-        "--gpu",
-        default=None,
-        help="Optional gpu-claim candidate list; default allows any GPU.",
-    )
+    parser.add_argument("--gpu", default=None)
     parser.add_argument("--status-only", action="store_true")
     args = parser.parse_args()
 
     claimer = shutil.which("gpu-claim")
     if claimer is None:
         raise SystemExit("gpu-claim is required; see /workspace/GPU_QUEUEING.md")
-    configs = sorted(path for path in CONFIG_DIR.glob("*.json") if path.is_file())
-    if len(configs) != 6:
-        raise SystemExit(f"Expected six Phase 33 configs, found {len(configs)}")
+    configs = sorted(CONFIG_DIR.glob("*.json"))
+    if len(configs) != 8:
+        raise SystemExit(f"Expected eight Phase-38 configs, found {len(configs)}")
 
     pending = []
     for config_path in configs:
-        run_name, output_dir, target_steps = _config_target(config_path)
-        state = "complete" if _completed(output_dir, target_steps) else "pending"
+        run_name, output_dir, steps = _target(config_path)
+        state = "complete" if _completed(output_dir, steps) else "pending"
         print(f"{state:8s} {run_name}")
         if state == "pending":
             pending.append((config_path, run_name))
@@ -93,8 +89,8 @@ def main() -> int:
         log_path = LOG_DIR / f"{run_name}.log"
         log_handle = log_path.open("a")
         log_handle.write(
-            f"\n=== launcher_start unix={time.time():.6f} command="
-            f"{json.dumps(command)} ===\n"
+            f"\n=== launcher_start unix={time.time():.6f} "
+            f"command={json.dumps(command)} ===\n"
         )
         log_handle.flush()
         process = subprocess.Popen(
@@ -105,7 +101,7 @@ def main() -> int:
         )
         processes[process] = run_name
         logs[process] = log_handle
-        print(f"queued   {run_name} pid={process.pid}")
+        print(f"queued   {run_name} pid={process.pid}", flush=True)
 
     failures = []
     try:

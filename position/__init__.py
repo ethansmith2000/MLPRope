@@ -4,14 +4,7 @@ from position.autograd import exp_with_identity_grad
 from position.basis import (
     FrozenFourierBasis,
     build_position_basis,
-    interleaved_fourier_from_frequencies,
     interleaved_fourier_basis,
-)
-from position.frequency import (
-    FREQUENCY_MODES,
-    SINUSOID_FREQUENCY_DEFAULTS,
-    SinusoidFrequencyBank,
-    normalize_sinusoid_frequency_config,
 )
 from position.channels import (
     PositionChannel,
@@ -62,7 +55,6 @@ from position.rotary import (
 __all__ = [
     "FrozenFourierBasis",
     "FeatureMapper",
-    "FREQUENCY_MODES",
     "InterventionOptimizationMonitor",
     "POSITION_PRESETS",
     "POSITION_SCHEMA_VERSION",
@@ -76,8 +68,6 @@ __all__ = [
     "QK_PREPROJECTION_MODES",
     "QKPreprojectionPosition",
     "QKPreprojectionOutput",
-    "SINUSOID_FREQUENCY_DEFAULTS",
-    "SinusoidFrequencyBank",
     "adapt_legacy_position_state_dict",
     "apply_rotary",
     "build_mapper",
@@ -92,7 +82,6 @@ __all__ = [
     "ensure_channel_v2",
     "exp_with_identity_grad",
     "interleaved_fourier_basis",
-    "interleaved_fourier_from_frequencies",
     "intervention_optimization_due",
     "legacy_position_run_tag",
     "load_position_compatible_state_dict",
@@ -100,7 +89,6 @@ __all__ = [
     "normalize_position_config_v2",
     "normalize_position_content_config",
     "normalize_qk_preprojection_config",
-    "normalize_sinusoid_frequency_config",
     "resolve_channel_config",
     "rotate_half",
     "upgrade_legacy_position_config",

@@ -7,9 +7,9 @@ construction. The active runtime deliberately supports three core families:
 2. additive Fourier features on projected Q/K (AddRoPE); and
 3. a sinusoid added immediately before the Q/K projections.
 
-Learned amplitude, phase, or frequency acts only on a sinusoidal carrier. RoPE
-is always standard and fixed when enabled; otherwise the backbone is NoPE. The
-active design contract is
+Learned AddRoPE amplitude/phase acts only on its additive carrier; the pre-Q/K
+carrier exposes only a scalar gate. RoPE is always standard and fixed when
+enabled; otherwise the backbone is NoPE. The active design contract is
 [`SINUSOID_INTERVENTION_POLICY.md`](SINUSOID_INTERVENTION_POLICY.md).
 
 The research rationale and experiment plan are in
@@ -62,61 +62,16 @@ are converted to bf16/fp16. There are no trainable frequency, phase-residual,
 scale, clock, or warp parameters in this path. Historical learned-RoPE forms
 raise a clear migration error.
 
-## Carrier-only static frequency bank
-
-The research frequency schema is available only under
-`qk_preprojection.frequency`:
-
-```yaml
-qk_preprojection:
-  frequency:
-    mode: fixed                 # fixed | learned_log | learned_horizon
-    reference_length: null      # resolves to the training sequence length
-    max_grad_norm: 1.0          # clips this bank independently
-```
-
-For each Fourier pair, `learned_log` uses
-
-```text
-omega_i = omega_i^0 exp(delta_i),       delta_i = 0 initially,
-```
-
-while `learned_horizon` uses
-
-```text
-omega_i = omega_i^0 + rho_i / L,        rho_i = 0 initially,
-theta_i(p) = p omega_i^0 + (p/L) rho_i.
-```
-
-Here `L` is the configured reference length. The horizon coordinates express
-the parameter directly as an endpoint phase displacement, so the multiplier
-in its phase gradient is `p/L <= 1` on the training context instead of `p`.
-This is a forward parameterization, not a custom backward rule. Both learned
-modes are exact fixed-frequency anchors at initialization.
-
-An enabled learned carrier owns exactly one top-level fp32 vector of
-`D_model/2` parameters. It is shared across Q/K, heads, and layers, excluded
-from weight decay, and clipped independently from ordinary model gradients.
-Diagnostics report frequency multipliers, endpoint phase displacement and
-Jacobian, nonpositive frequencies, ordering violations, and actual carrier
-movement. This extension preserves causality because the bank is static after
-training and its forward value does not read the sequence.
-
 ## Pre-Q/K sinusoidal injection
 
 ```yaml
 qk_preprojection:
   enabled: false
-  mode: tied_scalar     # tied_scalar | tied_smooth_amplitude
+  mode: tied_scalar
   basis_dim: null       # resolves to model width; other widths are rejected
   theta: null           # resolves to rope_theta
   gate_init: 1.0
   learnable_gate: true
-  smooth_rank: 4        # low-order DCT modes for smooth variants
-  frequency:
-    mode: fixed               # fixed | learned_log | learned_horizon
-    reference_length: null
-    max_grad_norm: 1.0
 ```
 
 For the normalized block input `x_p` and frozen full-width Fourier vector
@@ -133,31 +88,9 @@ and the residual stream are untouched. It may be used alone, with fixed RoPE,
 or together with AddRoPE. The latter combination is supported for controlled
 factorials even though Phase 30 found the two additive routes sub-additive.
 
-The active modes are deliberately small and tied across Q/K:
-
-| Mode | Global gains | Pair amplitudes | Pair phases |
-| --- | ---: | ---: | ---: |
-| `tied_scalar` | one shared | fixed | fixed |
-| `tied_smooth_amplitude` | one shared | tied smooth | fixed |
-
-For Fourier pair `i`, the smooth mode applies
-
-```text
-A_i = g exp(delta_i) I,  sum_i delta_i = 0.
-```
-
-The `smooth_rank` coordinates use orthogonal, unit-RMS DCT-II modes over Fourier
-pair index, which is uniformly spaced in log frequency. Omitting the constant
-mode makes every column zero-mean: `g` controls global carrier strength and
-`delta_i` only redistributes it across frequencies. Unit-RMS scaling makes a
-coordinate's per-band functional effect independent of model width. At rank 4
-the smooth mode has five parameters per layer including the global gain, and
-its zero-coordinate initialization exactly equals `tied_scalar`.
-
-The gain, log-amplitude coordinates, and DCT basis remain fp32 under module-wide
-bf16/fp16 conversion. The completed carrier is cast to the activation dtype
-before addition to `x`. `learnable_gate=false` freezes only the global gain;
-the smooth amplitude coordinates remain trainable when that mode is selected.
+`tied_scalar` is the only active mode. The scalar gain and frozen Fourier table
+remain fp32 under module-wide bf16/fp16 conversion. The completed carrier is
+cast to the activation dtype before addition to `x`.
 
 ## Additive Q/K channel
 
@@ -262,7 +195,9 @@ amplitude/phase without changing fixed RoPE itself.
 
 ## Intervention optimizer diagnostics
 
-Two training fields control sparse read-only optimizer-health sampling:
+`position_lr_multiplier` scales the learning rate of position-specific
+parameters relative to the base optimizer LR; it defaults to `1.0`. Two fields
+control sparse read-only optimizer-health sampling:
 
 ```yaml
 intervention_optimizer_warmup_steps: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512]
@@ -271,12 +206,10 @@ intervention_optimizer_log_every: 1000  # null disables periodic samples
 
 When a learned carrier intervention is active, samples are appended to
 `intervention_optimization.jsonl` and sent to the configured tracker. Metrics
-are separated into `pre_qk_sinusoid_frequency`,
-`pre_qk_sinusoid_adapter`, `additive_qk_sinusoid`, and
+are separated into `pre_qk_sinusoid_adapter`, `additive_qk_sinusoid`, and
 `position_content_projection`. They include raw/clipped gradient statistics,
 Adam moment diagnostics, realized parameter movement, update/gradient
-alignment, carrier-function movement for static amplitude/phase transforms,
-and phase/function movement for carrier-frequency coordinates.
+alignment, and carrier-function movement.
 Sampling does not alter the optimizer or forward pass.
 
 ## Legacy and removed fields
@@ -288,15 +221,15 @@ shapes but do not affect fixed RoPE.
 
 Historical top-level `rope_frequency` and `rope_frequency_mode` are accepted
 only when fixed, then removed from the resolved configuration. Any learned form
-fails with a migration message directing frequency experiments to
-`qk_preprojection.frequency`.
+fails with a migration message.
 
-The historical pre-Q/K modes `split_scalar`, `split_pair_amplitude`,
-`split_pair_polar`, `tied_smooth_polar`, and `split_smooth_polar` were removed
-after their Phase 33/35 increments were null or below the practical gate. An
-enabled block using one of them raises a migration error; a disabled archival
-block is accepted and canonicalized to `tied_scalar` because it has no model
-effect. The historical configs and result reports remain in the repository.
+Historical pre-Q/K frequency, smooth-amplitude, split-Q/K, and phase modes were
+removed after the Phase 33--37 confirmations. An enabled block using one raises
+a migration error; a disabled archival block is accepted and canonicalized to
+`tied_scalar` because it has no model effect. Compatibility-only
+`smooth_rank`, `frequency`, and `frequency_lr_multiplier` fields are discarded
+from the resolved configuration. Historical configs and reports remain in the
+repository, while implementations remain in git history.
 
 The former `conditioning.kind=adaptive_gain` is also rejected: it multiplied
 the complete Q/K tensors rather than transforming the sinusoidal carrier.

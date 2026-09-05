@@ -12,7 +12,7 @@ forward modes that modify only the dedicated positional content signal:
   lag<k>       position t receives the content of position max(0, t - k), so
                same-token alignment is broken by a known offset
 
-Interpretation (per CONSOLIDATED_RESEARCH_PLAN.md section 7):
+Interpretation (historical content-mechanism probe):
   native vs zero         endpoint reliance on the content path after coadaptation
   native vs lag<k>       whether the model uses *same-token* content alignment,
                          graded by how far the misalignment reaches
@@ -223,7 +223,7 @@ def probe_run(
         if logit_bias.get("enabled"):
             raise SystemExit(
                 f"{run_dir.name}: run used the removed relative logit-bias "
-                "channel; see CONCAT_QK_POSITION.md"
+                "channel; see CONSOLIDATION_PLAN.md"
             )
         saved_config["logit_bias"] = {"enabled": False}
 

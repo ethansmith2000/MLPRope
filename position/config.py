@@ -264,7 +264,7 @@ _MAPPER_TO_FEATURE_MAP = {
 
 LOGIT_BIAS_REMOVED_MESSAGE = (
     "The relative logit-bias channel was removed; logit_bias accepts only "
-    "{'enabled': false}. See CONCAT_QK_POSITION.md for the closure rationale."
+    "{'enabled': false}. See CONSOLIDATION_PLAN.md for the closure rationale."
 )
 
 

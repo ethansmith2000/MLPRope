@@ -1,19 +1,20 @@
 # MLPRope
 
-- [Current status and decisions](CURRENT_STATUS.md)
-- [Active sinusoidal intervention policy](SINUSOID_INTERVENTION_POLICY.md)
-- [Phase-35 smooth carrier protocol and conclusion](SMOOTH_CARRIER_PLAN.md)
-- [Phase-35 paired results](results/phase35_smooth_carrier_20k/PHASE35_RESULTS.md)
-- [Phase-36 direct amplitude/frequency results](results/phase36_direct_carrier_20k/PHASE36_RESULTS.md)
-- [Phase-37 direct-amplitude confirmation plan](DIRECT_AMPLITUDE_CONFIRMATION_PLAN.md)
-- [Phase-37 paired results](results/phase37_direct_amplitude_200k/PHASE37_RESULTS.md)
-- [Next experiment roadmap](NEXT_EXPERIMENT_ROADMAP.md)
-- [Active research and repository consolidation plan](CONSOLIDATION_PLAN.md)
-- [Globally shared frequency experiment](SHARED_FREQUENCY_PLAN.md)
-- [Experiment journal](EXPERIMENT_JOURNAL.md)
-- [Position embedding design](position_embedding_experiments.md)
-- [Position playground configuration](POSITION_CONFIG.md)
-- [Phase-24 basis screen](results/phase24_rope_embed_basis/PHASE24_RESULTS.md)
+Research code for attention-local sinusoidal position mechanisms. The active
+runtime is intentionally narrow: standard fixed RoPE or NoPE, AddRoPE, and a
+tied scalar sinusoid injected before the Q/K projections.
+
+- [Current evidence and decisions](CURRENT_STATUS.md)
+- [Active architectural policy](SINUSOID_INTERVENTION_POLICY.md)
+- [Next evidence roadmap](NEXT_EXPERIMENT_ROADMAP.md)
+- [Position configuration](POSITION_CONFIG.md)
+- [Repository consolidation record](CONSOLIDATION_PLAN.md)
+- [Literature review](LITERATURE_REVIEW.md)
+- [Chronological experiment journal](EXPERIMENT_JOURNAL.md)
+- [Compact phase reports](results/)
+
+Historical implementations and superseded protocols remain recoverable from
+git history; completed experiment configs remain under `sweep_configs/`.
 
 CPU verification:
 

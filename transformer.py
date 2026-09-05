@@ -13,7 +13,6 @@ from torch.nn.attention.flex_attention import (
 from position import (
     PositionChannel,
     QKPreprojectionPosition,
-    SinusoidFrequencyBank,
     adapt_legacy_position_state_dict,
     apply_rotary,
     build_qk_position_channel,
@@ -22,7 +21,6 @@ from position import (
     count_position_parameters,
     ensure_channel_v2,
     interleaved_fourier_basis,
-    interleaved_fourier_from_frequencies,
     normalize_logit_bias_config,
     normalize_qk_preprojection_config,
     normalize_position_content_config,
@@ -149,7 +147,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             qk_preprojection_config,
             model_dim=dim,
             rope_theta=rope_theta,
-            frequency_reference_length=max_seq_len,
         )
         self.max_seq_len = max_seq_len
         self.rel_extent = rel_extent or max_seq_len
@@ -336,16 +333,11 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
     def _flex_attention(self, q, k, v):
         return _flex_attention_call(q, k, v, block_mask=self._block_mask(q))
 
-    def forward(
-        self,
-        x,
-        qk_preprojection_basis: torch.Tensor | None = None,
-    ):
+    def forward(self, x):
         if self.qk_preprojection is not None:
             preprojection = self.qk_preprojection(
                 x.shape[1],
                 dtype=x.dtype,
-                basis_override=qk_preprojection_basis,
             )
             q_input = x + preprojection.q[None, :, :]
             k_input = x + preprojection.k[None, :, :]
@@ -592,15 +584,8 @@ class TransformerBlock(torch.nn.Module):
         self.norm1 = torch.nn.LayerNorm(dim)
         self.norm2 = torch.nn.LayerNorm(dim)
 
-    def forward(
-        self,
-        x,
-        qk_preprojection_basis: torch.Tensor | None = None,
-    ):
-        x = self.attn(
-            self.norm1(x),
-            qk_preprojection_basis,
-        ) + x
+    def forward(self, x):
+        x = self.attn(self.norm1(x)) + x
         x = self.ff(self.norm2(x)) + x
         return x
 
@@ -640,17 +625,6 @@ class Transformer(torch.nn.Module):
             qk_preprojection_config,
             model_dim=dim,
             rope_theta=rope_theta,
-            frequency_reference_length=max_seq_len,
-        )
-        preprojection_frequency_config = normalized_qk_preprojection["frequency"]
-        self.qk_preprojection_frequency = (
-            SinusoidFrequencyBank(
-                dim,
-                float(normalized_qk_preprojection["theta"]),
-                preprojection_frequency_config,
-            )
-            if preprojection_frequency_config["mode"] != "fixed"
-            else None
         )
         base_ff_hidden_dim = ff_hidden_dim or dim * ff_mult
         widened_layers = set(ff_widened_layers or ())
@@ -783,20 +757,6 @@ class Transformer(torch.nn.Module):
         diagnostic_x = None
         if input_ids is not None:
             diagnostic_x = self.in_proj(self.token_embedding(input_ids))
-        qk_preprojection_basis = None
-        if self.qk_preprojection_frequency is not None and seq_len is not None:
-            qk_preprojection_basis = interleaved_fourier_from_frequencies(
-                seq_len,
-                self.qk_preprojection_frequency(),
-            )
-            for key, value in self.qk_preprojection_frequency.summarize().items():
-                metrics[f"position/shared_qkpre_frequency/{key}"] = value
-            profiles["shared_qkpre_frequency/frequency"] = (
-                self.qk_preprojection_frequency().detach().cpu()
-            )
-            profiles["shared_qkpre_frequency/endpoint_phase_delta"] = (
-                self.qk_preprojection_frequency.endpoint_phase_delta().detach().cpu()
-            )
         for layer_idx, block in enumerate(self.blocks):
             actual_qk_summary = None
             normalized_diagnostic_x = None
@@ -811,63 +771,11 @@ class Transformer(torch.nn.Module):
                 q_gate, k_gate = preprojection.gate_values()
                 metrics[f"{pre_prefix}/gate_q"] = q_gate.detach().float().item()
                 metrics[f"{pre_prefix}/gate_k"] = k_gate.detach().float().item()
-                if preprojection.mode == "tied_scalar":
-                    metrics[f"{pre_prefix}/gate"] = q_gate.detach().float().item()
-                q_amplitude_factor, k_amplitude_factor = (
-                    preprojection.amplitude_factors()
-                )
-                for branch, amplitude_factor in (
-                    ("q", q_amplitude_factor),
-                    ("k", k_amplitude_factor),
-                ):
-                    amplitude_factor = amplitude_factor.detach().float()
-                    profiles[f"{pre_prefix}/amplitude_factor_{branch}"] = (
-                        amplitude_factor.cpu()
-                    )
-                    metrics[f"{pre_prefix}/amplitude_factor_{branch}_min"] = (
-                        amplitude_factor.min().item()
-                    )
-                    metrics[f"{pre_prefix}/amplitude_factor_{branch}_max"] = (
-                        amplitude_factor.max().item()
-                    )
-                    metrics[
-                        f"{pre_prefix}/amplitude_factor_{branch}_nonpositive_fraction"
-                    ] = (amplitude_factor <= 0).float().mean().item()
-                if preprojection.log_amplitude_coordinates is not None:
-                    q_log_amplitude, k_log_amplitude = (
-                        preprojection.log_amplitude_deltas()
-                    )
-                    for branch, log_amplitude in (
-                        ("q", q_log_amplitude),
-                        ("k", k_log_amplitude),
-                    ):
-                        log_amplitude = log_amplitude.detach().float()
-                        profiles[f"{pre_prefix}/log_amplitude_{branch}"] = (
-                            log_amplitude.cpu()
-                        )
-                        metrics[f"{pre_prefix}/log_amplitude_{branch}_rms"] = (
-                            log_amplitude.square().mean().sqrt().item()
-                        )
-                if preprojection.amplitude_coordinates is not None:
-                    q_amplitude_delta, k_amplitude_delta = (
-                        preprojection.direct_amplitude_deltas()
-                    )
-                    for branch, amplitude_delta in (
-                        ("q", q_amplitude_delta),
-                        ("k", k_amplitude_delta),
-                    ):
-                        amplitude_delta = amplitude_delta.detach().float()
-                        profiles[f"{pre_prefix}/direct_amplitude_delta_{branch}"] = (
-                            amplitude_delta.cpu()
-                        )
-                        metrics[
-                            f"{pre_prefix}/direct_amplitude_delta_{branch}_rms"
-                        ] = amplitude_delta.square().mean().sqrt().item()
+                metrics[f"{pre_prefix}/gate"] = q_gate.detach().float().item()
                 if seq_len is not None:
                     positional_input = preprojection(
                         seq_len,
                         dtype=torch.float32,
-                        basis_override=qk_preprojection_basis,
                     )
                     q_positional_input = positional_input.q.detach()
                     k_positional_input = positional_input.k.detach()
@@ -884,10 +792,9 @@ class Transformer(torch.nn.Module):
                         .sqrt()
                         .item()
                     )
-                    if preprojection.mode == "tied_scalar":
-                        metrics[f"{pre_prefix}/input_rms"] = metrics[
-                            f"{pre_prefix}/input_q_rms"
-                        ]
+                    metrics[f"{pre_prefix}/input_rms"] = metrics[
+                        f"{pre_prefix}/input_q_rms"
+                    ]
                     q_branch = block.attn.to_q(
                         q_positional_input
                     ).detach().float()
@@ -904,7 +811,6 @@ class Transformer(torch.nn.Module):
                     diagnostic_position = preprojection(
                         normalized_diagnostic_x.shape[1],
                         dtype=normalized_diagnostic_x.dtype,
-                        basis_override=qk_preprojection_basis,
                     ).q
 
                     def add_mixture_metrics(
@@ -987,10 +893,7 @@ class Transformer(torch.nn.Module):
                             combined_normalized.square().mean().sqrt().item()
                         )
             if diagnostic_x is not None:
-                diagnostic_x = block(
-                    diagnostic_x,
-                    qk_preprojection_basis,
-                )
+                diagnostic_x = block(diagnostic_x)
             if seq_len is None:
                 continue
             qk_summary = (
@@ -1012,24 +915,17 @@ class Transformer(torch.nn.Module):
     def forward(self, input_ids, targets=None, *, return_logits: bool = False):
         """Training path returns loss only so torch.compile need not keep vocab logits live."""
         x = self.in_proj(self.token_embedding(input_ids))
-        qk_preprojection_basis = None
-        if self.qk_preprojection_frequency is not None:
-            qk_preprojection_basis = interleaved_fourier_from_frequencies(
-                input_ids.shape[1],
-                self.qk_preprojection_frequency(),
-            )
         for block in self.blocks:
             if self.gradient_checkpointing:
                 x = torch.utils.checkpoint.checkpoint(
                     block,
                     x,
-                    qk_preprojection_basis,
                     preserve_rng_state=False,
                     use_reentrant=False,
                     determinism_check="none",
                 )
             else:
-                x = block(x, qk_preprojection_basis)
+                x = block(x)
         logits = self.out_proj(x)
         if targets is None:
             return logits
@@ -1069,9 +965,6 @@ def count_parameters(model: torch.nn.Module) -> dict[str, int]:
         "position_params": position_counts["position_params"],
         "qk_position_params": position_counts["qk_position_params"],
         "qk_preprojection_params": position_counts["qk_preprojection_params"],
-        "qk_preprojection_frequency_params": position_counts[
-            "qk_preprojection_frequency_params"
-        ],
         "logit_bias_params": position_counts["logit_bias_params"],
         "non_embed": total - embed - head,
     }
