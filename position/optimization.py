@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 import torch
 
 from position.channels import QKPositionChannel
+from position.input_sinusoid import InputSinusoidPosition
 from position.preprojection import QKPreprojectionPosition
 
 
@@ -42,6 +43,7 @@ def collect_intervention_parameter_groups(
     """Collect disjoint parameter groups for active sinusoidal interventions."""
     buckets: dict[str, list[torch.nn.Parameter]] = {
         "pre_qk_sinusoid_adapter": [],
+        "input_sinusoid": [],
         "additive_qk_sinusoid": [],
         "position_content_projection": [],
     }
@@ -52,6 +54,8 @@ def collect_intervention_parameter_groups(
         group_name = None
         if ".qk_preprojection." in name:
             group_name = "pre_qk_sinusoid_adapter"
+        elif name.startswith("input_sinusoid."):
+            group_name = "input_sinusoid"
         elif ".qk_position." in name:
             group_name = "additive_qk_sinusoid"
         elif ".position_content." in name:
@@ -64,6 +68,11 @@ def collect_intervention_parameter_groups(
         module
         for module in model.modules()
         if isinstance(module, QKPreprojectionPosition)
+    ]
+    input_sinusoid_modules = [
+        module
+        for module in model.modules()
+        if isinstance(module, InputSinusoidPosition)
     ]
     static_additive_modules = [
         module
@@ -78,6 +87,8 @@ def collect_intervention_parameter_groups(
             static_carrier_modules=(
                 preprojection_modules
                 if name == "pre_qk_sinusoid_adapter"
+                else input_sinusoid_modules
+                if name == "input_sinusoid"
                 else static_additive_modules
                 if name == "additive_qk_sinusoid"
                 else []
@@ -224,7 +235,8 @@ def _sample_static_carriers(
     values = []
     for module in modules:
         output = module(reference_length, dtype=torch.float32)
-        for branch in (output.q, output.k):
+        branches = (output,) if isinstance(output, torch.Tensor) else (output.q, output.k)
+        for branch in branches:
             if branch.shape[-2] != reference_length:
                 raise ValueError(
                     "Static carrier output must use its penultimate dimension "

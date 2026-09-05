@@ -1,8 +1,9 @@
 # MLPRope
 
 Research code for attention-local sinusoidal position mechanisms. The active
-runtime is intentionally narrow: standard fixed RoPE or NoPE, AddRoPE, and a
-tied scalar sinusoid injected before the Q/K projections.
+runtime is intentionally narrow: standard fixed RoPE or NoPE, AddRoPE, a tied
+scalar sinusoid injected before the Q/K projections, and a minimal one-shot
+input-sinusoid placement control.
 
 - [Current evidence and decisions](CURRENT_STATUS.md)
 - [Active architectural policy](SINUSOID_INTERVENTION_POLICY.md)

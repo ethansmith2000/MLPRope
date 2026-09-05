@@ -11,6 +11,7 @@ from torch.nn.attention.flex_attention import (
 )
 
 from position import (
+    InputSinusoidPosition,
     PositionChannel,
     QKPreprojectionPosition,
     adapt_legacy_position_state_dict,
@@ -22,6 +23,7 @@ from position import (
     ensure_channel_v2,
     interleaved_fourier_basis,
     normalize_logit_bias_config,
+    normalize_input_sinusoid_config,
     normalize_qk_preprojection_config,
     normalize_position_content_config,
 )
@@ -616,6 +618,7 @@ class Transformer(torch.nn.Module):
         ff_widened_hidden_dim: int | None = None,
         ff_widened_layers: list[int] | tuple[int, ...] | None = None,
         qk_preprojection_config: dict | None = None,
+        input_sinusoid_config: dict | None = None,
     ):
         super().__init__()
 
@@ -625,6 +628,20 @@ class Transformer(torch.nn.Module):
             qk_preprojection_config,
             model_dim=dim,
             rope_theta=rope_theta,
+        )
+        self.input_sinusoid_config = normalize_input_sinusoid_config(
+            input_sinusoid_config,
+            model_dim=dim,
+            rope_theta=rope_theta,
+        )
+        self.input_sinusoid = (
+            InputSinusoidPosition(
+                self.input_sinusoid_config,
+                model_dim=dim,
+                extent=max_seq_len,
+            )
+            if self.input_sinusoid_config["enabled"]
+            else None
         )
         base_ff_hidden_dim = ff_hidden_dim or dim * ff_mult
         widened_layers = set(ff_widened_layers or ())
@@ -734,6 +751,8 @@ class Transformer(torch.nn.Module):
                     module.reset_output_parameters()
                 elif isinstance(module, QKPreprojectionPosition):
                     module.reset_output_parameters()
+                elif isinstance(module, InputSinusoidPosition):
+                    module.reset_output_parameters()
 
     def prepare_flex_masks(
         self,
@@ -757,6 +776,23 @@ class Transformer(torch.nn.Module):
         diagnostic_x = None
         if input_ids is not None:
             diagnostic_x = self.in_proj(self.token_embedding(input_ids))
+            if self.input_sinusoid is not None:
+                diagnostic_x = diagnostic_x + self.input_sinusoid(
+                    diagnostic_x.shape[1],
+                    dtype=diagnostic_x.dtype,
+                )[None, :, :]
+        if self.input_sinusoid is not None:
+            prefix = "position/input_sinusoid"
+            gate = self.input_sinusoid.gate_value().detach().float()
+            metrics[f"{prefix}/gate"] = gate.item()
+            if seq_len is not None:
+                carrier = self.input_sinusoid(
+                    seq_len,
+                    dtype=torch.float32,
+                ).detach()
+                metrics[f"{prefix}/carrier_rms"] = (
+                    carrier.square().mean().sqrt().item()
+                )
         for layer_idx, block in enumerate(self.blocks):
             actual_qk_summary = None
             normalized_diagnostic_x = None
@@ -915,6 +951,11 @@ class Transformer(torch.nn.Module):
     def forward(self, input_ids, targets=None, *, return_logits: bool = False):
         """Training path returns loss only so torch.compile need not keep vocab logits live."""
         x = self.in_proj(self.token_embedding(input_ids))
+        if self.input_sinusoid is not None:
+            x = x + self.input_sinusoid(
+                x.shape[1],
+                dtype=x.dtype,
+            )[None, :, :]
         for block in self.blocks:
             if self.gradient_checkpointing:
                 x = torch.utils.checkpoint.checkpoint(
@@ -965,6 +1006,7 @@ def count_parameters(model: torch.nn.Module) -> dict[str, int]:
         "position_params": position_counts["position_params"],
         "qk_position_params": position_counts["qk_position_params"],
         "qk_preprojection_params": position_counts["qk_preprojection_params"],
+        "input_sinusoid_params": position_counts["input_sinusoid_params"],
         "logit_bias_params": position_counts["logit_bias_params"],
         "non_embed": total - embed - head,
     }

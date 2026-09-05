@@ -35,6 +35,7 @@ from tqdm.auto import tqdm
 from transformers import AutoConfig, AutoTokenizer, default_data_collator, get_scheduler
 
 from position import (
+    INPUT_SINUSOID_DEFAULTS,
     InterventionOptimizationMonitor,
     POSITION_PRESETS,
     POSITION_SCHEMA_VERSION,
@@ -45,6 +46,7 @@ from position import (
     intervention_optimization_due,
     legacy_position_run_tag,
     normalize_logit_bias_config,
+    normalize_input_sinusoid_config,
     normalize_position_content_config,
     normalize_qk_preprojection_config,
     resolve_channel_config,
@@ -201,6 +203,8 @@ DEFAULT_CONFIG = {
     "rope_frequency": {"mode": "fixed"},
     # Add a full-width sinusoidal basis only to the normalized inputs of W_q/W_k.
     "qk_preprojection": copy.deepcopy(QK_PREPROJECTION_DEFAULTS),
+    # Minimal one-shot residual-input control, added after ``in_proj``.
+    "input_sinusoid": copy.deepcopy(INPUT_SINUSOID_DEFAULTS),
     "rotary_clock": {"enabled": False},
     "position_gain": {"enabled": False},
     "qk_norm": True,
@@ -303,12 +307,16 @@ def position_run_tag(cfg: dict) -> str:
     if preprojection.get("enabled", False):
         mode = preprojection.get("mode", "tied_scalar").replace("_", "-")
         extras.append(f"qkpre-{mode}")
+    input_sinusoid = cfg.get("input_sinusoid", {})
+    if input_sinusoid.get("enabled", False):
+        extras.append("input-sinusoid")
     tag = base if not extras else "+".join((base, *extras))
     if source == 2:
         canonical = {
             "qk": cfg["qk"],
             "logit_bias": cfg["logit_bias"],
             "qk_preprojection": cfg.get("qk_preprojection", {}),
+            "input_sinusoid": cfg.get("input_sinusoid", {}),
             "model_context": {
                 "hidden_size": cfg["hidden_size"],
                 "n_head": cfg["n_head"],
@@ -597,6 +605,11 @@ def load_config(cli_args):
         model_dim=model_dim,
         rope_theta=rope_theta,
     )
+    cfg["input_sinusoid"] = normalize_input_sinusoid_config(
+        overrides.get("input_sinusoid", cfg["input_sinusoid"]),
+        model_dim=model_dim,
+        rope_theta=rope_theta,
+    )
     for removed_key in ("rotary_clock", "position_gain"):
         removed_config = cfg.pop(removed_key)
         if not isinstance(removed_config, dict):
@@ -645,6 +658,8 @@ def load_config(cli_args):
         cfg["qk_preprojection"]["enabled"]
     ):
         enabled_sources.append(2)
+    if cfg["input_sinusoid"]["enabled"]:
+        enabled_sources.append(2)
     if not cfg["use_rope"]:
         enabled_sources.append(2)
     # Baseline and wholly legacy active channels retain historical tags.
@@ -657,6 +672,7 @@ def load_config(cli_args):
         if (
             not qk_config["enabled"]
             and not cfg["qk_preprojection"]["enabled"]
+            and not cfg["input_sinusoid"]["enabled"]
         )
         else "custom"
     )
@@ -686,6 +702,7 @@ def load_config(cli_args):
     if (
         qk_config["enabled"]
         or cfg["qk_preprojection"]["enabled"]
+        or cfg["input_sinusoid"]["enabled"]
     ):
         rel_extent = cfg["rel_extent"] or cfg["model_position_extent"]
         variant_tag = f"{variant_tag}-e{rel_extent}"
@@ -923,6 +940,7 @@ def make_model(args, vocab_size):
         use_rope=args.use_rope,
         rope_theta=args.rope_theta,
         qk_preprojection_config=args.qk_preprojection,
+        input_sinusoid_config=args.input_sinusoid,
         qk_norm=args.qk_norm,
         post_position_qk_norm=args.post_position_qk_norm,
         qk_norm_mode=args.qk_norm_mode,
@@ -946,6 +964,7 @@ POSITION_DECAY_EXEMPT = (
     "position_content",
     "carrier_hypernetwork",
     "qk_preprojection",
+    "input_sinusoid",
 )
 
 POSITION_PARAMETER_TAGS = POSITION_DECAY_EXEMPT
@@ -1621,6 +1640,7 @@ def main():
             "logit_bias": args.logit_bias,
             "use_rope": args.use_rope,
             "qk_preprojection": args.qk_preprojection,
+            "input_sinusoid": args.input_sinusoid,
             "post_position_qk_norm": args.post_position_qk_norm,
             "exclude_position_from_decay": args.exclude_position_from_decay,
             "position_lr_multiplier": args.position_lr_multiplier,

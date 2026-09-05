@@ -33,6 +33,11 @@ from position.config import (
     v2_position_run_tag,
 )
 from position.mappers import FeatureMapper, build_mapper
+from position.input_sinusoid import (
+    INPUT_SINUSOID_DEFAULTS,
+    InputSinusoidPosition,
+    normalize_input_sinusoid_config,
+)
 from position.optimization import (
     InterventionOptimizationMonitor,
     collect_intervention_parameter_groups,
@@ -55,6 +60,8 @@ from position.rotary import (
 __all__ = [
     "FrozenFourierBasis",
     "FeatureMapper",
+    "INPUT_SINUSOID_DEFAULTS",
+    "InputSinusoidPosition",
     "InterventionOptimizationMonitor",
     "POSITION_PRESETS",
     "POSITION_SCHEMA_VERSION",
@@ -86,6 +93,7 @@ __all__ = [
     "legacy_position_run_tag",
     "load_position_compatible_state_dict",
     "normalize_logit_bias_config",
+    "normalize_input_sinusoid_config",
     "normalize_position_config_v2",
     "normalize_position_content_config",
     "normalize_qk_preprojection_config",

@@ -89,27 +89,46 @@ same disjoint 1,024-example holdout. The proposed cells are:
 | fixed RoPE | `R_p W_q x_p` | common control |
 | input sinusoid + RoPE | add `beta z(p)` once at the residual-stream entrance | classic-input/location control |
 | pre-Q/K sinusoid + RoPE | `R_p W_q(x_p + alpha z(p))` | promoted method |
-| scalar AddRoPE + RoPE | `R_p(W_q x_p + beta e_q(p))` | low-capacity native head-space placement control |
-| static AddRoPE | `W_q x_p + e_q(p)` | strongest historical method family, replacing RoPE |
-| static AddRoPE + RoPE | `R_p(W_q x_p + e_q(p))` | tests whether the two geometries compose |
+| fixed AddRoPE + RoPE | `R_p(W_q x_p + e(p))` | parameter-free native head-space placement control |
+| direct AddRoPE | `W_q x_p + e_q(p)` | direct static amplitude/phase, replacing RoPE |
+| direct AddRoPE + RoPE | `R_p(W_q x_p + e_q(p))` | tests whether the two geometries compose |
+
+There is one separate, high-value factorial hole. Phase 33 already trained
+fixed RoPE, pre-Q/K+NoPE, and pre-Q/K+RoPE for 200k under one protocol, but not
+the plain NoPE cell. A matched plain-NoPE run from the exact Phase-33 source
+would complete the mature `RoPE x pre-Q/K carrier` 2x2 and permit a formal
+interaction estimate. Prefer that single missing-cell run to retraining the
+other three, provided source, initialization, and dataset provenance match
+exactly. It is not required for ranking methods, but it is required for a
+mature claim about additivity or synergy.
 
 The input arm should restore only a minimal one-shot residual carrier after
 `in_proj`, with a learned scalar initialized to 1.0; do not restore the former
-generic residual/per-layer machinery. The scalar post-projection control
-should likewise add only a tied fixed head-space Fourier carrier and one
-learned scalar per layer. For the two static AddRoPE cells, freeze one
-historically supported configuration before launch rather than tuning it
-inside the comparison.
+generic residual/per-layer machinery. The fixed post-projection control should
+use the unit native head-space carrier without learned parameters. The two
+direct AddRoPE cells should use the same signed, nonsaturating, position-only
+per-head/per-frequency Q/K amplitude and phase parameters, with the standard
+frequency bank fixed. They intentionally omit both the historical position
+mapper and all content conditioning.
 
 Raw amplitudes are not comparable across sites. Before launch, report the
 initial carrier/content RMS ratio and positional energy fraction at the actual
 mixture point. Use gate 1.0 where it reproduces the promoted method's roughly
 one-third initial positional energy; otherwise choose a predeclared
-RMS-matched scale. Keep the scale fixed across the paired AddRoPE cells.
+RMS-matched scale. Keep the amplitude anchor and optimizer settings identical
+across the paired direct-AddRoPE cells.
+
+The paired-initialization audit supports the unit anchor. On the first fixed
+validation example, the one-shot input carrier has carrier/content RMS ratio
+`0.7116` and positional energy fraction `0.3362`; layer-0 pre-Q/K ratios are
+`0.7071` before projection and `0.6994/0.7060` after the Q/K projections. The
+unit native AddRoPE carrier gives `0.7065/0.7024` against raw projected Q/K.
+Thus all three sites begin near the same `0.70` RMS ratio without a calibration
+fit, while their placement and parameterization remain genuinely different.
 
 This is a breadth screen, not publication evidence. Promote only cells that
 beat their direct control materially and remain competitive in throughput. In
-particular, do not spend mature runs on both static AddRoPE orderings if the
+particular, do not spend mature runs on both direct AddRoPE orderings if the
 30k screen clearly resolves them.
 
 An addend applied *after* standard RoPE,
@@ -155,11 +174,13 @@ evidence package is:
 1. **mature replication:** three paired seeds at the main scale and horizon;
 2. **scale transfer:** at least one larger model under the frozen method;
 3. **architecture robustness:** QKNorm on/off, with normalization order stated;
-4. **method comparison:** RoPE, residual-input sinusoid+RoPE, standalone
+4. **core factorial:** NoPE, RoPE, pre-Q/K+NoPE, and pre-Q/K+RoPE at one mature
+   matched horizon if making a complementarity or interaction claim;
+5. **method comparison:** RoPE, residual-input sinusoid+RoPE, standalone
    AddRoPE, AddRoPE+RoPE if it survives, and pre-Q/K+RoPE under one protocol;
-5. **mechanism:** position-stratified loss, attention entropy/distance/sink
+6. **mechanism:** position-stratified loss, attention entropy/distance/sink
    profiles, and carrier-logit attribution;
-6. **efficiency:** tokens/s, memory, parameter count, and equal-wall-clock as
+7. **efficiency:** tokens/s, memory, parameter count, and equal-wall-clock as
    well as equal-step comparisons where throughput differs.
 
 A broader positional-encoding paper should additionally include NoPE, learned
@@ -180,6 +201,25 @@ are:
 
 Cross-modality experiments are optional and should be attempted only if the
 claim is deliberately expanded beyond autoregressive language modeling.
+
+### Deferred 2D transfer design
+
+If the claim is expanded to spatial models, test the same architectural idea
+rather than inventing a new dynamic controller. For a ViT, construct a fixed
+separable 2D carrier from row and column sinusoids, inject it locally before
+Q/K, and compare NoPE, standard 2D absolute position, 2D RoPE, and pre-Q/K
+carrier + 2D RoPE under matched ImageNet classification training. The central
+question is again whether additive absolute Fourier features complement a
+relative rotational geometry.
+
+A DiT is a higher-cost second transfer test. Keep the diffusion-timestep and
+class-conditioning paths unchanged, apply the new carrier only to spatial
+token coordinates, and compare 2D RoPE with and without the pre-Q/K carrier.
+Report optimization curves and sample quality at matched training compute;
+do not infer generative benefit from the ViT result alone. In either setting,
+start with tied scalar carrier gates and fixed spatial frequencies. Separate
+row/column or Q/K amplitudes are follow-up ablations only after transfer is
+established.
 
 ## Explicitly deferred
 

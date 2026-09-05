@@ -5,7 +5,7 @@ are available from git; their compact evidence remains in `results/`._
 
 ## Architectural boundary
 
-Every experiment makes two independent choices:
+Every principal experiment makes two independent choices:
 
 1. **backbone:** standard fixed RoPE or NoPE;
 2. **carrier:** absent, injected before Q/K projection, or added to projected
@@ -17,8 +17,9 @@ Every experiment makes two independent choices:
 | pre-Q/K | carrier + NoPE | carrier + RoPE |
 | AddRoPE | AddRoPE + NoPE | AddRoPE + RoPE |
 
-No active intervention changes the RoPE rotation. Neither carrier writes to V
-or the residual stream.
+No active pre-Q/K or AddRoPE intervention changes the RoPE rotation or writes
+to V/the residual stream. Phase 39 additionally has one deliberately narrow
+one-shot residual-input sinusoid, used only as a placement control.
 
 ## Promoted pre-Q/K method
 
@@ -77,8 +78,8 @@ W_q(x_p + alpha z(p)) = W_q x_p + alpha W_q z(p),
 ```
 
 so the apparent post-projection form is exactly the promoted pre-Q/K method,
-not a new comparison. A clean placement control therefore uses a fixed
-head-space sinusoid with only a scalar gate; the strongest historical AddRoPE
+not a new comparison. A clean placement control therefore uses a fixed unit
+head-space sinusoid; the strongest historical AddRoPE
 is a broader method comparison because it also learns the carrier map and
 separate Q/K readouts.
 
@@ -94,6 +95,29 @@ the pointwise content-conditioned reference because it produced a replicated
 30k increment. EMA/scan conditioning and content-dependent RoPE frequency are
 removed. AddRoPE and pre-Q/K may be crossed explicitly, but their 15k result
 was sub-additive, so another combination run needs a mature factorial reason.
+
+### What the historical AddRoPE runs actually learned
+
+The base carrier frequencies were the fixed standard schedule
+`omega_i = theta^(-i/(D/2))`; successful static AddRoPE runs did not optimize
+`omega_i`. Two static parameterizations were tested:
+
+- **direct canonical:** a constant amplitude and phase offset for every
+  layer, head, and frequency pair, with separate Q/K parameters;
+- **mapped position-only:** a deterministic function of position produced
+  amplitudes and phases for every layer, head, frequency pair, and Q/K branch.
+  The strongest 30k AddRoPE result used a 16-dimensional Fourier input plus
+  normalized/log-position scalars, a linear position mapper, per-head
+  processing, and separate Q/K readouts. Despite running at every position,
+  this was `f(p)`, not token-content conditioning.
+
+Amplitude-only, phase-only, combined amplitude+phase, narrow spectral tilt,
+coherent position offset, and direct versus mapped controls were all run.
+Amplitude was load-bearing; phase/offset helped only in combination. Truly
+content-dependent amplitude/phase hypernetworks were also tested but are not
+part of the new comparison. Content-dependent frequency multipliers and
+position warps were unstable or worse and remain excluded. No successful
+AddRoPE result came from learning the underlying static frequency bank.
 
 ## Causality rule
 

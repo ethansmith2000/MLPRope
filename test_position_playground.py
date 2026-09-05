@@ -525,6 +525,13 @@ class GeometryAndContentTest(unittest.TestCase):
         torch.testing.assert_close(output.q, expected)
         torch.testing.assert_close(output.k, expected)
 
+        summary = channel.summarize(9)
+        self.assertAlmostEqual(summary["direct_amplitude_q/mean"], 0.3)
+        self.assertAlmostEqual(summary["direct_amplitude_k/mean"], 0.3)
+        self.assertEqual(summary["direct_amplitude_q/nonpositive_fraction"], 0.0)
+        self.assertEqual(summary["direct_phase_q/rms"], 0.0)
+        self.assertEqual(summary["direct_phase_k/abs_max"], 0.0)
+
         output.q.square().mean().backward()
         self.assertGreater(
             channel.q_direct_amplitude_raw.grad.abs().sum().item(),

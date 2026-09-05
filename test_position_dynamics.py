@@ -12,10 +12,12 @@ from unittest import mock
 import torch
 
 from position import (
+    InputSinusoidPosition,
     InterventionOptimizationMonitor,
     QK_PREPROJECTION_MODES,
     QKPreprojectionPosition,
     collect_intervention_parameter_groups,
+    normalize_input_sinusoid_config,
     normalize_qk_preprojection_config,
 )
 from train_gpt import load_config, make_optimizer
@@ -214,6 +216,102 @@ class QKPreprojectionTest(unittest.TestCase):
             rope_theta=10_000.0,
         )
         self.assertNotIn("frequency", normalized)
+
+
+class InputSinusoidTest(unittest.TestCase):
+    @staticmethod
+    def _config(**updates):
+        raw = {"enabled": True, **updates}
+        return normalize_input_sinusoid_config(
+            raw,
+            model_dim=8,
+            rope_theta=10_000.0,
+        )
+
+    def test_exact_anchor_gradient_and_fp32_gate(self):
+        module = InputSinusoidPosition(
+            self._config(gate_init=1.0),
+            model_dim=8,
+            extent=16,
+        )
+        torch.testing.assert_close(
+            module(11, dtype=torch.float32),
+            module.basis(11),
+            rtol=0,
+            atol=0,
+        )
+        module(9, dtype=torch.float32).square().sum().backward()
+        self.assertGreater(module.gate.grad.abs().item(), 0)
+        module.bfloat16()
+        self.assertEqual(module.gate.dtype, torch.float32)
+        self.assertEqual(module.basis.basis.dtype, torch.float32)
+
+    def test_integrated_input_is_added_once_after_input_projection(self):
+        model = IntegratedPreprojectionTest._model(
+            input_sinusoid_config={"enabled": True, "learnable_gate": False},
+        ).eval()
+        input_ids = torch.randint(0, 32, (2, 10))
+        seen = {}
+
+        def capture(_module, args):
+            seen["block_input"] = args[0].detach().clone()
+
+        handle = model.blocks[0].register_forward_pre_hook(capture)
+        try:
+            model(input_ids)
+        finally:
+            handle.remove()
+        content = model.in_proj(model.token_embedding(input_ids))
+        carrier = model.input_sinusoid(10, dtype=content.dtype)
+        torch.testing.assert_close(seen["block_input"], content + carrier[None])
+        counts = count_parameters(model)
+        self.assertEqual(counts["input_sinusoid_params"], 0)
+
+    def test_config_round_trip_and_optimizer_monitor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "use_rope": True,
+                        "input_sinusoid": {"enabled": True},
+                    }
+                )
+            )
+            config = load_config(_cli(str(path)))
+            self.assertTrue(config.input_sinusoid["enabled"])
+            restored_path = Path(directory) / "resolved.json"
+            restored_path.write_text(json.dumps(vars(config)))
+            restored = load_config(_cli(str(restored_path)))
+            self.assertEqual(restored.input_sinusoid, config.input_sinusoid)
+
+        model = IntegratedPreprojectionTest._model(
+            input_sinusoid_config={"enabled": True},
+        )
+        optimizer_args = Namespace(
+            optimizer="adamw",
+            exclude_position_from_decay=True,
+            position_lr_multiplier=0.5,
+            weight_decay=0.1,
+            learning_rate=3.0e-4,
+            beta1=0.9,
+            beta2=0.98,
+        )
+        with mock.patch("torch.cuda.is_available", return_value=False):
+            optimizer = make_optimizer(optimizer_args, model)
+        ids = torch.randint(0, 32, (2, 10))
+        model(ids, torch.randint(0, 32, (2, 10))).backward()
+        monitor = InterventionOptimizationMonitor(
+            collect_intervention_parameter_groups(model), reference_length=16
+        )
+        sample = monitor.capture_before_clip(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        monitor.capture_after_clip(sample)
+        optimizer.step()
+        metrics = monitor.capture_after_step(sample, optimizer)
+        prefix = "optimization/input_sinusoid"
+        self.assertGreater(metrics[f"{prefix}/raw_gradient/l2"], 0)
+        self.assertGreater(metrics[f"{prefix}/carrier_function_step/rms"], 0)
 
 
 class IntegratedPreprojectionTest(unittest.TestCase):

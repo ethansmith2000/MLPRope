@@ -4,8 +4,10 @@ MLPRope resolves positional settings to JSON-safe schema v2 before model
 construction. The active runtime deliberately supports three core families:
 
 1. fixed standard RoPE, or a NoPE control;
-2. additive Fourier features on projected Q/K (AddRoPE); and
-3. a sinusoid added immediately before the Q/K projections.
+2. additive Fourier features on projected Q/K (AddRoPE);
+3. a sinusoid added immediately before the Q/K projections; and
+4. a deliberately minimal one-shot input sinusoid used only as a placement
+   control.
 
 Learned AddRoPE amplitude/phase acts only on its additive carrier; the pre-Q/K
 carrier exposes only a scalar gate. RoPE is always standard and fixed when
@@ -27,6 +29,7 @@ position_content_dim: 64
 position_content_coupling: separate # shared | separate
 
 qk_preprojection: {enabled: false}
+input_sinusoid: {enabled: false}
 qk: {enabled: false}
 logit_bias: {enabled: false}
 ```
@@ -91,6 +94,28 @@ factorials even though Phase 30 found the two additive routes sub-additive.
 `tied_scalar` is the only active mode. The scalar gain and frozen Fourier table
 remain fp32 under module-wide bf16/fp16 conversion. The completed carrier is
 cast to the activation dtype before addition to `x`.
+
+## One-shot input sinusoid control
+
+```yaml
+input_sinusoid:
+  enabled: false
+  basis_dim: null       # resolves to model width
+  theta: null           # resolves to rope_theta
+  gate_init: 1.0
+  learnable_gate: true
+```
+
+This control computes
+
+```text
+x_0 = in_proj(token_embedding) + beta z(p)
+```
+
+once, before the first Transformer block. It may be combined with standard
+RoPE. It exists to test residual-input placement against repeated pre-Q/K
+injection; it does not restore the former generic residual/per-layer position
+framework. The gate and carrier table retain fp32 master values.
 
 ## Additive Q/K channel
 

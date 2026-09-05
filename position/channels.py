@@ -1816,6 +1816,45 @@ class QKPositionChannel(PreserveFP32BuffersMixin, PositionChannel):
             (q_frequency - k_frequency).pow(2).mean().sqrt().item()
         )
 
+        if self.parameter_source == "direct":
+            if self.qk_coupling == "shared":
+                q_amplitude_raw = k_amplitude_raw = self.direct_amplitude_raw
+                q_phase = k_phase = self.direct_phase
+            else:
+                q_amplitude_raw = self.q_direct_amplitude_raw
+                k_amplitude_raw = self.k_direct_amplitude_raw
+                q_phase = self.q_direct_phase
+                k_phase = self.k_direct_phase
+            for branch, amplitude_raw, phase in (
+                ("q", q_amplitude_raw, q_phase),
+                ("k", k_amplitude_raw, k_phase),
+            ):
+                if amplitude_raw is not None:
+                    amplitude = self._amplitude(amplitude_raw).detach().float()
+                    metrics[f"direct_amplitude_{branch}/mean"] = (
+                        amplitude.mean().item()
+                    )
+                    metrics[f"direct_amplitude_{branch}/min"] = (
+                        amplitude.min().item()
+                    )
+                    metrics[f"direct_amplitude_{branch}/max"] = (
+                        amplitude.max().item()
+                    )
+                    metrics[
+                        f"direct_amplitude_{branch}/nonpositive_fraction"
+                    ] = (amplitude <= 0).float().mean().item()
+                if phase is not None:
+                    effective_phase = (
+                        phase.detach().float()
+                        * self.output_config["phase_scale"]
+                    )
+                    metrics[f"direct_phase_{branch}/rms"] = (
+                        effective_phase.square().mean().sqrt().item()
+                    )
+                    metrics[f"direct_phase_{branch}/abs_max"] = (
+                        effective_phase.abs().max().item()
+                    )
+
         _stats("q", output.q)
         _stats("k", output.k)
         if self.conditioning_config["kind"] == "phase_rotation":
@@ -2053,6 +2092,9 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
 
     qk_total = 0
     qk_preprojection_total = 0
+    input_sinusoid_total = _unique_numel(
+        getattr(model, "input_sinusoid", None)
+    )
     logit_total = 0
     content_total = 0
     blocks = getattr(model, "blocks", None)
@@ -2072,12 +2114,14 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
     position_total = (
         qk_total
         + qk_preprojection_total
+        + input_sinusoid_total
         + logit_total
         + content_total
     )
     return {
         "qk_position_params": qk_total,
         "qk_preprojection_params": qk_preprojection_total,
+        "input_sinusoid_params": input_sinusoid_total,
         "logit_bias_params": logit_total,
         "position_content_params": content_total,
         "position_params": position_total,
