@@ -99,7 +99,9 @@ def run_summary(path: Path, losses: list[float]) -> dict:
     training = json.loads((path / "training_summary.json").read_text())
     provenance = json.loads((path / "run_provenance.json").read_text())
     launches = provenance.get("launches", [])
-    counts = launches[-1].get("parameter_counts", {}) if launches else {}
+    counts = provenance.get("parameter_counts", {})
+    if not counts and launches:
+        counts = launches[-1].get("parameter_counts", {})
     return {
         "final_holdout_loss": statistics.fmean(losses),
         "development_curve": development_curve(path),

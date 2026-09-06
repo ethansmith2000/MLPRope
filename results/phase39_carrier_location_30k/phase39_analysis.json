@@ -62,6 +62,16 @@
       ],
       "reference_loss": 3.7948202493134886
     },
+    "qkpre-rope_minus_addrope-direct-nope": {
+      "candidate_loss": 3.721015248913318,
+      "delta_candidate_minus_reference": -0.02058400702662766,
+      "num_paired_examples": 1024,
+      "paired_example_bootstrap_ci95": [
+        -0.02220085950684734,
+        -0.018985802272800358
+      ],
+      "reference_loss": 3.7415992559399456
+    },
     "qkpre-rope_minus_addrope-fixed-rope": {
       "candidate_loss": 3.721015248913318,
       "delta_candidate_minus_reference": -0.05444263108074665,
@@ -107,7 +117,17 @@
       },
       "elapsed_seconds": 1352.0820378989447,
       "final_holdout_loss": 3.7415992559399456,
-      "parameter_counts": {},
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "input_sinusoid_params": 0,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76189440,
+        "position_params": 12288,
+        "qk_position_params": 12288,
+        "qk_preprojection_params": 0,
+        "total": 153508224
+      },
       "peak_reserved_mib": 5120.0,
       "position_diagnostics": {
         "position/layer_00/qk/addend_k_to_k_rms_ratio": 0.894785463809967,
@@ -220,7 +240,17 @@
       },
       "elapsed_seconds": 1362.3023776311893,
       "final_holdout_loss": 3.7674081195145845,
-      "parameter_counts": {},
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "input_sinusoid_params": 0,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76189440,
+        "position_params": 12288,
+        "qk_position_params": 12288,
+        "qk_preprojection_params": 0,
+        "total": 153508224
+      },
       "peak_reserved_mib": 5120.0,
       "position_diagnostics": {
         "position/layer_00/qk/addend_k_to_k_rms_ratio": 0.6987854838371277,
@@ -333,7 +363,17 @@
       },
       "elapsed_seconds": 1345.4076767519582,
       "final_holdout_loss": 3.7754578799940646,
-      "parameter_counts": {},
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "input_sinusoid_params": 0,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76177152,
+        "position_params": 0,
+        "qk_position_params": 0,
+        "qk_preprojection_params": 0,
+        "total": 153495936
+      },
       "peak_reserved_mib": 5098.0,
       "position_diagnostics": {
         "position/layer_00/qk/addend_k_to_k_rms_ratio": 0.5696468353271484,
@@ -366,7 +406,17 @@
       },
       "elapsed_seconds": 1345.6627265468705,
       "final_holdout_loss": 3.7816507257521152,
-      "parameter_counts": {},
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "input_sinusoid_params": 1,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76177153,
+        "position_params": 1,
+        "qk_position_params": 0,
+        "qk_preprojection_params": 0,
+        "total": 153495937
+      },
       "peak_reserved_mib": 5096.0,
       "position_diagnostics": {
         "position/input_sinusoid/gate": 0.15529955923557281
@@ -384,7 +434,17 @@
       },
       "elapsed_seconds": 1351.6688793280628,
       "final_holdout_loss": 3.721015248913318,
-      "parameter_counts": {},
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "input_sinusoid_params": 0,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76177160,
+        "position_params": 8,
+        "qk_position_params": 0,
+        "qk_preprojection_params": 8,
+        "total": 153495944
+      },
       "peak_reserved_mib": 5218.0,
       "position_diagnostics": {
         "position/layer_00/qk_preprojection/gate": 0.8075387477874756,
@@ -433,7 +493,17 @@
       },
       "elapsed_seconds": 1348.6762225329876,
       "final_holdout_loss": 3.7948202493134886,
-      "parameter_counts": {},
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "input_sinusoid_params": 0,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76177152,
+        "position_params": 0,
+        "qk_position_params": 0,
+        "qk_preprojection_params": 0,
+        "total": 153495936
+      },
       "peak_reserved_mib": 5076.0,
       "position_diagnostics": {},
       "target_tokens_per_second": 181923.81232849887

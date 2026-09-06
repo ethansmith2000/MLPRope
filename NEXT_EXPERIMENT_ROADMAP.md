@@ -1,15 +1,26 @@
 # MLPRope next-experiment roadmap
 
-_Revised 2026-09-05 after repository consolidation._
+_Revised 2026-09-06 after Phases 38 and 39A completed._
 
 ## Objective
 
 Stop modifying the local carrier shape. Strengthen or falsify the broader
 claim that a tied scalar pre-Q/K sinusoid improves a standard-RoPE decoder.
 
-The completed evidence is unusually consistent but incomplete: three paired
-seeds agree at 30k, while only seed 123 has run to 200k. There is no mature
-normalization or scale transfer test. These are the largest remaining holes.
+Phase 38 and Phase 39A are complete. Mature h768 replication, h1024 scale
+transfer, and no-QKNorm robustness all passed their predeclared gates. The
+remaining work is mechanism analysis and deliberately selected transfer—not
+another local parameterization search.
+
+## Completion snapshot
+
+- Phase 38: mature h768 mean `-0.055334`; h1024 transfer `-0.040581`;
+  no-QKNorm robustness `-0.049523`, all versus matched fixed RoPE.
+- Phase 39A: pre-Q/K+RoPE `-0.073805`, input sinusoid+RoPE `-0.013170`,
+  fixed AddRoPE+RoPE `-0.019362`, direct AddRoPE+NoPE `-0.053221`, and direct
+  AddRoPE+RoPE `-0.027412`, each versus fixed RoPE at 30k, seed 123.
+- No further training phase is queued automatically. Phase 39B primarily uses
+  the completed checkpoints.
 
 ## Phase 38 — evidence-strengthening matrix
 

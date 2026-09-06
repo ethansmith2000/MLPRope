@@ -130,7 +130,9 @@ def run_summary(path: Path, losses: list[float]) -> dict:
     training = json.loads((path / "training_summary.json").read_text())
     provenance = json.loads((path / "run_provenance.json").read_text())
     launches = provenance.get("launches", [])
-    counts = launches[-1].get("parameter_counts", {}) if launches else {}
+    counts = provenance.get("parameter_counts", {})
+    if not counts and launches:
+        counts = launches[-1].get("parameter_counts", {})
     record = final_record(path)
     return {
         "final_holdout_loss": statistics.fmean(losses),
@@ -170,6 +172,10 @@ def analyze() -> dict:
             # Pre-projection versus native head-space placement at fixed carriers.
             "qkpre-rope_minus_addrope-fixed-rope": paired_summary(
                 losses["qkpre-rope"], losses["addrope-fixed-rope"]
+            ),
+            # Best pre-Q/K method versus the strongest direct AddRoPE ordering.
+            "qkpre-rope_minus_addrope-direct-nope": paired_summary(
+                losses["qkpre-rope"], losses["addrope-direct-nope"]
             ),
             # Does learning Q/K amplitude and phase improve the native carrier?
             "addrope-direct-rope_minus_addrope-fixed-rope": paired_summary(
@@ -238,6 +244,7 @@ def render(results: dict) -> str:
     special = (
         "qkpre-rope_minus_input-rope",
         "qkpre-rope_minus_addrope-fixed-rope",
+        "qkpre-rope_minus_addrope-direct-nope",
         "addrope-direct-rope_minus_addrope-fixed-rope",
         "addrope-direct-rope_minus_addrope-direct-nope",
     )
