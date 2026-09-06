@@ -48,6 +48,7 @@ V2_COMMON_KEYS = {
     "enabled",
     "application",
     "geometry",
+    "placement",
     "input",
     "mapper",
     "output",
@@ -129,6 +130,7 @@ V1_ONLY_KEYS = {"feature_map", "sharing", "apply", "rank", "mlp_hidden"}
 V2_ONLY_KEYS = {
     "application",
     "geometry",
+    "placement",
     "input",
     "mapper",
     "output",
@@ -159,6 +161,7 @@ V2_CHANNEL_DEFAULTS = {
         "enabled": False,
         "application": "additive",
         "geometry": "free",
+        "placement": "before_rope",
         "input": {
             "kind": "frozen_fourier",
             "basis_dim": None,
@@ -474,6 +477,12 @@ def normalize_position_config_v2(
 
     application = normalized["application"]
     geometry = normalized["geometry"]
+    placement = normalized["placement"]
+    if placement not in {"before_rope", "after_rope"}:
+        raise ValueError(
+            "qk.placement must be 'before_rope' or 'after_rope', "
+            f"got {placement!r}"
+        )
     if application == "rotary" or geometry == "phase":
         if normalized["enabled"]:
             raise ValueError(ROTARY_QK_REMOVED_MESSAGE)
@@ -1111,6 +1120,7 @@ def normalize_position_config_v2(
         "enabled": normalized["enabled"],
         "application": application,
         "geometry": geometry,
+        "placement": placement,
         "input": input_cfg,
         "mapper": {
             "kind": mapper_kind,

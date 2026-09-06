@@ -109,7 +109,8 @@ The runtime keeps:
 
 - standard fixed RoPE and NoPE;
 - the tied-scalar pre-Q/K carrier, initialized at gate 1.0;
-- static AddRoPE and the pointwise content-conditioned AddRoPE reference;
+- static AddRoPE, explicit before/after-RoPE carrier placement, and the
+  pointwise content-conditioned AddRoPE reference;
 - generic positional LR control and optimizer/function-step diagnostics;
 - paired evaluation, provenance, resumable checkpoints, and fused SDPA.
 

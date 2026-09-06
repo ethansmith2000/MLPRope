@@ -19,8 +19,11 @@ another local parameterization search.
 - Phase 39A: pre-Q/K+RoPE `-0.073805`, input sinusoid+RoPE `-0.013170`,
   fixed AddRoPE+RoPE `-0.019362`, direct AddRoPE+NoPE `-0.053221`, and direct
   AddRoPE+RoPE `-0.027412`, each versus fixed RoPE at 30k, seed 123.
-- No further training phase is queued automatically. Phase 39B primarily uses
-  the completed checkpoints.
+- Beyond the Phase-40 ordering check below, no further training phase is
+  queued automatically. Phase 39B primarily uses the completed checkpoints.
+- Phase 40 is the one narrow exception prompted by Phase 39A: fixed and learned
+  AddRoPE are added after standard RoPE, testing whether the weaker hybrid was
+  caused by rotating the canonical carrier to twice its base phase.
 
 ## Phase 38 — evidence-strengthening matrix
 
@@ -142,10 +145,11 @@ beat their direct control materially and remain competitive in throughput. In
 particular, do not spend mature runs on both direct AddRoPE orderings if the
 30k screen clearly resolves them.
 
-An addend applied *after* standard RoPE,
-`R_p W_q x_p + e_q(p)`, is a useful secondary ordering ablation only if
-AddRoPE+RoPE survives. It requires new runtime placement machinery and should
-not block the primary screen.
+Phase 39A activated its predeclared secondary ordering ablation: the pre-RoPE
+hybrid survived but was substantially worse than standalone direct AddRoPE.
+Phase 40 therefore tests `R_p W_q x_p + e_q(p)`, with the mixture normalized
+once, for both fixed and learned direct carriers. These two cells reuse all
+completed Phase-39 controls and do not reopen carrier-shape search.
 
 ### Phase 39B — mechanism analyses
 

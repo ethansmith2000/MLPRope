@@ -124,6 +124,7 @@ qk:
   enabled: false
   application: additive
   geometry: amplitude_phase # free | pair_normalized | amplitude_phase
+  placement: before_rope    # before_rope | after_rope
   input:
     kind: frozen_fourier
     basis_dim: null
@@ -171,6 +172,24 @@ amplitude and phase from the configured basis. `parameter_source=direct` uses
 only per-head/per-frequency parameters. `learn_amplitude` and `learn_phase`
 independently select which static components are trainable. Setting both false
 produces the exact fixed AddRoPE carrier at `amplitude_init`.
+
+`placement=before_rope` is the historical runtime ordering:
+
+```text
+q_p = R_p RMSNorm(W_q x_p + e_q(p)).
+```
+
+`placement=after_rope` instead computes:
+
+```text
+q_p = RMSNorm(R_p W_q x_p + e_q(p)).
+```
+
+It requires standard RoPE and `method_aware_rms`. Because RMSNorm commutes with
+an orthogonal rotation, this is a controlled test of whether RoPE also rotates
+the additive carrier. In particular, applying `R_p` to a canonical carrier
+already at phase `omega*p` advances it to phase `2*omega*p`; post-RoPE
+placement keeps the carrier at its original frequency.
 
 `additive_normalization=rms` normalizes the position branch per token/head and
 then applies a bounded learned gain. It controls branch magnitude without

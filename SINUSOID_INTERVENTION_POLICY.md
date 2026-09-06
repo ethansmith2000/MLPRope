@@ -84,11 +84,14 @@ is a broader method comparison because it also learns the carrier map and
 separate Q/K readouts.
 
 With `use_rope=false`, the native carrier is the historical AddRoPE
-replacement for RoPE. With `use_rope=true`, the active runtime adds the
-carrier to projected Q/K, applies method-aware Q/K normalization when selected,
-and then applies standard RoPE. This is an AddRoPE+RoPE hybrid, not the
-historical standalone method. Adding a carrier *after* the RoPE rotation would
-be a third ordering and is not currently an active option.
+replacement for RoPE. With `use_rope=true`, `placement=before_rope` adds the
+carrier to projected Q/K, applies method-aware Q/K normalization, and then
+applies standard RoPE. This rotates an already canonical carrier from phase
+`omega*p` to `2*omega*p`. The controlled `placement=after_rope` alternative
+rotates content first, adds the native carrier at phase `omega*p`, and then
+normalizes the combined Q/K. The latter is intentionally restricted to
+method-aware RMS normalization so both orderings contain one comparable
+mixture normalization.
 
 The active generic channel supports the static additive carrier and retains
 the pointwise content-conditioned reference because it produced a replicated

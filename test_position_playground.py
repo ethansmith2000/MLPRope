@@ -74,6 +74,7 @@ def qk_config(
     learn_amplitude: bool = True,
     learn_phase: bool = True,
     mapper_residual: bool | None = None,
+    placement: str = "before_rope",
 ) -> dict:
     scalars = list(scalars or [])
     basis_dim = 32 if head_coupling == "per_head_joint" else 8
@@ -83,6 +84,7 @@ def qk_config(
             "enabled": True,
             "application": application,
             "geometry": geometry,
+            "placement": placement,
             "input": {
                 "kind": basis_kind,
                 "basis_dim": basis_dim,
@@ -1434,6 +1436,94 @@ class ResidualAndWriteTest(unittest.TestCase):
         addend = attention.qk_position(7, dtype=projected.dtype).q[None]
         torch.testing.assert_close(captured["q_input"], projected + addend)
         self.assertIsInstance(attention.q_norm, torch.nn.RMSNorm)
+
+    def test_after_rope_adds_native_carrier_before_one_mixture_norm(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            parameter_source="direct",
+            amplitude_init=1.0,
+            learn_amplitude=False,
+            learn_phase=False,
+            placement="after_rope",
+        )
+        attention = Attention(
+            32,
+            4,
+            max_seq_len=16,
+            qk_config=config,
+            qk_norm_mode="method_aware_rms",
+        )
+        captured = {}
+
+        def capture_q_input(_module, args):
+            captured["q_input"] = args[0]
+
+        handle = attention.q_norm.register_forward_pre_hook(capture_q_input)
+        x = torch.randn(2, 7, 32)
+        attention(x)
+        handle.remove()
+
+        q_projected = attention._split_heads(attention.to_q(x))
+        k_projected = attention._split_heads(attention.to_k(x))
+        q_rotated, _ = attention._apply_rope(q_projected, k_projected)
+        carrier = attention.qk_position(7, dtype=q_projected.dtype).q[None]
+        torch.testing.assert_close(captured["q_input"], q_rotated + carrier)
+
+    def test_prerope_rotates_canonical_carrier_to_double_phase(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            parameter_source="direct",
+            amplitude_init=1.0,
+            learn_amplitude=False,
+            learn_phase=False,
+        )
+        attention = Attention(
+            32,
+            4,
+            max_seq_len=16,
+            qk_config=config,
+            qk_norm_mode="method_aware_rms",
+        )
+        carrier = attention.qk_position(7, dtype=torch.float32).q
+        rotated, _ = attention._apply_rope(carrier[None], carrier[None])
+        base_cos = attention.qk_position.base_cos[:7]
+        base_sin = attention.qk_position.base_sin[:7]
+        expected = torch.cat(
+            (
+                base_cos.square() - base_sin.square(),
+                2.0 * base_sin * base_cos,
+            ),
+            dim=-1,
+        )[None].expand(4, -1, -1)
+        torch.testing.assert_close(rotated[0], expected, atol=1e-6, rtol=1e-6)
+
+    def test_after_rope_rejects_ambiguous_backbones_and_norms(self):
+        config = qk_config(
+            "additive",
+            "amplitude_phase",
+            placement="after_rope",
+        )
+        with self.assertRaisesRegex(ValueError, "requires use_rope=true"):
+            Attention(
+                32,
+                4,
+                max_seq_len=16,
+                use_rope=False,
+                qk_config=config,
+                qk_norm_mode="method_aware_rms",
+            )
+        with self.assertRaisesRegex(ValueError, "requires qk_norm_mode"):
+            Attention(
+                32,
+                4,
+                max_seq_len=16,
+                qk_config=config,
+                qk_norm_mode="legacy_layernorm",
+            )
+        with self.assertRaisesRegex(ValueError, "qk.placement"):
+            qk_config("additive", "free", placement="between")
 
     def test_method_aware_diagnostics_reference_raw_projection(self):
         config = qk_config(

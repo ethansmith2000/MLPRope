@@ -185,6 +185,18 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             heads=heads,
             rope_theta=rope_theta,
         )
+        self.qk_placement = self.qk_config["placement"]
+        if self.qk_config["enabled"] and self.qk_placement == "after_rope":
+            if not use_rope:
+                raise ValueError(
+                    "qk.placement='after_rope' requires use_rope=true"
+                )
+            if qk_norm_mode != "method_aware_rms":
+                raise ValueError(
+                    "qk.placement='after_rope' requires "
+                    "qk_norm_mode='method_aware_rms' so the two placements "
+                    "use one comparable mixture normalization"
+                )
         # The relative logit-bias channel was removed; only {"enabled": false}
         # remains valid for archived-config compatibility.
         self.logit_bias_config = normalize_logit_bias_config(logit_bias_config)
@@ -348,8 +360,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         q_projected = self._split_heads(self.to_q(q_input))
         k_projected = self._split_heads(self.to_k(k_input))
         v = self._split_heads(self.to_v(x))
-        q_normed = self.q_norm(q_projected)
-        k_normed = self.k_norm(k_projected)
         dedicated_q_content = None
         dedicated_k_content = None
         if self.position_content is not None:
@@ -382,7 +392,27 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 k_content=position_k_content,
             )
 
-        if self.qk_norm_mode == "method_aware_rms":
+        position_after_rope = (
+            position_output is not None and self.qk_placement == "after_rope"
+        )
+        if position_after_rope:
+            # Compare R RMS(q + e) with RMS(R q + e): RMSNorm commutes with
+            # the orthogonal RoPE rotation, so this changes only whether RoPE
+            # rotates the native additive carrier.
+            q, k = self._apply_rope(q_projected, k_projected)
+            q_addend = (
+                position_output.q[None]
+                if position_output.q.ndim == 3
+                else position_output.q
+            )
+            k_addend = (
+                position_output.k[None]
+                if position_output.k.ndim == 3
+                else position_output.k
+            )
+            q = self.q_norm(q + q_addend)
+            k = self.k_norm(k + k_addend)
+        elif self.qk_norm_mode == "method_aware_rms":
             q = q_projected
             k = k_projected
             if position_output is not None:
@@ -401,9 +431,11 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 q = self.q_norm(q)
                 k = self.k_norm(k)
             else:
-                q = q_normed
-                k = k_normed
+                q = self.q_norm(q)
+                k = self.k_norm(k)
         else:
+            q_normed = self.q_norm(q_projected)
+            k_normed = self.k_norm(k_projected)
             q = q_normed
             k = k_normed
             if position_output is not None:
@@ -419,7 +451,7 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
                 )
                 q = q + q_addend
                 k = k + k_addend
-        if self.multiplicative_rope:
+        if self.multiplicative_rope and not position_after_rope:
             q, k = self._apply_rope(q, k)
         if self.post_position_qk_norm:
             q = self._unit_rms(q)
@@ -470,8 +502,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             return None
         q_projected = self._split_heads(self.to_q(x))
         k_projected = self._split_heads(self.to_k(x))
-        q = self.q_norm(q_projected)
-        k = self.k_norm(k_projected)
         conditioning = self.qk_position.conditioning_config
         if conditioning["kind"] == "none" or (
             conditioning["kind"] == "carrier_hypernetwork"
@@ -484,14 +514,20 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             q_content, k_content = self.position_content(x)
         parameter = next(self.qk_position.parameters(), None)
         dtype = parameter.dtype if parameter is not None else x.dtype
-        diagnostic_q_ref = q
-        diagnostic_k_ref = k
-        if self.qk_norm_mode == "method_aware_rms":
+        if self.qk_placement == "after_rope":
+            diagnostic_q_ref, diagnostic_k_ref = self._apply_rope(
+                q_projected,
+                k_projected,
+            )
+        elif self.qk_norm_mode == "method_aware_rms":
             # Method-aware additive attention composes position with the raw
             # projections and normalizes only afterward. Ratios and cosines
             # must therefore use the raw projections as their reference.
             diagnostic_q_ref = q_projected
             diagnostic_k_ref = k_projected
+        else:
+            diagnostic_q_ref = self.q_norm(q_projected)
+            diagnostic_k_ref = self.k_norm(k_projected)
         summary = self.qk_position.summarize(
             x.shape[1],
             dtype=dtype,
@@ -508,11 +544,15 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         )
         q_add = position.q[None] if position.q.ndim == 3 else position.q
         k_add = position.k[None] if position.k.ndim == 3 else position.k
-        if self.qk_norm_mode == "method_aware_rms":
+        if self.qk_placement == "after_rope":
+            final_q = self.q_norm(diagnostic_q_ref + q_add)
+            final_k = self.k_norm(diagnostic_k_ref + k_add)
+        elif self.qk_norm_mode == "method_aware_rms":
             final_q = self.q_norm(q_projected + q_add)
             final_k = self.k_norm(k_projected + k_add)
         else:
-            final_q, final_k = q + q_add, k + k_add
+            final_q = diagnostic_q_ref + q_add
+            final_k = diagnostic_k_ref + k_add
         summary["final_q_rms"] = (
             final_q.detach().float().square().mean().sqrt().item()
         )
