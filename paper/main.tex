@@ -1,0 +1,318 @@
+% Working paper draft. The venue style can be updated once a target is chosen.
+\documentclass{article}
+\usepackage[final]{iclr2025_conference}
+\usepackage{times}
+
+\usepackage{hyperref}
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{math_commands}
+\usepackage{xcolor}
+\usepackage{subcaption}
+\usepackage{multirow}
+\usepackage{xspace}
+
+\newcommand{\method}{attention-local sinusoidal carrier\xspace}
+\newcommand{\Method}{Attention-Local Sinusoidal Carrier\xspace}
+\newcommand{\RMSNorm}{\operatorname{RMSNorm}}
+
+\title{Attention-Local Sinusoidal Carriers Complement\\
+Rotary Position Embeddings}
+
+\author{%
+Ethan Smith \\
+\texttt{ethansmith2000@gmail.com}
+}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+Rotary position embeddings (RoPE) encode relative displacement by rotating
+queries and keys, but their positional contribution remains multiplicatively
+coupled to token content. We study a complementary additive path: at every
+attention layer, a fixed sinusoidal carrier is added only to the inputs of the
+query and key projections. The residual stream and values remain untouched,
+the ordinary query and key matrices learn separate reads of the shared
+carrier, and one learned scalar per layer controls its magnitude. The method
+adds only one parameter per layer and preserves standard fused attention. In
+preliminary causal-language-model experiments, it improves held-out negative
+log-likelihood over RoPE by an average of 0.055 nats across three paired
+training seeds in a 153M-parameter model trained on 1.64B tokens, by 0.041 nats
+in a 306M-parameter model, and by 0.050 nats without query-key normalization.
+Controlled injection-site experiments indicate that the gain does not follow
+from adding the same sinusoid to the residual stream, while an ordering
+ablation shows that rotating an already indexed additive carrier can create
+destructive phase composition. We use these observations to study how
+additive absolute carriers and rotary relative geometry divide positional
+work inside attention.
+\end{abstract}
+
+\section{Introduction}
+
+Self-attention is permutation equivariant unless position enters its inputs or
+logits. The original Transformer adds sinusoidal features to the residual
+stream once at the model input \citep{vaswani2017attention}; many contemporary
+language models instead rotate queries and keys using RoPE
+\citep{su2024roformer}. RoPE is efficient and naturally expresses relative
+offsets, but a position-only attention pattern must still be synthesized
+through content-bearing query and key vectors. Analyses of trained RoPE models
+suggest that different frequency bands acquire qualitatively different
+positional and semantic roles \citep{barbero2025round}.
+
+We ask whether RoPE benefits from a second, additive positional path that is
+local to attention. Our construction repeatedly presents a fixed sinusoidal
+carrier immediately before the query and key projections. It differs from
+input positional embeddings because it never writes position into the
+persistent residual stream, and it differs from a native head-space additive
+carrier because the existing query and key matrices may independently mix its
+frequency pairs. The construction is content independent, causal, compatible
+with key--value caching, and requires no attention-logit tensor or custom
+kernel.
+
+The working contributions of this study are:
+\begin{itemize}
+    \item a minimal attention-local carrier requiring one learned scalar per
+    layer and no changes to the attention kernel;
+    \item paired evidence across seeds, model scale, and query-key
+    normalization showing a persistent in-distribution language-modeling
+    improvement over RoPE;
+    \item controlled comparisons among residual-input, pre-projection, and
+    head-space carrier locations, including the order of additive composition
+    with RoPE; and
+    \item mechanistic measurements of position-stratified loss, attention
+    entropy and distance, and the content--position terms induced in attention
+    logits.
+\end{itemize}
+
+\section{Background}
+
+\subsection{Sinusoidal carriers}
+
+For even model width $d$, define inverse frequencies
+\begin{equation}
+    \nu_i = \theta_s^{-2i/d}, \qquad i=0,\ldots,d/2-1,
+\end{equation}
+and the interleaved carrier
+\begin{equation}
+    \mathbf{s}(p)_{2i}=\cos(p\nu_i), \qquad
+    \mathbf{s}(p)_{2i+1}=\sin(p\nu_i).
+    \label{eq:carrier}
+\end{equation}
+We use the same base, $\theta_s=\theta_R=10{,}000$, as the RoPE backbone unless
+stated otherwise. The two frequency banks are not identical: the carrier is sampled
+across model width $d$, whereas RoPE is sampled across head width $d_h$. The
+carrier is deterministic and depends only on the current position, so its use
+cannot expose future token content.
+
+\subsection{Rotary position embeddings}
+
+For head width $d_h$, let $\omega_j=\theta_R^{-2j/d_h}$ and let $R(p)$ be the
+block-diagonal rotation whose $j$th two-dimensional block has angle
+$p\omega_j$. With the query-key normalization used in our primary backbone,
+standard RoPE attention forms
+\begin{equation}
+    \mathbf{q}_p=R(p)\RMSNorm(W_q\mathbf{h}_p),\qquad
+    \mathbf{k}_p=R(p)\RMSNorm(W_k\mathbf{h}_p),
+    \label{eq:rope}
+\end{equation}
+so the query--key inner product depends on $R(p)^\top R(r)=R(r-p)$.
+RoPE therefore exposes relative phase differences without materializing an
+attention bias.
+
+\section{Attention-Local Sinusoidal Carriers}
+
+Let $\mathbf{h}^{(\ell)}_p$ denote the normalized residual input to attention
+layer $\ell$. Our primary method uses
+\begin{align}
+    \mathbf{u}^{(\ell)}_p
+        &= \mathbf{h}^{(\ell)}_p + \alpha_\ell\mathbf{s}(p), \\
+    \mathbf{q}^{(\ell)}_p
+        &= R(p)\RMSNorm\!\left(W_q^{(\ell)}
+             \mathbf{u}^{(\ell)}_p\right), \\
+    \mathbf{k}^{(\ell)}_p
+        &= R(p)\RMSNorm\!\left(W_k^{(\ell)}
+             \mathbf{u}^{(\ell)}_p\right), \\
+    \mathbf{v}^{(\ell)}_p
+        &= W_v^{(\ell)}\mathbf{h}^{(\ell)}_p.
+    \label{eq:method}
+\end{align}
+Each $\alpha_\ell$ is a directly optimized, unconstrained fp32 scalar
+initialized to one. It is shared between the query and key inputs, while
+$W_q^{(\ell)}$ and $W_k^{(\ell)}$ provide separate learned reads. Thus an
+$L$-layer model adds only $L$ parameters. Values and the persistent residual
+state receive no positional addition.
+
+Ignoring query-key normalization and writing $R_p=R(p)$, expanding one
+attention logit yields four classes of terms:
+\begin{align}
+  &\left\langle R_pW_q(\mathbf{h}_p+\alpha\mathbf{s}_p),
+          R_rW_k(\mathbf{h}_r+\alpha\mathbf{s}_r)\right\rangle \notag\\
+  ={}&\langle R_pW_q\mathbf{h}_p,R_rW_k\mathbf{h}_r\rangle \\
+   &+\alpha\langle R_pW_q\mathbf{h}_p,R_rW_k\mathbf{s}_r\rangle
+    +\alpha\langle R_pW_q\mathbf{s}_p,R_rW_k\mathbf{h}_r\rangle \notag\\
+   &+\alpha^2\langle R_pW_q\mathbf{s}_p,R_rW_k\mathbf{s}_r\rangle.
+    \label{eq:fourterms}
+\end{align}
+The method can therefore express a position--position prior as well as two
+content--position cross terms. Section~\ref{sec:mechanism} describes how we
+will measure their realized contributions with normalization restored.
+
+\paragraph{A distinct head-space alternative.}
+An additive carrier can instead be inserted after RoPE,
+\begin{equation}
+  \mathbf{q}_p=\RMSNorm\!\left(R(p)W_q\mathbf{h}_p+
+  \mathbf{e}_q(p)\right),
+  \label{eq:postrope}
+\end{equation}
+with an analogous key. This exposes a native head-space carrier but does not
+pass it through $W_q$ or $W_k$. If the same indexed carrier is added before
+RoPE, $R(p)\mathbf{e}(p)$ has doubled phase when its frequencies match RoPE;
+the two orderings are consequently not interchangeable.
+
+\section{Experimental Design}
+
+The frozen protocol and run matrix are specified in
+\texttt{paper/EXPERIMENT\_PLAN.md}. We summarize the main design here.
+
+\subsection{Language-model architecture and optimization}
+
+The controlled backbone is a decoder-only, pre-normalized Transformer with
+multi-head causal attention, full-head RoPE, learned query-key RMS
+normalization, GeGLU feed-forward blocks, and PyTorch fused scaled-dot-product
+attention. The canonical model has width 768, eight layers and eight heads
+(153.50M total parameters, of which 76.18M are outside the token embedding and
+language-model head). A width-1024, 12-layer, eight-head model contains
+305.63M parameters. Input and output token embeddings are untied.
+
+We train on concatenated, 1024-token OpenWebText blocks using the GPT-2
+tokenizer. AdamW uses learning rate $3\times10^{-4}$, betas $(0.9,0.98)$,
+weight decay 0.01, 200 warmup steps, linear decay, global gradient norm 1.0,
+and bf16 arithmetic. A batch contains eight sequences, or 8192 nominal
+tokens. Mature runs use 200k optimizer steps (1.638B nominal tokens).
+
+\subsection{Evaluation and uncertainty}
+
+The primary endpoint is mean token negative log-likelihood on a frozen,
+disjoint 1024-block holdout. Candidate and control use identical token order
+and name-stable paired initialization. We report paired bootstrap intervals
+over holdout blocks for within-run evaluation precision. Training seeds, not
+individual blocks pooled across seeds, are the unit of replication. We also
+report development curves, parameter count, peak memory, tokens per second,
+and equal-wall-clock comparisons where throughput differs.
+
+\section{Preliminary Language-Model Results}
+
+\begin{table}[t]
+\centering
+\caption{Mature pre-Q/K carrier evidence. $\Delta$ is candidate minus the
+paired RoPE control; lower is better. Intervals quantify paired holdout
+precision within a seed.}
+\label{tab:mature}
+\begin{tabular}{lrrr}
+\toprule
+Setting & RoPE & Carrier + RoPE & $\Delta$ \\
+\midrule
+153M, seed 123 & 3.38744 & 3.32461 & $-0.06283$ \\
+153M, seed 456 & 3.36628 & 3.32185 & $-0.04443$ \\
+153M, seed 789 & 3.38808 & 3.32933 & $-0.05875$ \\
+306M, seed 123 & 3.21391 & 3.17333 & $-0.04058$ \\
+153M, no QK norm & 3.39405 & 3.34453 & $-0.04952$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+At 153M parameters, the mean improvement across three mature training seeds
+is $-0.05533$ nats. The effect transfers to the 306M model and remains when
+query-key normalization is disabled (Table~\ref{tab:mature}). These results
+establish the primary RoPE comparison under the current OpenWebText protocol;
+they do not yet establish corpus, context-length, or modality generality.
+
+\begin{table}[t]
+\centering
+\caption{Thirty-thousand-step injection-site screen at 153M parameters and
+seed 123. These results select paper controls but are not substitutes for
+mature training.}
+\label{tab:location}
+\begin{tabular}{lr}
+\toprule
+Method & Holdout NLL \\
+\midrule
+RoPE & 3.79482 \\
+Residual-input sinusoid + RoPE & 3.78165 \\
+Pre-Q/K carrier + RoPE & \textbf{3.72102} \\
+Fixed head-space carrier before RoPE & 3.77546 \\
+Fixed head-space carrier after RoPE & 3.73960 \\
+Learned head-space carrier after RoPE & 3.73679 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The same carrier is substantially more effective at the pre-Q/K location than
+as a one-shot residual-stream input. Moving a fixed head-space carrier from
+before to after RoPE improves NLL by 0.03585 nats, consistent with the phase
+composition in Equation~\ref{eq:postrope}. Learning separate per-pair query
+and key amplitudes and phases adds only 0.00282 nats over the fixed post-RoPE
+carrier in this screen.
+
+\section{Mechanistic Analysis}
+\label{sec:mechanism}
+
+We will evaluate trained checkpoints on identical documents and report:
+\begin{enumerate}
+    \item loss by absolute query position and available-context bucket;
+    \item attention entropy normalized by the number of visible keys;
+    \item expected attended distance and mass in logarithmic distance bins;
+    \item absolute- and relative-position correlations of attention patterns;
+    \item pre-normalization magnitudes of the four terms in
+    Equation~\ref{eq:fourterms}; and
+    \item counterfactual changes after zeroing the learned carrier gates,
+    explicitly labeled as an inference-time distribution shift.
+\end{enumerate}
+Because RMS normalization makes the final logit decomposition nonlinear, term
+magnitudes will be paired with full forward-pass counterfactuals rather than
+treated as an exact additive attribution.
+
+\section{Related Work}
+
+Absolute sinusoidal embeddings originate with the Transformer
+\citep{vaswani2017attention}, while RoPE encodes relative offsets through
+query-key rotations \citep{su2024roformer}. Recent analyses study how RoPE
+frequency bands are actually used and motivate partial rotation
+\citep{barbero2025round}. Other work learns context-dependent positions
+\citep{golovneva2024cope}, mixes RoPE and position-free attention across
+layers \citep{yang2025ropenope}, or adapts RoPE to two-dimensional vision
+tokens \citep{heo2024ropevit}. Our focus is orthogonal: a fixed absolute
+carrier is repeatedly made available inside each attention block while the
+standard RoPE rotation remains intact. The final version will expand this
+section to cover additive attention decompositions, learned Fourier features,
+relative attention biases, learned RoPE spectra, and SDPA-compatible Fourier
+priors.
+
+\section{Limitations}
+
+The mature evidence currently uses one corpus, one training context, two model
+sizes below one billion parameters, and autoregressive language modeling. The
+injection-location and RoPE-ordering tables are shorter one-seed screens.
+Evaluation-block bootstrap intervals do not measure training-seed variation.
+The models are controlled research Transformers rather than replicas of a
+specific production LLM. We therefore avoid claims of universal positional
+encoding superiority or length extrapolation until the experiments in the
+frozen plan are complete.
+
+\section{Conclusion}
+
+Repeatedly exposing a fixed sinusoidal carrier only to query and key
+projections is a small, kernel-compatible complement to RoPE. Existing results
+suggest that application site and composition order matter more than learning
+carrier phase, amplitude, or frequency. The remaining experiments test
+whether this effect survives mature comparisons, data and context shifts,
+modern architectural choices, and two-dimensional spatial attention.
+
+\bibliography{references}
+\bibliographystyle{iclr2025_conference}
+
+\end{document}

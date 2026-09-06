@@ -1,0 +1,89 @@
+% ICLR 2025 LaTeX style (trimmed for local drafting)
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{iclr2025_conference}
+
+\RequirePackage{times}
+\RequirePackage{natbib}
+\RequirePackage{ifthen}
+\RequirePackage{algorithm}
+\RequirePackage{algorithmic}
+\RequirePackage{graphicx}
+\RequirePackage{color}
+\RequirePackage{titlesec}
+\RequirePackage{fancyhdr}
+\RequirePackage{hyperref}
+\RequirePackage{xspace}
+\RequirePackage{geometry}
+\RequirePackage{wrapfig}
+\RequirePackage{booktabs}
+
+% Page layout (single column, comfortable reading width)
+\geometry{letterpaper, margin=1.25in, top=1in, bottom=1in}
+\setlength{\parskip}{4pt}
+\setlength{\parindent}{0pt}
+\renewcommand{\baselinestretch}{1.05}
+
+% Title format (single column)
+\newlength\ICLR@titleparskip
+\setlength\ICLR@titleparskip{2.5pt}
+\renewcommand{\maketitle}{
+  \begingroup
+  \renewcommand\thefootnote{\fnsymbol{footnote}}
+  \def\@makefnmark{\hbox{\@textsuperscript{\normalfont\@thefnmark}}}
+  \long\def\@makefntext##1{\parindent 1em\noindent
+    \hb@xt@1.8em{%
+      \hss\@textsuperscript{\normalfont\@thefnmark}}##1}
+  \thispagestyle{empty}
+  \vskip 0.3in
+  \begin{center}
+    {\Large\bf \@title \par}
+    \vskip 0.2in
+    {\large \@author}
+    \vskip 0.3in
+  \end{center}
+  \setcounter{footnote}{0}
+  \endgroup
+}
+
+% Section spacing
+\titlespacing{\section}{0pt}{10pt plus 2pt minus 2pt}{4pt}
+\titlespacing{\subsection}{0pt}{8pt plus 2pt minus 2pt}{3pt}
+\titlespacing{\subsubsection}{0pt}{6pt plus 2pt minus 2pt}{2pt}
+
+% Header/footer
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[LE,RO]{\thepage}
+\renewcommand{\headrulewidth}{0pt}
+\renewcommand{\footrulewidth}{0pt}
+
+% Bibliography
+\bibliographystyle{abbrvnat}
+
+% Camera ready switch
+\newif\ificlrfinal
+\iclrfinalfalse
+\DeclareOption{final}{\iclrfinaltrue}
+\ProcessOptions\relax
+
+\ificlrfinal
+  \fancyhead[LO]{}
+  \fancyhead[RE]{}
+\else
+  \fancyhead[LO]{Submitted to ICLR 2025}
+  \fancyhead[RE]{Conference Track}
+  \fancypagestyle{firstpage}{\fancyhf{}\fancyfoot[C]{Under review}}
+  \thispagestyle{firstpage}
+\fi
+
+% Figure/table captions
+\RequirePackage[font=small,labelfont=bf]{caption}
+
+% Helpers
+\newcommand{\ie}{i.e.,\xspace}
+\newcommand{\eg}{e.g.,\xspace}
+\newcommand{\etc}{etc.\xspace}
+\newcommand{\etal}{\textit{et al.}\xspace}
+\newcommand{\todo}[1]{\textcolor{red}{TODO: #1}}
+
+\endinput

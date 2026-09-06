@@ -1,0 +1,345 @@
+% Core references
+
+@inproceedings{vaswani2017attention,
+  title={Attention is all you need},
+  author={Vaswani, Ashish and Shazeer, Noam and Parmar, Niki and Uszkoreit, Jakob and Jones, Llion and Gomez, Aidan N and Kaiser, {\L}ukasz and Polosukhin, Illia},
+  booktitle={Advances in Neural Information Processing Systems},
+  volume={30},
+  year={2017}
+}
+
+@article{brown2020language,
+  title={Language models are few-shot learners},
+  author={Brown, Tom and Mann, Benjamin and Ryder, Nick and Subbiah, Melanie and Kaplan, Jared D and Dhariwal, Prafulla and Neelakantan, Arvind and Shyam, Pranav and Sastry, Girish and Askell, Amanda and others},
+  journal={Advances in Neural Information Processing Systems},
+  volume={33},
+  pages={1877--1901},
+  year={2020}
+}
+
+@article{radford2019language,
+  title={Language models are unsupervised multitask learners},
+  author={Radford, Alec and Wu, Jeffrey and Child, Rewon and Luan, David and Amodei, Dario and Sutskever, Ilya},
+  journal={OpenAI blog},
+  volume={1},
+  number={8},
+  pages={9},
+  year={2019}
+}
+
+@article{gokaslan2019openwebtext,
+  title={OpenWebText corpus},
+  author={Gokaslan, Aaron and Cohen, Vanya},
+  journal={http://Skylion007.github.io/OpenWebTextCorpus},
+  year={2019}
+}
+
+% Adaptive optimizers
+
+@inproceedings{kingma2014adam,
+  title={Adam: A method for stochastic optimization},
+  author={Kingma, Diederik P and Ba, Jimmy},
+  booktitle={International Conference on Learning Representations},
+  year={2015}
+}
+
+@inproceedings{loshchilov2017adamw,
+  title={Decoupled weight decay regularization},
+  author={Loshchilov, Ilya and Hutter, Frank},
+  booktitle={International Conference on Learning Representations},
+  year={2019}
+}
+
+@inproceedings{liu2019radam,
+  title={On the variance of the adaptive learning rate and beyond},
+  author={Liu, Liyuan and Jiang, Haoming and He, Pengcheng and Chen, Weizhu and Liu, Xiaodong and Gao, Jianfeng and Han, Jiawei},
+  booktitle={International Conference on Learning Representations},
+  year={2020}
+}
+
+@inproceedings{xie2023adan,
+  title={Adan: Adaptive nesterov momentum algorithm for faster optimizing deep models},
+  author={Xie, Xingyu and Zhou, Pan and Li, Huan and Lin, Zhouchen and Yan, Shuicheng},
+  booktitle={IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  year={2024}
+}
+
+@inproceedings{chen2023lion,
+  title={Symbolic discovery of optimization algorithms},
+  author={Chen, Xiangning and Liang, Chen and Huang, Da and Real, Esteban and Wang, Kaiyuan and Liu, Yao and Pham, Hieu and Dong, Xuanyi and Luber, Thang and Cho, Cho-Jui and others},
+  booktitle={Advances in Neural Information Processing Systems},
+  volume={36},
+  year={2023}
+}
+
+@inproceedings{you2019lamb,
+  title={Large batch optimization for deep learning: Training {BERT} in 76 minutes},
+  author={You, Yang and Li, Jing and Reddi, Sashank and Hseu, Jonathan and Kumar, Sanjiv and Bhojanapalli, Srinadh and Song, Xiaodan and Demmel, James and Keutzer, Kurt and Hsieh, Cho-Jui},
+  booktitle={International Conference on Learning Representations},
+  year={2020}
+}
+
+@inproceedings{you2017lars,
+  title={Large batch training of convolutional networks},
+  author={You, Yang and Gitman, Igor and Ginsburg, Boris},
+  journal={arXiv preprint arXiv:1708.03888},
+  year={2017}
+}
+
+@inproceedings{pagliardini2024ademamix,
+  title={The {AdEMAMix} optimizer: Better, faster, older},
+  author={Pagliardini, Matteo and Ablin, Pierre and Jaggi, Martin},
+  booktitle={Advances in Neural Information Processing Systems},
+  year={2024}
+}
+
+% Second-order and preconditioned methods
+
+@inproceedings{gupta2018shampoo,
+  title={Shampoo: Preconditioned stochastic tensor optimization},
+  author={Gupta, Vineet and Koren, Tomer and Singer, Yoram},
+  booktitle={International Conference on Machine Learning},
+  pages={1842--1850},
+  year={2018}
+}
+
+@article{vyas2024soap,
+  title={{SOAP}: Improving and stabilizing {S}hampoo using {A}dam in the {P}reconditioner},
+  author={Vyas, Nikhil and Morwani, Depen and Zhao, Rosie and Shapira, Itai and Brandfonbrener, David and Janber, Lucas and Kakade, Sham},
+  journal={arXiv preprint arXiv:2409.11321},
+  year={2024}
+}
+
+@inproceedings{martens2015kfac,
+  title={Optimizing neural networks with {K}ronecker-factored approximate curvature},
+  author={Martens, James and Grosse, Roger},
+  booktitle={International Conference on Machine Learning},
+  pages={2408--2417},
+  year={2015}
+}
+
+% Gradient signal methods
+
+@inproceedings{bernstein2018signsgd,
+  title={{signSGD}: Compressed optimisation for non-convex problems},
+  author={Bernstein, Jeremy and Wang, Yu-Xiang and Azizzadenesheli, Kamyar and Anandkumar, Animashree},
+  booktitle={International Conference on Machine Learning},
+  pages={560--569},
+  year={2018}
+}
+
+@article{liang2024cautious,
+  title={Cautious optimizers: Improving training with one line of code},
+  author={Liang, Kaizhao and Liu, Lizhang and Liu, Bo and Qu, Qiang},
+  journal={arXiv preprint arXiv:2411.16085},
+  year={2024}
+}
+
+@inproceedings{hazan2015normgrad,
+  title={Beyond convexity: Stochastic quasi-convex optimization},
+  author={Hazan, Elad and Levy, Kfir Y and Shalev-Shwartz, Shai},
+  booktitle={Advances in Neural Information Processing Systems},
+  volume={28},
+  year={2015}
+}
+
+% Centered second moments and AMSGrad
+
+@inproceedings{reddi2018amsgrad,
+  title={On the convergence of {A}dam and beyond},
+  author={Reddi, Sashank J and Kale, Satyen and Kumar, Sanjiv},
+  booktitle={International Conference on Learning Representations},
+  year={2018}
+}
+
+@article{hinton2012rmsprop,
+  title={Neural networks for machine learning, lecture 6a: Overview of mini-batch gradient descent},
+  author={Hinton, Geoffrey and Srivastava, Nitish and Swersky, Kevin},
+  journal={Coursera Lecture Slides},
+  year={2012}
+}
+
+% Muon and spectral methods
+
+@article{jordan2024muon,
+  title={Muon: An optimizer for hidden layers in neural networks},
+  author={Jordan, Keller and Chen, Yuqing and Goldblum, Micah and Kolter, J Zico},
+  journal={arXiv preprint arXiv:2502.16982},
+  year={2025}
+}
+
+@article{jordan2024cifar10airbench,
+  title={CIFAR-10 airbench: 94\% accuracy in 3.29 seconds},
+  author={Jordan, Keller},
+  journal={arXiv preprint arXiv:2404.00498},
+  year={2024}
+}
+
+% Architecture components
+
+@article{shazeer2020glu,
+  title={{GLU} variants improve transformer},
+  author={Shazeer, Noam},
+  journal={arXiv preprint arXiv:2002.05202},
+  year={2020}
+}
+
+@article{su2024roformer,
+  title={{RoFormer}: Enhanced transformer with rotary position embedding},
+  author={Su, Jianlin and Ahmed, Murtadha and Lu, Yu and Pan, Shengfeng and Bo, Wen and Liu, Yunfeng},
+  journal={Neurocomputing},
+  volume={568},
+  pages={127063},
+  year={2024}
+}
+
+@inproceedings{barbero2025round,
+  title={Round and Round We Go! What Makes Rotary Positional Encodings Useful?},
+  author={Barbero, Federico and Vitvitskyi, Alex and Perivolaropoulos, Christos and Pascanu, Razvan and Veli{\v{c}}kovi{\'c}, Petar},
+  booktitle={International Conference on Learning Representations},
+  year={2025}
+}
+
+@article{golovneva2024cope,
+  title={Contextual Position Encoding: Learning to Count What's Important},
+  author={Golovneva, Olga and Wang, Tianlu and Weston, Jason and Sukhbaatar, Sainbayar},
+  journal={arXiv preprint arXiv:2405.18719},
+  year={2024}
+}
+
+@article{yang2025ropenope,
+  title={RoPE to NoPE and Back Again: A New Hybrid Attention Strategy},
+  author={Yang, Bowen and Venkitesh, Bharat and Talupuru, Dwarak and Lin, Hangyu and Cairuz, David and Blunsom, Phil and Locatelli, Acyr},
+  journal={arXiv preprint arXiv:2501.18795},
+  year={2025}
+}
+
+@inproceedings{heo2024ropevit,
+  title={Rotary Position Embedding for Vision Transformer},
+  author={Heo, Byeongho and Park, Song and Han, Dongyoon and Yun, Sangdoo},
+  booktitle={European Conference on Computer Vision},
+  year={2024}
+}
+
+@inproceedings{zhang2019rmsnorm,
+  title={Root Mean Square Layer Normalization},
+  author={Zhang, Biao and Sennrich, Rico},
+  booktitle={Advances in Neural Information Processing Systems},
+  volume={32},
+  year={2019}
+}
+
+@inproceedings{henry2020qknorm,
+  title={Query-Key Normalization for Transformers},
+  author={Henry, Alex and Dachapally, Prudhvi Raj and Pawar, Shubham Shantaram and Chen, Yuxuan},
+  booktitle={Findings of the Association for Computational Linguistics: EMNLP 2020},
+  year={2020}
+}
+
+@inproceedings{press2022alibi,
+  title={Train Short, Test Long: Attention with Linear Biases Enables Input Length Extrapolation},
+  author={Press, Ofir and Smith, Noah A. and Lewis, Mike},
+  booktitle={International Conference on Learning Representations},
+  year={2022}
+}
+
+@article{penedo2024fineweb,
+  title={The FineWeb Datasets: Decanting the Web for the Finest Text Data at Scale},
+  author={Penedo, Guilherme and Kydl{\'i}{\v{c}}ek, Hynek and allal, Loubna Ben and Lozhkov, Anton and Mitchell, Margaret and Raffel, Colin and von Werra, Leandro and Wolf, Thomas},
+  journal={arXiv preprint arXiv:2406.17557},
+  year={2024}
+}
+
+% ImageNet and vision
+
+@inproceedings{deng2009imagenet,
+  title={{ImageNet}: A large-scale hierarchical image database},
+  author={Deng, Jia and Dong, Wei and Socher, Richard and Li, Li-Jia and Li, Kai and Fei-Fei, Li},
+  booktitle={IEEE Conference on Computer Vision and Pattern Recognition},
+  pages={248--255},
+  year={2009}
+}
+
+@article{leclerc2022ffcv,
+  title={{FFCV}: Accelerating training by removing data bottlenecks},
+  author={Leclerc, Guillaume and Ilyas, Andrew and Engstrom, Logan and Park, Sung Min and Salman, Hadi and Madry, Aleksander},
+  journal={arXiv preprint arXiv:2306.12517},
+  year={2023}
+}
+
+@inproceedings{he2016deep,
+  title={Deep residual learning for image recognition},
+  author={He, Kaiming and Zhang, Xiangyu and Ren, Shaoqing and Sun, Jian},
+  booktitle={Proceedings of the IEEE Conference on Computer Vision and Pattern Recognition},
+  pages={770--778},
+  year={2016}
+}
+
+% Weight reparameterization / normalization
+
+@inproceedings{salimans2016weight,
+  title={Weight normalization: A simple reparameterization to accelerate training of deep neural networks},
+  author={Salimans, Tim and Kingma, Durk P},
+  booktitle={Advances in Neural Information Processing Systems},
+  volume={29},
+  year={2016}
+}
+
+@inproceedings{miyato2018spectral,
+  title={Spectral normalization for generative adversarial networks},
+  author={Miyato, Takeru and Kataoka, Toshiki and Koyama, Masanori and Yoshida, Yuichi},
+  booktitle={International Conference on Learning Representations},
+  year={2018}
+}
+
+% Initialization
+
+@inproceedings{glorot2010understanding,
+  title={Understanding the difficulty of training deep feedforward neural networks},
+  author={Glorot, Xavier and Bengio, Yoshua},
+  booktitle={International Conference on Artificial Intelligence and Statistics},
+  pages={249--256},
+  year={2010}
+}
+
+@inproceedings{he2015delving,
+  title={Delving deep into rectifiers: Surpassing human-level performance on {ImageNet} classification},
+  author={He, Kaiming and Zhang, Xiangyu and Ren, Shaoqing and Sun, Jian},
+  booktitle={IEEE International Conference on Computer Vision},
+  pages={1026--1034},
+  year={2015}
+}
+
+% Scaling laws
+
+@article{kaplan2020scaling,
+  title={Scaling laws for neural language models},
+  author={Kaplan, Jared and McCandlish, Sam and Henighan, Tom and Brown, Tom B and Chess, Benjamin and Child, Rewon and Gray, Scott and Radford, Alec and Wu, Jeffrey and Amodei, Dario},
+  journal={arXiv preprint arXiv:2001.08361},
+  year={2020}
+}
+
+@article{hoffmann2022training,
+  title={Training compute-optimal large language models},
+  author={Hoffmann, Jordan and Borgeaud, Sebastian and Mensch, Arthur and Buchatskaya, Elena and Cai, Trevor and Rutherford, Eliza and Casas, Diego de Las and Hendricks, Lisa Anne and Welbl, Johannes and Clark, Aidan and others},
+  journal={Advances in Neural Information Processing Systems},
+  volume={35},
+  pages={30016--30030},
+  year={2022}
+}
+
+% Finetuning models and datasets
+
+@article{jiang2023mistral,
+  title={Mistral 7{B}},
+  author={Jiang, Albert Q and Sablayrolles, Alexandre and Mensch, Arthur and Bamford, Chris and Chaplot, Devendra Singh and Casas, Diego de las and Bressand, Florian and Lengyel, Gianna and Lample, Guillaume and Saulnier, Lucile and others},
+  journal={arXiv preprint arXiv:2310.06825},
+  year={2023}
+}
+
+@article{taori2023alpaca,
+  title={Stanford {A}lpaca: An instruction-following {LLaMA} model},
+  author={Taori, Rohan and Gulrajani, Ishaan and Zhang, Tianyi and Dubois, Yann and Li, Xuechen and Guestrin, Carlos and Liang, Percy and Hashimoto, Tatsunori B},
+  journal={https://github.com/tatsu-lab/stanford\_alpaca},
+  year={2023}
+}

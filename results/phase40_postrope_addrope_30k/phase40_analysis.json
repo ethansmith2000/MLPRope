@@ -1,0 +1,106 @@
+{
+  "caveat": "Phase 40 reuses completed Phase-39 controls with identical data, initialization, optimizer, and evaluation protocol. It remains a one-training-seed mechanism screen.",
+  "comparisons": {
+    "direct_postrope_minus_direct_nope": {
+      "candidate_loss": 3.7367852753959596,
+      "ci95": [
+        -0.0064625009195879105,
+        -0.003148663596948616
+      ],
+      "delta": -0.004813980543985963,
+      "reference_loss": 3.7415992559399456
+    },
+    "direct_postrope_minus_direct_prerope": {
+      "candidate_loss": 3.7367852753959596,
+      "ci95": [
+        -0.03204191738041118,
+        -0.02919258525944315
+      ],
+      "delta": -0.030622844118624926,
+      "reference_loss": 3.7674081195145845
+    },
+    "direct_postrope_minus_fixed_postrope": {
+      "candidate_loss": 3.7367852753959596,
+      "ci95": [
+        -0.003516487166052684,
+        -0.0021177421731408685
+      ],
+      "delta": -0.0028177122585475445,
+      "reference_loss": 3.739602987654507
+    },
+    "direct_postrope_minus_qkpre_rope": {
+      "candidate_loss": 3.7367852753959596,
+      "ci95": [
+        0.01420786026865244,
+        0.017380626761587335
+      ],
+      "delta": 0.015770026482641697,
+      "reference_loss": 3.721015248913318
+    },
+    "direct_postrope_minus_rope_fixed": {
+      "candidate_loss": 3.7367852753959596,
+      "ci95": [
+        -0.05958892700728029,
+        -0.05646442935103551
+      ],
+      "delta": -0.05803497391752899,
+      "reference_loss": 3.7948202493134886
+    },
+    "fixed_postrope_minus_fixed_prerope": {
+      "candidate_loss": 3.739602987654507,
+      "ci95": [
+        -0.037308671564096584,
+        -0.03436245015473105
+      ],
+      "delta": -0.03585489233955741,
+      "reference_loss": 3.7754578799940646
+    }
+  },
+  "runs": {
+    "addrope-direct-nope": {
+      "loss": 3.7415992559399456,
+      "peak_reserved_mib": 5120.0,
+      "position_params": 12288,
+      "tokens_per_second": 181465.55691344675
+    },
+    "addrope-direct-postrope": {
+      "loss": 3.7367852753959596,
+      "peak_reserved_mib": 5120.0,
+      "position_params": 12288,
+      "tokens_per_second": 181367.11306046945
+    },
+    "addrope-direct-prerope": {
+      "loss": 3.7674081195145845,
+      "peak_reserved_mib": 5120.0,
+      "position_params": 12288,
+      "tokens_per_second": 180104.15604400006
+    },
+    "addrope-fixed-postrope": {
+      "loss": 3.739602987654507,
+      "peak_reserved_mib": 5098.0,
+      "position_params": 0,
+      "tokens_per_second": 183485.2789497555
+    },
+    "addrope-fixed-prerope": {
+      "loss": 3.7754578799940646,
+      "peak_reserved_mib": 5098.0,
+      "position_params": 0,
+      "tokens_per_second": 182365.77971097332
+    },
+    "qkpre-rope": {
+      "loss": 3.721015248913318,
+      "peak_reserved_mib": 5218.0,
+      "position_params": 8,
+      "tokens_per_second": 181521.0246772647
+    },
+    "rope-fixed": {
+      "loss": 3.7948202493134886,
+      "peak_reserved_mib": 5076.0,
+      "position_params": 0,
+      "tokens_per_second": 181923.81232849887
+    }
+  },
+  "scope": "phase40_postrope_addrope_ordering",
+  "seed": 123,
+  "training_steps": 30000
+}
