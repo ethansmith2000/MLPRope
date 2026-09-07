@@ -99,9 +99,9 @@ h768/d8 model sees:
 
 The mature three-seed result is reproducible and the h1024 test establishes
 one scale transfer, but the runs are still below a conventional compute-optimal
-token budget. There is no second-corpus, modality, or longer-context training
-transfer result yet. Those are now more valuable than another carrier-shape
-sweep.
+token budget. There is no second-corpus or modality transfer result yet.
+Context is now fixed at 1024 rather than treated as a paper axis. Those
+remaining transfer tests are more valuable than another carrier-shape sweep.
 
 ## Active implementation
 
@@ -109,26 +109,53 @@ The runtime keeps:
 
 - standard fixed RoPE and NoPE;
 - the tied-scalar pre-Q/K carrier, initialized at gate 1.0;
+- three isolated rank-32 development adapters: a residual carrier pre-map, a
+  dedicated low-rank Q/K replacement path, and a dedicated low-rank Q/K
+  residual path; all use one shared positional bottleneck and zero-initialized
+  outputs;
+- paper-ablation controls for a fixed gate, one gate shared globally across
+  layers, and an explicit subset of carrier-active layers;
 - static AddRoPE, explicit before/after-RoPE carrier placement, and the
   pointwise content-conditioned AddRoPE reference;
 - generic positional LR control and optimizer/function-step diagnostics;
 - paired evaluation, provenance, resumable checkpoints, and fused SDPA.
 
 It no longer implements learned carrier frequency, pre-Q/K smooth amplitude,
-separate Q/K preprojection transforms, dynamic RoPE, clocks, EMA, residual
-position writes, or attention-output writes. Enabled archived configurations
-fail explicitly; disabled archived blocks canonicalize to an inert active form.
+dynamic RoPE, clocks, EMA, residual position writes, or attention-output
+writes. Enabled archived configurations fail explicitly; disabled archived
+blocks canonicalize to an inert active form. The new separate Q/K pathway is a
+static, position-only low-rank readout and does not restore the removed dynamic
+machinery.
 
 ## Next evidence program
 
-The next experiments should test the method, not search its local shape space:
+The paper evidence cohort fixes context 1024, sequence batch 32, and 100k
+updates (3.277B nominal tokens). A measured RTX 5090 benchmark found batch 32
+at 215k target tokens/s and 14.3 GiB allocated; batch 64 gained only 3.2%
+throughput while allocating 26.6 GiB. The ten matched seed-123 component and
+comparison runs were launched through `gpu-claim` on 2026-09-06.
 
-1. **mechanism:** length-stratified loss plus attention entropy, attended
+The initial interactive launcher session disappeared on 2026-09-07 while the
+seven first-wave jobs were near step 58k. Every one had a complete, marked
+step-55k checkpoint. The full Phase-42-to-Phase-43 chain now runs under
+supervisor as `mlprope-phase42-43`; ten Phase-42 `gpu-claim` waiters are active
+and will resume/start as GPUs become available. This prevents another client
+session loss from terminating the suite.
+
+A separate Phase-43 development screen is staged behind completion of that
+cohort. It compares rank-32 pre-map, Q/K replacement, and Q/K residual pathways
+for 20k batch-32 steps against matched 20k RoPE and scalar-carrier parents. The
+paper matrix remains frozen; a successful Phase-43 arm must be promoted and
+rerun rather than retroactively inserted into it.
+
+The next experiments test the method rather than search its local shape space:
+
+1. **component necessity:** the RoPE/carrier factorial, fixed/global/layerwise
+   gates, and one-block versus repeated injection;
+2. **mechanism:** position-stratified loss plus attention entropy, attended
    distance, position correlation, and carrier-logit attribution from trained
    checkpoints;
-2. **factorial closure:** the missing matched NoPE cell needed to quantify the
-   mature RoPE-by-carrier interaction;
-3. **generalization:** another corpus and context-length training transfer;
+3. **generalization:** another corpus and a modernized decoder backbone;
 4. **optional broader claim:** separable 2D pre-Q/K carriers in a ViT, followed
    by a spatial DiT only if image-classification transfer succeeds.
 

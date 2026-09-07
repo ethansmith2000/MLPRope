@@ -235,7 +235,12 @@ def _sample_static_carriers(
     values = []
     for module in modules:
         output = module(reference_length, dtype=torch.float32)
-        branches = (output,) if isinstance(output, torch.Tensor) else (output.q, output.k)
+        if isinstance(output, torch.Tensor):
+            branches = (output,)
+        elif hasattr(output, "carrier_tensors"):
+            branches = output.carrier_tensors()
+        else:
+            branches = (output.q, output.k)
         for branch in branches:
             if branch.shape[-2] != reference_length:
                 raise ValueError(

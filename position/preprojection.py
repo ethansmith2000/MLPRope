@@ -1,4 +1,4 @@
-"""Attention-local sinusoidal injection before the Q/K projections."""
+"""Attention-local sinusoidal adapters around the Q/K projections."""
 
 from __future__ import annotations
 
@@ -13,8 +13,19 @@ from position.basis import FrozenFourierBasis
 from position.precision import PreserveFP32BuffersMixin
 
 
-QKPreprojectionMode = Literal["tied_scalar"]
-QK_PREPROJECTION_MODES = {"tied_scalar"}
+QKPreprojectionMode = Literal[
+    "tied_scalar",
+    "low_rank_premap",
+    "low_rank_qk_replace",
+    "low_rank_qk_residual",
+]
+QK_PREPROJECTION_MODES = {
+    "tied_scalar",
+    "low_rank_premap",
+    "low_rank_qk_replace",
+    "low_rank_qk_residual",
+}
+QK_PREPROJECTION_LOW_RANK_MODES = QK_PREPROJECTION_MODES - {"tied_scalar"}
 
 # Historical modes remain recognizable so archived disabled configs normalize
 # cleanly and archived enabled configs fail with an actionable message. Their
@@ -37,15 +48,38 @@ QK_PREPROJECTION_DEFAULTS = {
     "theta": None,
     "gate_init": 1.0,
     "learnable_gate": True,
+    "rank": 32,
+    # Model-level ablation axes. ``active_layers=None`` means every layer.
+    "gate_sharing": "per_layer",
+    "active_layers": None,
 }
 
 
 @dataclass(frozen=True)
 class QKPreprojectionOutput:
-    """Separate positional inputs for the Q and K projection branches."""
+    """Position contributions on either side of the Q/K projections.
 
-    q: torch.Tensor
-    k: torch.Tensor
+    ``*_input`` is added to the normalized residual-stream input before
+    ``W_q``/``W_k``. ``*_projected`` is added to the concatenated all-head
+    projection output before head splitting, QK normalization, and RoPE.
+    """
+
+    q_input: torch.Tensor | None = None
+    k_input: torch.Tensor | None = None
+    q_projected: torch.Tensor | None = None
+    k_projected: torch.Tensor | None = None
+
+    def carrier_tensors(self) -> tuple[torch.Tensor, ...]:
+        return tuple(
+            value
+            for value in (
+                self.q_input,
+                self.k_input,
+                self.q_projected,
+                self.k_projected,
+            )
+            if value is not None
+        )
 
 
 def _legacy_frequency_mode(config: dict) -> str:
@@ -66,7 +100,7 @@ def normalize_qk_preprojection_config(
     model_dim: int,
     rope_theta: float,
 ) -> dict:
-    """Validate and resolve the surviving tied-scalar carrier.
+    """Validate and resolve static pre-Q/K sinusoidal adapters.
 
     ``smooth_rank`` and ``frequency`` are accepted only as compatibility keys
     from archived resolved configs. An enabled historical intervention fails
@@ -95,9 +129,9 @@ def normalize_qk_preprojection_config(
     ):
         raise ValueError(
             "Learned pre-Q/K carrier shape/frequency modes were removed after "
-            "the Phase 33--37 null confirmations. Use mode='tied_scalar' with "
-            "a fixed carrier, or recover the historical implementation from "
-            "git history."
+            "the Phase 33--37 null confirmations. Use the fixed-frequency "
+            "tied scalar or low-rank pathway modes, or recover the historical "
+            "implementation from git history."
         )
     if not normalized["enabled"]:
         # A disabled archival block has no model effect. Canonicalize it so a
@@ -106,8 +140,9 @@ def normalize_qk_preprojection_config(
         normalized["mode"] = mode
     if mode not in QK_PREPROJECTION_MODES:
         raise ValueError(
-            "qk_preprojection.mode must be 'tied_scalar'; historical shape "
-            "modes were removed after Phases 33--37"
+            "qk_preprojection.mode must be one of "
+            f"{sorted(QK_PREPROJECTION_MODES)}; historical shape modes were "
+            "removed after Phases 33--37"
         )
 
     basis_dim = normalized["basis_dim"]
@@ -134,14 +169,54 @@ def normalize_qk_preprojection_config(
         raise ValueError("qk_preprojection.gate_init must be finite")
     if not isinstance(normalized["learnable_gate"], bool):
         raise TypeError("qk_preprojection.learnable_gate must be a boolean")
+    rank = normalized["rank"]
+    if isinstance(rank, bool) or not isinstance(rank, int):
+        raise TypeError("qk_preprojection.rank must be an integer")
+    if rank <= 0:
+        raise ValueError("qk_preprojection.rank must be positive")
+    if mode in QK_PREPROJECTION_LOW_RANK_MODES and rank > model_dim:
+        raise ValueError(
+            "low-rank qk_preprojection.rank must be no larger than model_dim"
+        )
+    normalized["rank"] = rank
+    if mode == "low_rank_qk_replace":
+        # This arm is nested at the standard-RoPE baseline: there is no
+        # pre-projection identity carrier and therefore no meaningful gate.
+        normalized["gate_init"] = 0.0
+        normalized["learnable_gate"] = False
+        normalized["gate_sharing"] = "per_layer"
+    gate_sharing = normalized["gate_sharing"]
+    if gate_sharing not in {"per_layer", "global"}:
+        raise ValueError(
+            "qk_preprojection.gate_sharing must be 'per_layer' or 'global'"
+        )
+    active_layers = normalized["active_layers"]
+    if active_layers is not None:
+        if not isinstance(active_layers, list):
+            raise TypeError("qk_preprojection.active_layers must be a list or null")
+        resolved_layers = []
+        for layer_idx in active_layers:
+            if isinstance(layer_idx, bool) or not isinstance(layer_idx, int):
+                raise TypeError(
+                    "qk_preprojection.active_layers must contain only integers"
+                )
+            if layer_idx < 0:
+                raise ValueError(
+                    "qk_preprojection.active_layers must be non-negative"
+                )
+            if layer_idx not in resolved_layers:
+                resolved_layers.append(layer_idx)
+        normalized["active_layers"] = sorted(resolved_layers)
     return normalized
 
 
 class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
-    """Add one tied, gated Fourier carrier before the Q and K projections.
+    """Add a static Fourier carrier around the Q and K projections.
 
-    Q and K receive the same positional input, but their existing projection
-    matrices learn separate reads. V and the residual stream are untouched.
+    The low-rank modes use a shared ``model_dim -> rank`` positional trunk.
+    ``low_rank_premap`` maps back to one shared model-space carrier before
+    W_q/W_k. The two ``low_rank_qk_*`` modes instead use separate Q/K
+    readouts in projected space. V and the residual stream are untouched.
     """
 
     _fp32_buffer_names = ("fixed_gate",)
@@ -163,6 +238,19 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
             basis_dim=model_dim,
             theta=float(config["theta"]),
         )
+
+        self.down = None
+        self.shared_up = None
+        self.q_up = None
+        self.k_up = None
+        if self.mode in QK_PREPROJECTION_LOW_RANK_MODES:
+            rank = int(config["rank"])
+            self.down = torch.nn.Linear(model_dim, rank, bias=False)
+            if self.mode == "low_rank_premap":
+                self.shared_up = torch.nn.Linear(rank, model_dim, bias=False)
+            else:
+                self.q_up = torch.nn.Linear(rank, model_dim, bias=False)
+                self.k_up = torch.nn.Linear(rank, model_dim, bias=False)
 
         gate = torch.tensor(float(config["gate_init"]), dtype=torch.float32)
         if config["learnable_gate"]:
@@ -201,11 +289,37 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
         *,
         dtype: torch.dtype,
     ) -> QKPreprojectionOutput:
-        positional = self.basis(length).to(dtype=dtype)
-        positional = positional * self.gate_value().to(dtype=dtype)
-        return QKPreprojectionOutput(q=positional, k=positional)
+        basis = self.basis(length).to(dtype=dtype)
+        anchor = basis * self.gate_value().to(dtype=dtype)
+        if self.mode == "tied_scalar":
+            return QKPreprojectionOutput(q_input=anchor, k_input=anchor)
+
+        hidden = self.down(basis)
+        if self.mode == "low_rank_premap":
+            positional = anchor + self.shared_up(hidden)
+            return QKPreprojectionOutput(q_input=positional, k_input=positional)
+
+        q_projected = self.q_up(hidden)
+        k_projected = self.k_up(hidden)
+        if self.mode == "low_rank_qk_replace":
+            return QKPreprojectionOutput(
+                q_projected=q_projected,
+                k_projected=k_projected,
+            )
+        if self.mode == "low_rank_qk_residual":
+            return QKPreprojectionOutput(
+                q_input=anchor,
+                k_input=anchor,
+                q_projected=q_projected,
+                k_projected=k_projected,
+            )
+        raise AssertionError(f"Unhandled qk_preprojection mode {self.mode!r}")
 
     def reset_output_parameters(self) -> None:
         if self.gate is not None:
             with torch.no_grad():
                 self.gate.fill_(float(self.config["gate_init"]))
+        with torch.no_grad():
+            for module in (self.shared_up, self.q_up, self.k_up):
+                if module is not None:
+                    module.weight.zero_()

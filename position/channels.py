@@ -2077,10 +2077,13 @@ def load_position_compatible_state_dict(
 def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
     """Count position parameters by typed modules, deduplicating by identity."""
 
-    def _unique_numel(module: torch.nn.Module | None) -> int:
+    def _unique_numel(
+        module: torch.nn.Module | None,
+        seen: set[int] | None = None,
+    ) -> int:
         if module is None:
             return 0
-        seen: set[int] = set()
+        seen = set() if seen is None else seen
         total = 0
         for parameter in module.parameters():
             parameter_id = id(parameter)
@@ -2091,7 +2094,9 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
         return total
 
     qk_total = 0
+    qk_seen: set[int] = set()
     qk_preprojection_total = 0
+    qk_preprojection_seen: set[int] = set()
     input_sinusoid_total = _unique_numel(
         getattr(model, "input_sinusoid", None)
     )
@@ -2103,9 +2108,12 @@ def count_position_parameters(model: torch.nn.Module) -> dict[str, int]:
             attn = getattr(block, "attn", None)
             if attn is None:
                 continue
-            qk_total += _unique_numel(getattr(attn, "qk_position", None))
+            qk_total += _unique_numel(
+                getattr(attn, "qk_position", None), qk_seen
+            )
             qk_preprojection_total += _unique_numel(
-                getattr(attn, "qk_preprojection", None)
+                getattr(attn, "qk_preprojection", None),
+                qk_preprojection_seen,
             )
             logit_total += _unique_numel(getattr(attn, "logit_bias", None))
             content_total += _unique_numel(

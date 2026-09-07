@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import math
 from typing import Literal
@@ -348,17 +349,35 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         return _flex_attention_call(q, k, v, block_mask=self._block_mask(q))
 
     def forward(self, x):
+        preprojection = None
         if self.qk_preprojection is not None:
             preprojection = self.qk_preprojection(
                 x.shape[1],
                 dtype=x.dtype,
             )
-            q_input = x + preprojection.q[None, :, :]
-            k_input = x + preprojection.k[None, :, :]
+            q_input = (
+                x
+                if preprojection.q_input is None
+                else x + preprojection.q_input[None, :, :]
+            )
+            k_input = (
+                x
+                if preprojection.k_input is None
+                else x + preprojection.k_input[None, :, :]
+            )
         else:
             q_input = k_input = x
         q_projected = self._split_heads(self.to_q(q_input))
         k_projected = self._split_heads(self.to_k(k_input))
+        if preprojection is not None:
+            if preprojection.q_projected is not None:
+                q_projected = q_projected + self._split_heads(
+                    preprojection.q_projected[None, :, :]
+                )
+            if preprojection.k_projected is not None:
+                k_projected = k_projected + self._split_heads(
+                    preprojection.k_projected[None, :, :]
+                )
         v = self._split_heads(self.to_v(x))
         dedicated_q_content = None
         dedicated_k_content = None
@@ -669,6 +688,20 @@ class Transformer(torch.nn.Module):
             model_dim=dim,
             rope_theta=rope_theta,
         )
+        configured_active_layers = normalized_qk_preprojection["active_layers"]
+        active_preprojection_layers = (
+            set(range(depth))
+            if configured_active_layers is None
+            else set(configured_active_layers)
+        )
+        if any(layer_idx >= depth for layer_idx in active_preprojection_layers):
+            raise ValueError(
+                "qk_preprojection.active_layers contains an index outside model depth"
+            )
+        if normalized_qk_preprojection["enabled"] and not active_preprojection_layers:
+            raise ValueError(
+                "enabled qk_preprojection requires at least one active layer"
+            )
         self.input_sinusoid_config = normalize_input_sinusoid_config(
             input_sinusoid_config,
             model_dim=dim,
@@ -693,8 +726,14 @@ class Transformer(torch.nn.Module):
             )
         if ff_widened_hidden_dim is not None and ff_widened_hidden_dim <= 0:
             raise ValueError("ff_widened_hidden_dim must be positive")
-        self.blocks = torch.nn.ModuleList([
-            TransformerBlock(
+        blocks = []
+        for layer_idx in range(depth):
+            layer_qk_preprojection = copy.deepcopy(normalized_qk_preprojection)
+            layer_qk_preprojection["enabled"] = bool(
+                normalized_qk_preprojection["enabled"]
+                and layer_idx in active_preprojection_layers
+            )
+            blocks.append(TransformerBlock(
                 dim,
                 heads,
                 (
@@ -715,10 +754,22 @@ class Transformer(torch.nn.Module):
                 position_content_dim=position_content_dim,
                 position_content_coupling=position_content_coupling,
                 qk_norm_mode=qk_norm_mode,
-                qk_preprojection_config=normalized_qk_preprojection,
-            )
-            for layer_idx in range(depth)
-        ])
+                qk_preprojection_config=layer_qk_preprojection,
+            ))
+        self.blocks = torch.nn.ModuleList(blocks)
+        if (
+            normalized_qk_preprojection["enabled"]
+            and normalized_qk_preprojection["learnable_gate"]
+            and normalized_qk_preprojection["gate_sharing"] == "global"
+        ):
+            active_modules = [
+                block.attn.qk_preprojection
+                for block in self.blocks
+                if block.attn.qk_preprojection is not None
+            ]
+            shared_gate = active_modules[0].gate
+            for module in active_modules[1:]:
+                module.gate = shared_gate
         self.in_proj = torch.nn.Sequential(
             torch.nn.LayerNorm(dim),
             torch.nn.Linear(dim, dim, bias=True),
@@ -849,12 +900,34 @@ class Transformer(torch.nn.Module):
                 metrics[f"{pre_prefix}/gate_k"] = k_gate.detach().float().item()
                 metrics[f"{pre_prefix}/gate"] = q_gate.detach().float().item()
                 if seq_len is not None:
-                    positional_input = preprojection(
+                    positional_output = preprojection(
                         seq_len,
                         dtype=torch.float32,
                     )
-                    q_positional_input = positional_input.q.detach()
-                    k_positional_input = positional_input.k.detach()
+                    zero = preprojection.basis(seq_len).new_zeros(
+                        seq_len,
+                        preprojection.model_dim,
+                    )
+                    q_positional_input = (
+                        zero
+                        if positional_output.q_input is None
+                        else positional_output.q_input.detach()
+                    )
+                    k_positional_input = (
+                        zero
+                        if positional_output.k_input is None
+                        else positional_output.k_input.detach()
+                    )
+                    q_direct = (
+                        zero
+                        if positional_output.q_projected is None
+                        else positional_output.q_projected.detach()
+                    )
+                    k_direct = (
+                        zero
+                        if positional_output.k_projected is None
+                        else positional_output.k_projected.detach()
+                    )
                     metrics[f"{pre_prefix}/input_q_rms"] = (
                         q_positional_input.square().mean().sqrt().item()
                     )
@@ -871,12 +944,20 @@ class Transformer(torch.nn.Module):
                     metrics[f"{pre_prefix}/input_rms"] = metrics[
                         f"{pre_prefix}/input_q_rms"
                     ]
-                    q_branch = block.attn.to_q(
-                        q_positional_input
-                    ).detach().float()
-                    k_branch = block.attn.to_k(
-                        k_positional_input
-                    ).detach().float()
+                    metrics[f"{pre_prefix}/direct_q_rms"] = (
+                        q_direct.square().mean().sqrt().item()
+                    )
+                    metrics[f"{pre_prefix}/direct_k_rms"] = (
+                        k_direct.square().mean().sqrt().item()
+                    )
+                    q_branch = (
+                        block.attn.to_q(q_positional_input).detach().float()
+                        + q_direct.float()
+                    )
+                    k_branch = (
+                        block.attn.to_k(k_positional_input).detach().float()
+                        + k_direct.float()
+                    )
                     metrics[f"{pre_prefix}/projected_q_rms"] = (
                         q_branch.square().mean().sqrt().item()
                     )
@@ -884,10 +965,34 @@ class Transformer(torch.nn.Module):
                         k_branch.square().mean().sqrt().item()
                     )
                 if normalized_diagnostic_x is not None:
-                    diagnostic_position = preprojection(
+                    diagnostic_output = preprojection(
                         normalized_diagnostic_x.shape[1],
                         dtype=normalized_diagnostic_x.dtype,
-                    ).q
+                    )
+                    diagnostic_zero = normalized_diagnostic_x.new_zeros(
+                        normalized_diagnostic_x.shape[1],
+                        preprojection.model_dim,
+                    )
+                    diagnostic_q_input = (
+                        diagnostic_zero
+                        if diagnostic_output.q_input is None
+                        else diagnostic_output.q_input
+                    )
+                    diagnostic_k_input = (
+                        diagnostic_zero
+                        if diagnostic_output.k_input is None
+                        else diagnostic_output.k_input
+                    )
+                    diagnostic_q_direct = (
+                        diagnostic_zero
+                        if diagnostic_output.q_projected is None
+                        else diagnostic_output.q_projected
+                    )
+                    diagnostic_k_direct = (
+                        diagnostic_zero
+                        if diagnostic_output.k_projected is None
+                        else diagnostic_output.k_projected
+                    )
 
                     def add_mixture_metrics(
                         name: str,
@@ -931,7 +1036,7 @@ class Transformer(torch.nn.Module):
                     add_mixture_metrics(
                         "input_mixture",
                         normalized_diagnostic_x,
-                        diagnostic_position[None],
+                        diagnostic_q_input[None],
                     )
                     q_content = block.attn._split_heads(
                         block.attn.to_q(normalized_diagnostic_x)
@@ -940,10 +1045,12 @@ class Transformer(torch.nn.Module):
                         block.attn.to_k(normalized_diagnostic_x)
                     )
                     q_position = block.attn._split_heads(
-                        block.attn.to_q(diagnostic_position[None])
+                        block.attn.to_q(diagnostic_q_input[None])
+                        + diagnostic_q_direct[None]
                     )
                     k_position = block.attn._split_heads(
-                        block.attn.to_k(diagnostic_position[None])
+                        block.attn.to_k(diagnostic_k_input[None])
+                        + diagnostic_k_direct[None]
                     )
                     for branch, content, position, norm in (
                         ("q", q_content, q_position, block.attn.q_norm),

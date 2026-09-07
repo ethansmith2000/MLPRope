@@ -87,13 +87,13 @@ class QKPreprojectionFormulaTest(unittest.TestCase):
                 handle.remove()
 
         positional = attention.qk_preprojection(6, dtype=values.dtype)
-        torch.testing.assert_close(positional.q, positional.k)
-        torch.testing.assert_close(seen["q"], values + positional.q[None])
-        torch.testing.assert_close(seen["k"], values + positional.k[None])
+        torch.testing.assert_close(positional.q_input, positional.k_input)
+        torch.testing.assert_close(seen["q"], values + positional.q_input[None])
+        torch.testing.assert_close(seen["k"], values + positional.k_input[None])
         torch.testing.assert_close(seen["v"], values)
         torch.testing.assert_close(
             attention.to_q(seen["q"]),
-            attention.to_q(values) + attention.to_q(positional.q[None]),
+            attention.to_q(values) + attention.to_q(positional.q_input[None]),
             atol=1e-6,
             rtol=1e-6,
         )
@@ -101,7 +101,15 @@ class QKPreprojectionFormulaTest(unittest.TestCase):
 
 class QKPreprojectionTest(unittest.TestCase):
     def test_only_tied_scalar_is_active_and_anchor_is_exact(self):
-        self.assertEqual(QK_PREPROJECTION_MODES, {"tied_scalar"})
+        self.assertEqual(
+            QK_PREPROJECTION_MODES,
+            {
+                "tied_scalar",
+                "low_rank_premap",
+                "low_rank_qk_replace",
+                "low_rank_qk_residual",
+            },
+        )
         module = QKPreprojectionPosition(
             _config(),
             model_dim=8,
@@ -109,8 +117,10 @@ class QKPreprojectionTest(unittest.TestCase):
         )
         output = module(11, dtype=torch.float32)
         expected = module.basis(11)
-        torch.testing.assert_close(output.q, expected, rtol=0, atol=0)
-        torch.testing.assert_close(output.k, expected, rtol=0, atol=0)
+        torch.testing.assert_close(output.q_input, expected, rtol=0, atol=0)
+        torch.testing.assert_close(output.k_input, expected, rtol=0, atol=0)
+        self.assertIsNone(output.q_projected)
+        self.assertIsNone(output.k_projected)
         self.assertEqual(sum(p.numel() for p in module.parameters()), 1)
 
     def test_gate_receives_gradient_and_reset_restores_anchor(self):
@@ -119,7 +129,9 @@ class QKPreprojectionTest(unittest.TestCase):
             model_dim=8,
             extent=16,
         )
-        loss = (module(9, dtype=torch.float32).q * torch.randn(9, 8)).sum()
+        loss = (
+            module(9, dtype=torch.float32).q_input * torch.randn(9, 8)
+        ).sum()
         loss.backward()
         self.assertGreater(module.gate.grad.abs().item(), 0)
         with torch.no_grad():
@@ -135,12 +147,12 @@ class QKPreprojectionTest(unittest.TestCase):
         )
         self.assertEqual(sum(p.numel() for p in fixed.parameters()), 0)
         self.assertEqual(set(fixed.state_dict()), {"fixed_gate"})
-        reference = fixed(1024, dtype=torch.bfloat16).q
+        reference = fixed(1024, dtype=torch.bfloat16).q_input
         fixed.bfloat16()
         self.assertEqual(fixed.basis.basis.dtype, torch.float32)
         self.assertEqual(fixed.fixed_gate.dtype, torch.float32)
         torch.testing.assert_close(
-            fixed(1024, dtype=torch.bfloat16).q,
+            fixed(1024, dtype=torch.bfloat16).q_input,
             reference,
             rtol=0,
             atol=0,
@@ -153,9 +165,92 @@ class QKPreprojectionTest(unittest.TestCase):
         target = QKPreprojectionPosition(_config(), model_dim=8, extent=16)
         target.load_state_dict(source.state_dict(), strict=True)
         torch.testing.assert_close(
-            target(9, dtype=torch.float32).q,
-            source(9, dtype=torch.float32).q,
+            target(9, dtype=torch.float32).q_input,
+            source(9, dtype=torch.float32).q_input,
         )
+
+    def test_low_rank_modes_have_exact_nested_anchors(self):
+        basis_dim = 8
+        rank = 2
+        expected_counts = {
+            "low_rank_premap": 1 + 2 * basis_dim * rank,
+            "low_rank_qk_replace": 3 * basis_dim * rank,
+            "low_rank_qk_residual": 1 + 3 * basis_dim * rank,
+        }
+        for mode, expected_count in expected_counts.items():
+            with self.subTest(mode=mode):
+                config = normalize_qk_preprojection_config(
+                    {"enabled": True, "mode": mode, "rank": rank},
+                    model_dim=basis_dim,
+                    rope_theta=10_000.0,
+                )
+                module = QKPreprojectionPosition(
+                    config,
+                    model_dim=basis_dim,
+                    extent=16,
+                )
+                module.reset_output_parameters()
+                output = module(11, dtype=torch.float32)
+                basis = module.basis(11)
+                self.assertEqual(
+                    sum(parameter.numel() for parameter in module.parameters()),
+                    expected_count,
+                )
+                if mode == "low_rank_qk_replace":
+                    self.assertIsNone(output.q_input)
+                    self.assertIsNone(output.k_input)
+                else:
+                    torch.testing.assert_close(output.q_input, basis, rtol=0, atol=0)
+                    torch.testing.assert_close(output.k_input, basis, rtol=0, atol=0)
+                if mode == "low_rank_premap":
+                    self.assertIsNone(output.q_projected)
+                    self.assertIsNone(output.k_projected)
+                else:
+                    torch.testing.assert_close(
+                        output.q_projected,
+                        torch.zeros_like(basis),
+                        rtol=0,
+                        atol=0,
+                    )
+                    torch.testing.assert_close(
+                        output.k_projected,
+                        torch.zeros_like(basis),
+                        rtol=0,
+                        atol=0,
+                    )
+
+    def test_low_rank_readouts_receive_live_initial_gradients(self):
+        for mode in (
+            "low_rank_premap",
+            "low_rank_qk_replace",
+            "low_rank_qk_residual",
+        ):
+            with self.subTest(mode=mode):
+                config = normalize_qk_preprojection_config(
+                    {"enabled": True, "mode": mode, "rank": 2},
+                    model_dim=8,
+                    rope_theta=10_000.0,
+                )
+                module = QKPreprojectionPosition(config, model_dim=8, extent=16)
+                module.reset_output_parameters()
+                output = module(9, dtype=torch.float32)
+                loss = sum(
+                    (value * torch.randn_like(value)).sum()
+                    for value in output.carrier_tensors()
+                )
+                loss.backward()
+                output_modules = (
+                    (module.shared_up,)
+                    if mode == "low_rank_premap"
+                    else (module.q_up, module.k_up)
+                )
+                self.assertTrue(
+                    all(
+                        readout.weight.grad is not None
+                        and readout.weight.grad.abs().sum().item() > 0
+                        for readout in output_modules
+                    )
+                )
 
     def test_config_rejects_invalid_active_values(self):
         with self.assertRaisesRegex(ValueError, "basis_dim=model_dim"):
@@ -169,6 +264,28 @@ class QKPreprojectionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "even model_dim"):
             normalize_qk_preprojection_config(
                 {}, model_dim=7, rope_theta=10_000.0
+            )
+        with self.assertRaisesRegex(ValueError, "gate_sharing"):
+            normalize_qk_preprojection_config(
+                {"gate_sharing": "per_head"},
+                model_dim=8,
+                rope_theta=10_000.0,
+            )
+        with self.assertRaisesRegex(TypeError, "active_layers"):
+            normalize_qk_preprojection_config(
+                {"active_layers": [0, "1"]},
+                model_dim=8,
+                rope_theta=10_000.0,
+            )
+        with self.assertRaisesRegex(TypeError, "rank"):
+            normalize_qk_preprojection_config(
+                {"rank": 2.0}, model_dim=8, rope_theta=10_000.0
+            )
+        with self.assertRaisesRegex(ValueError, "rank"):
+            normalize_qk_preprojection_config(
+                {"enabled": True, "mode": "low_rank_premap", "rank": 9},
+                model_dim=8,
+                rope_theta=10_000.0,
             )
 
     def test_historical_modes_fail_enabled_and_canonicalize_disabled(self):
@@ -355,6 +472,77 @@ class IntegratedPreprojectionTest(unittest.TestCase):
         self.assertEqual(counts["qk_preprojection_params"], 1)
         self.assertGreater(counts["qk_position_params"], 0)
 
+    def test_low_rank_modes_match_their_intended_initial_models(self):
+        ids = torch.randint(0, 32, (2, 10))
+        rope = self._model(use_rope=True).eval()
+        tied = self._model(
+            use_rope=True,
+            qk_preprojection_config={"enabled": True, "mode": "tied_scalar"},
+        ).eval()
+        replacement = self._model(
+            use_rope=True,
+            qk_preprojection_config={
+                "enabled": True,
+                "mode": "low_rank_qk_replace",
+                "rank": 4,
+            },
+        ).eval()
+        premap = self._model(
+            use_rope=True,
+            qk_preprojection_config={
+                "enabled": True,
+                "mode": "low_rank_premap",
+                "rank": 4,
+            },
+        ).eval()
+        residual = self._model(
+            use_rope=True,
+            qk_preprojection_config={
+                "enabled": True,
+                "mode": "low_rank_qk_residual",
+                "rank": 4,
+            },
+        ).eval()
+        torch.testing.assert_close(replacement(ids), rope(ids), rtol=0, atol=0)
+        torch.testing.assert_close(premap(ids), tied(ids), rtol=0, atol=0)
+        torch.testing.assert_close(residual(ids), tied(ids), rtol=0, atol=0)
+
+    def test_low_rank_modes_have_finite_end_to_end_gradients(self):
+        ids = torch.randint(0, 32, (2, 10))
+        targets = torch.randint(0, 32, (2, 10))
+        for mode in (
+            "low_rank_premap",
+            "low_rank_qk_replace",
+            "low_rank_qk_residual",
+        ):
+            with self.subTest(mode=mode):
+                model = self._model(
+                    use_rope=True,
+                    qk_norm_mode="method_aware_rms",
+                    qk_preprojection_config={
+                        "enabled": True,
+                        "mode": mode,
+                        "rank": 4,
+                    },
+                )
+                loss = model(ids, targets)
+                loss.backward()
+                adapter = model.blocks[0].attn.qk_preprojection
+                readouts = (
+                    (adapter.shared_up,)
+                    if mode == "low_rank_premap"
+                    else (adapter.q_up, adapter.k_up)
+                )
+                self.assertTrue(torch.isfinite(loss).item())
+                self.assertTrue(
+                    all(
+                        readout.weight.grad is not None
+                        and torch.isfinite(readout.weight.grad).all().item()
+                        and readout.weight.grad.abs().sum().item() > 0
+                        for readout in readouts
+                    )
+                )
+
     def test_diagnostics_report_gate_and_qknorm_mixture(self):
         model = self._model(
             qk_norm_mode="method_aware_rms",
@@ -410,6 +598,55 @@ class IntegratedPreprojectionTest(unittest.TestCase):
         gate = model.blocks[0].attn.qk_preprojection.gate
         self.assertIsNotNone(gate.grad)
         self.assertTrue(torch.isfinite(gate.grad).item())
+
+    def test_nope_resolved_config_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "nope.json"
+            path.write_text(json.dumps({"use_rope": False}))
+            config = load_config(_cli(str(path)))
+            self.assertEqual(config.pos_variant, "none")
+            resolved_path = Path(directory) / "resolved-nope.json"
+            resolved_path.write_text(json.dumps(vars(config)))
+            restored = load_config(_cli(str(resolved_path)))
+            self.assertEqual(restored.pos_variant, "none")
+            self.assertFalse(restored.use_rope)
+
+    def test_global_gate_is_one_parameter_shared_across_layers(self):
+        model = self._model(
+            depth=3,
+            qk_preprojection_config={
+                "enabled": True,
+                "gate_sharing": "global",
+            },
+        )
+        gates = [block.attn.qk_preprojection.gate for block in model.blocks]
+        self.assertTrue(all(gate is gates[0] for gate in gates[1:]))
+        self.assertEqual(count_parameters(model)["qk_preprojection_params"], 1)
+        ids = torch.randint(0, 32, (2, 10))
+        model(ids, torch.randint(0, 32, (2, 10))).backward()
+        self.assertIsNotNone(gates[0].grad)
+        self.assertTrue(torch.isfinite(gates[0].grad).item())
+
+    def test_active_layers_limit_repeated_carrier(self):
+        model = self._model(
+            depth=3,
+            qk_preprojection_config={
+                "enabled": True,
+                "active_layers": [0],
+            },
+        )
+        self.assertIsNotNone(model.blocks[0].attn.qk_preprojection)
+        self.assertIsNone(model.blocks[1].attn.qk_preprojection)
+        self.assertIsNone(model.blocks[2].attn.qk_preprojection)
+        self.assertEqual(count_parameters(model)["qk_preprojection_params"], 1)
+        with self.assertRaisesRegex(ValueError, "outside model depth"):
+            self._model(
+                depth=3,
+                qk_preprojection_config={
+                    "enabled": True,
+                    "active_layers": [3],
+                },
+            )
 
     def test_standard_rope_has_no_trainable_frequency_intervention(self):
         model = self._model(depth=3, use_rope=True)

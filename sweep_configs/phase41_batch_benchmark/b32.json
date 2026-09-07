@@ -1,0 +1,23 @@
+{
+  "base_config": "../phase33_static_qkpre_200k/phase33-rope-fixed-seed123-s200000-h768d8.json",
+  "run_name": "phase41-batchbench-rope-b32-s120-h768d8",
+  "base_output_dir": "/workspace/MLPRope/model-output/position_bias_phase41_batch_benchmark",
+  "output_dir": "/workspace/MLPRope/model-output/position_bias_phase41_batch_benchmark/phase41-batchbench-rope-b32-s120-h768d8",
+  "per_device_train_batch_size": 32,
+  "max_train_steps": 120,
+  "num_warmup_steps": 20,
+  "checkpointing_steps": null,
+  "checkpoint_keep_latest": null,
+  "checkpoint_milestones": [],
+  "resume_from_checkpoint": null,
+  "validate_every": 10000,
+  "num_validation_batches": 4,
+  "num_final_validation_batches": 4,
+  "final_validation_start_batch": 256,
+  "save_evaluation_details": false,
+  "save_final_model": false,
+  "log_every_n_steps": 20,
+  "profile_every_n_steps": 0,
+  "with_tracking": false,
+  "wandb_group": "phase41-batch-benchmark"
+}

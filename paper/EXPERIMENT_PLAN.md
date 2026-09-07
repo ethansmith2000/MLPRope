@@ -3,6 +3,10 @@
 Status: working protocol, frozen before the paper-evidence runs. Changes that
 affect a primary endpoint must be dated and justified here before launching.
 
+Revision 2026-09-06: refocused the paper ablations on necessity of the final
+method's components, removed exploratory learned carrier variants from the
+main matrix, and added a measured 8x5090/conditional 4xH200 execution plan.
+
 ## 1. Claim and method freeze
 
 The narrow primary claim is:
@@ -24,22 +28,24 @@ The primary method is fixed:
   (the sampled banks differ because model width and head width differ);
 - use ordinary fused causal SDPA.
 
-Separate Q/K gates, smooth per-frequency amplitudes, learned phase, learned
-frequency, content-dependent mappers, EMA/scan controllers, and dynamic RoPE
-are closed design branches. Existing mature results show no durable gain from
-the static refinements, and the dynamic branches do not justify their
-complexity. They may be reported as negative ablations but are not candidates.
+Separate Q/K gates, per-frequency amplitudes, learned phase or frequency,
+content-dependent mappers, EMA/scan controllers, and dynamic RoPE are closed
+exploratory branches. They are not part of the paper's main ablation matrix.
+At most, consolidate them into a compact supplementary table or a separate
+negative-results archive if they help delimit the method; do not spend paper
+compute reproducing them.
 
 ## 2. Questions the paper must answer
 
 1. **Quality:** Does the method improve held-out language-model NLL over RoPE
    after mature training and across training seeds?
-2. **Complementarity:** Does the additive carrier contribute with and without
-   RoPE, and is the joint effect more than either positional mechanism alone?
+2. **Component necessity:** Are both the carrier and RoPE needed, must the
+   carrier magnitude be learned, must it vary by layer, and must the carrier
+   be presented again at every attention block?
 3. **Location:** Is repeated attention-local injection better than conventional
    residual-input injection or native head-space addition?
-4. **Robustness:** Does the effect survive changes in scale, corpus, context
-   length, QK normalization, and a modernized decoder backbone?
+4. **Robustness:** Does the effect survive changes in batch regime, scale,
+   corpus, QK normalization, and a modernized decoder backbone?
 5. **Mechanism:** Does it alter positional loss, entropy, attended distance,
    sink behavior, or content-position logit terms in a consistent way?
 6. **Transfer:** Does the same construction help separable 2D spatial
@@ -49,25 +55,36 @@ complexity. They may be reported as negative ablations but are not candidates.
 
 ### 3.1 Core mature comparison at the canonical model
 
-All cells below should reach the same 200k-step/1.638B-token endpoint at width
-768, depth 8, eight heads, context 1024, and seed 123. Existing completed
-models are reused only when their protocol fingerprint matches.
+All cells below should use width 768, depth 8, eight heads, context 1024, and
+seed 123. The completed batch-8/200k-step cohort is retained as preliminary
+evidence. The proposed primary paper cohort uses batch 32 and 100k steps
+(3.277B nominal tokens); every matched cell must be rerun under that recipe.
 
-| ID | Method | Purpose | 200k status |
+| ID | Method | Purpose | Existing batch-8 evidence |
 |---|---|---|---|
-| `N` | no positional encoding | completes the factorial | required |
+| `N` | no positional encoding | completes the factorial | missing |
 | `R` | standard RoPE | primary control | complete |
 | `C+R` | pre-Q/K carrier + RoPE | primary method | complete |
 | `C` | pre-Q/K carrier, no RoPE | carrier-only factorial cell | complete |
-| `I+R` | one-shot residual-input sinusoid + RoPE | conventional injection location | required |
-| `A` | fixed native head-space AddRoPE, no RoPE | additive-attention comparator | required |
-| `A_post+R` | fixed native carrier after RoPE | clean head-space hybrid | required |
+| `F+R` | pre-Q/K carrier + RoPE, all gates fixed at 1 | tests whether natural fixed unit scale suffices | required |
+| `G+R` | pre-Q/K carrier + RoPE, one learned global gate | tests whether layerwise gates are necessary | required |
+| `C_1+R` | pre-Q/K carrier only in the first block + RoPE | tests whether repeated access is necessary | required |
+| `I+R` | one-shot residual-input sinusoid + RoPE | conventional injection location | required location control |
+| `A` | fixed native head-space AddRoPE, no RoPE | closest additive-attention comparator | required comparator |
+| `A_post+R` | fixed native head-space carrier after RoPE | head-space location control | required location control |
 
-The complete `N`, `R`, `C`, and `C+R` factorial is required to estimate the
-RoPE-by-carrier interaction. `I+R`, `C+R`, and `A_post+R` compare the same
-general signal at three meaningful application sites. The learned direct
-post-RoPE carrier is not a core candidate: at 30k it improves over the fixed
-carrier by only 0.0028 nats while adding 12,288 parameters.
+The complete `N`, `R`, `C`, and `C+R` factorial estimates the RoPE-by-carrier
+interaction. `F+R`, `G+R`, and `C_1+R` then remove, one at a time, learning,
+layerwise freedom, and repeated presentation from the surviving method.
+`I+R`, `C+R`, and `A_post+R` compare three meaningful application sites,
+although the head-space carrier is not algebraically identical to the
+model-space carrier because it bypasses `W_q` and `W_k`.
+
+The fixed native AddRoPE method without RoPE is the closest additive-attention
+comparator and should receive one mature run. It is a comparison method, not a
+component ablation of `C+R`. The learned direct post-RoPE carrier is not a core
+candidate: at 30k it improves over the fixed carrier by only 0.0028 nats while
+adding 12,288 parameters.
 
 The incorrect `A_pre+R` ordering is retained as a 30k mechanistic ablation. It
 need not receive a mature run unless ordering becomes a headline claim rather
@@ -94,7 +111,7 @@ carrier claim because they change the mechanism and often the attention path.
 
 ### 3.3 What not to multiply across every axis
 
-Only `R` and `C+R` are carried through the full scale/corpus/context matrix.
+Only `R` and `C+R` are carried through the scale/corpus/architecture axes.
 `A_post+R` is promoted beyond the canonical model only if its 200k result
 remains materially competitive. The large baseline table is run at one model
 size, not at every scale. This prevents the paper matrix from becoming a
@@ -102,40 +119,45 @@ Cartesian product.
 
 ## 4. Ablations
 
-### 4.1 Required, mostly already complete
+### 4.1 Primary component ablations
 
-| Ablation | Contrast | Evidence/status |
+| Question | Contrast | Interpretation |
 |---|---|---|
-| RoPE complementarity | NoPE/RoPE x carrier off/on | missing mature NoPE only |
-| injection location | input vs pre-Q/K vs post-RoPE head space | 30k complete; mature controls specified above |
-| AddRoPE ordering | native carrier before vs after RoPE | 30k complete; large effect |
-| QK normalization | QKNorm on vs off for `R` and `C+R` | 200k complete |
-| Q/K carrier coupling | tied scalar vs split Q/K scalar | 200k complete; null |
-| carrier amplitude | scalar vs per-frequency amplitude | 200k complete; null |
-| carrier phase | amplitude vs amplitude+phase | 200k complete; null |
-| carrier frequency | fixed vs learned global/smooth frequency | 200k complete; null |
+| Is the carrier useful, and does it complement RoPE? | `N`, `R`, `C`, `C+R` | complete 2-by-2 carrier/RoPE factorial |
+| Does natural fixed unit scale suffice? | `F+R` vs `C+R` | fixed `alpha_l=1` versus direct learned gates initialized at 1 |
+| Must the learned magnitude vary by layer? | `G+R` vs `C+R` | one globally shared gate versus one gate per layer |
+| Must position be re-presented at every block? | `C_1+R` vs `C+R` | first-block-only versus all-block pre-Q/K injection |
+| Does attention-local placement matter? | `I+R`, `C+R`, `A_post+R` | persistent input, model-space pre-projection, and native head-space paths |
 
-These historical ablations should be consolidated into one appendix table
-rather than rerun.
+These are the paper ablations because each removes a stated ingredient of the
+method. Run them to the canonical mature endpoint at one paired seed. The
+central three-seed result remains `C+R` versus `R`; the ablations do not need
+three seeds unless one becomes a headline claim or lands near a decision
+boundary.
 
-### 4.2 Small targeted ablations still worth considering
+The fixed-gate test deliberately fixes every gate to the declared
+initialization value, 1.0. Choosing a post-hoc fixed value from the learned run
+would test distillation of a discovered schedule, not whether the original
+learnable component is necessary. Such a follow-up can be labeled separately
+if useful. Conversely, `F+R` alone cannot establish that no fixed scalar can
+match learned gates. If the stronger claim that online gate learning is
+necessary matters, predeclare a small global fixed-alpha sweep using only the
+development split, choose once, and confirm that value in a fresh mature run.
 
-These answer questions about the surviving method rather than searching for a
-new carrier:
+### 4.2 Mechanism and robustness controls
 
-1. **Learned gate versus fixed gate:** `alpha_l` learned from 1.0 versus fixed
-   at 1.0. This determines whether adaptation is needed at all.
-2. **Per-layer versus globally shared gate:** tests whether eight independent
-   layer magnitudes are important. It changes only seven parameters.
-3. **Q-only, K-only, and Q+K injection:** isolates the two content-position
-   cross terms. This is mechanism evidence, not a promotion sweep.
-4. **Layer support:** all layers versus early half versus late half, only if
-   gate trajectories or attribution show a strong depth pattern.
+| Control | Status/use |
+|---|---|
+| QK normalization on/off for `R` and `C+R` | mature and positive; robustness evidence |
+| Q-only and K-only injection | optional 30k decomposition of the two cross terms |
+| early-half and late-half injection | run only if learned gates or attribution show a depth pattern |
+| native carrier before versus after RoPE | completed 30k ordering explanation; appendix unless promoted |
 
-Run items 1--3 initially for 30k at one paired seed. Promote only an ablation
-with an effect larger than 0.01 nats or one essential to interpreting the
-method. Do not use these cells to revise the primary method after seeing paper
-test sets without declaring a new development phase.
+Q/K split gates, per-frequency amplitudes, phases, learned frequencies,
+content-dependent mappers, and EMA controllers were development searches, not
+component ablations of the final method. Preserve their resolved configs and
+results, but do not place them alongside the causal decomposition above or
+rerun them merely to make a larger ablation table.
 
 ## 5. Hyperparameter policy
 
@@ -166,9 +188,7 @@ not used to select a new headline endpoint. If either arm is unstable at
 `6e-4`, replace it with `4.5e-4` and record the change before inspecting final
 holdout results.
 
-No theta, phase, frequency, amplitude, or gate-LR sweep is planned. For a
-longer-context experiment, change RoPE scaling only if both `R` and `C+R` use
-the identical standard scaling rule.
+No theta, phase, frequency, amplitude, or gate-LR sweep is planned.
 
 ## 6. Architecture
 
@@ -210,7 +230,9 @@ transfer test, not an attribution experiment. If the result fails, decompose
 the bundle in a separate development study. GQA/MQA is a later robustness
 test, not part of the first modern transfer.
 
-## 7. Model scales and token budgets
+## 7. Model scales, batch size, and hardware
+
+### 7.1 Controlled scales
 
 The controlled scale family is:
 
@@ -225,25 +247,89 @@ counts. Do not call this a scaling-law study: head dimension and token-to-
 parameter ratio vary. The paper's scale claim is only that the paired method
 effect transfers from M to L. Add S if a three-point trend is desired.
 
-Primary language runs use a fixed token budget across methods and, initially,
-across scales:
+### 7.2 Batch-size policy and measured 5090 envelope
 
-| Steps | Nominal tokens at 8192/step | Use |
-|---:|---:|---|
-| 20k--30k | 164M--246M | implementation/large-effect screen only |
-| 100k | 819M | robustness or promoted ablation |
-| 200k | 1.638B | minimum mature paper endpoint |
-| 400k | 3.277B | optional late-training test for L; requires a fresh schedule |
+The current machine has eight RTX 5090 GPUs with 32 GB each. Measurements from
+the existing compiled bf16 training path are:
 
-Do not extend a run whose linear scheduler already reached zero at 200k and
-describe it as a continuous 400k run. A 400k endpoint must be trained with a
-400k schedule from the beginning.
+| Model | Context | Sequences/update | Peak allocated | Throughput | Endpoint wall time |
+|---|---:|---:|---:|---:|---:|
+| M, 153M | 1024 | 8 | 5.0 GiB | 188k tokens/s | 2.47 h at 200k steps |
+| M, 153M | 1024 | 16 | 7.9 GiB | 208k tokens/s | benchmark only |
+| M, 153M | 1024 | 32 | 13.9 GiB | 215k tokens/s | about 4.2 h at 100k steps |
+| M, 153M | 1024 | 64 | 25.9 GiB | 222k tokens/s | benchmark only |
+| L, 306M | 1024 | 8 | 9.1 GiB | 88k tokens/s | 5.15 h at 200k steps |
 
-At the measured rates, one 200k M run takes about 2.5 hours on the current GPU;
-one 200k L run takes about 5.2 hours. Wall-clock estimates should be refreshed
-after any architecture or context change.
+These figures are implementation-specific measurements, not hardware claims.
+They show that VRAM is not limiting the current M/L experiments. The completed
+cohort used 8192 tokens per optimizer update and must remain labeled as that
+optimization regime. A measured benchmark of sequence batches 8, 16, 32, and
+64 selected batch 32 for the paper cohort: it provides 32,768 tokens per update
+and 100k updates, for 3.277B training tokens. Batch 64 improves throughput by
+only 3.2% over batch 32 while increasing peak allocated memory by 86%.
+Freeze the batch, learning-rate schedule, and token budget before comparing
+methods; do not mix the new cohort with old controls as if their training
+protocols were identical.
 
-## 8. Data and context generalization
+Run the canonical jobs as independent single-GPU processes. Eight independent
+paired experiments provide much more evidence per wall-clock hour than using
+all eight GPUs for data parallelism on these small models. In particular,
+eight-way data parallelism with 8192 local tokens would change the global batch
+to 65,536 and reduce the number of optimizer updates at a matched token budget.
+Use the old batch-8 results as preliminary evidence and as an explicit
+small-batch robustness cohort. If batch 32 is adopted, rerun every primary
+paper control and ablation under the new frozen recipe.
+
+For any new architecture with no reused controls, choose the effective batch
+once from a short throughput/memory pilot, then freeze it for both `R` and
+`C+R`. Report microbatch, accumulation, number of devices, global tokens per
+update, and optimizer steps separately.
+
+### 7.3 Token budgets
+
+| Cohort | Sequence batch | Steps | Nominal tokens | Role |
+|---|---:|---:|---:|---|
+| completed small-batch | 8 | 200k | 1.638B | preliminary evidence and batch robustness |
+| proposed M paper cohort | 32 | 100k | 3.277B | primary matched table |
+| implementation screen | 32 | at most 10k | at most 328M | failures only, never headline evidence |
+
+The proposed cohort has half as many optimizer updates but twice as many
+training tokens as the completed cohort. This is a deliberate new optimization
+regime, not a continuation of an old checkpoint. If a longer endpoint is later
+needed, its scheduler must be defined for that endpoint from the start.
+
+At measured throughput, a 3.277B-token M run should take roughly 4.2 hours
+before periodic evaluation and compilation. Refresh the estimate after the
+first completed run rather than extrapolating it to other model scales.
+
+### 7.4 Conditional H200 scale tier
+
+Four H200s are unnecessary for the canonical M/L evidence. Reserve them for a
+qualitatively new regime: a modern roughly billion-parameter decoder or a
+diffusion experiment whose activation memory makes the 5090s inefficient. A
+concrete language-model candidate is width 2048, 24
+layers, 16 heads, tied embeddings, and the modern backbone in Section 6.2
+(approximately 1.3B parameters, subject to an exact implementation count).
+
+For that new tier, start with a shared target of 65,536 global tokens per
+optimizer update and a token-based training schedule; this is a starting point
+for a paired pilot, not an inherited claim from the small-model setup.
+Benchmark single-GPU memory and four-GPU distributed throughput before
+freezing the microbatch and accumulation. Only run the full scaled pair if the
+M-scale modern-backbone transfer is positive. This makes H200 time
+evidence-bearing rather than an expensive way to repeat jobs that already fit
+comfortably.
+
+The proposed evidence configuration is context 1024 and 20B training tokens,
+or about 305k optimizer updates at the proposed global batch. Use a schedule
+defined for the full 20B tokens from the start and retain intermediate 5B and
+10B checkpoints; do not train a decayed 10B-token run and then extend it. The
+four devices may run the paired methods concurrently with two GPUs each or
+sequentially with four GPUs each, whichever gives better measured end-to-end
+throughput. Use a corpus slice with enough unique tokens rather than cycling a
+10B-token sample without reporting it.
+
+## 8. Data protocol and corpus generalization
 
 ### 8.1 Canonical corpus
 
@@ -268,34 +354,23 @@ concatenation, record the dataset revision and file hashes, and use the same
 Do not compare raw NLL numerically across corpora as if token distributions
 were identical; compare the paired method delta within each corpus.
 
-### 8.3 Context-length training
-
-Test `R` and `C+R` at training lengths 512, 1024, and 2048 while keeping
-nominal tokens per optimizer step fixed at 8192:
-
-| Context | Sequences/step | Steps | Nominal tokens |
-|---:|---:|---:|---:|
-| 512 | 16 | 200k | 1.638B |
-| 1024 | 8 | 200k | 1.638B |
-| 2048 | 4 | 200k | 1.638B |
-
-Use gradient accumulation if a microbatch does not fit, without changing the
-effective batch tokens. Primary evaluation is in-distribution at the training
-length. Extrapolation evaluation at 2x and 4x length is secondary and must
-report position-wise loss, short-context retention, and the exact RoPE scaling
-rule. A model's ability to execute the sinusoid at a longer length is not by
-itself evidence of useful length generalization.
+All language-model training and primary evaluation use context 1024. Context
+length is deliberately held fixed rather than treated as another experimental
+axis. This keeps the paper focused and avoids conflating the carrier effect
+with length extrapolation or RoPE-scaling choices.
 
 ## 9. Mechanism measurements
 
 Prefer checkpoint analysis over training more variants:
 
 1. token NLL by absolute-position and available-context buckets;
-2. attention entropy divided by `log(number of visible keys)`;
+2. attention entropy divided by `log(number of visible keys)` for queries with
+   at least two visible keys (report the first position separately);
 3. expected attended distance and attention mass in logarithmic distance bins;
 4. mass assigned to the first token and other attention sinks;
 5. correlation of attention with absolute query/key position and relative
-   distance, stratified by layer and head;
+   distance, stratified by layer and head and controlled for the triangular
+   causal support;
 6. pre-normalization RMS of content-content, content-position,
    position-content, and position-position logit terms;
 7. full-attention counterfactuals with carrier terms removed before QK
@@ -370,10 +445,13 @@ cheap substitute for the cleaner ViT attribution.
 
 ### Stage A: close the mature canonical table
 
-1. Verify/reuse `R`, `C`, and `C+R` at 200k.
-2. Train `N`, `I+R`, fixed `A`, and fixed `A_post+R` at 200k, seed 123.
-3. Consolidate historical static-shape/frequency/QK-coupling ablations.
-4. Run checkpoint-only mechanism analyses.
+1. Preserve the completed batch-8 `R`, `C`, and `C+R` evidence as its own
+   cohort.
+2. Under the frozen paper recipe, train `N`, `R`, `C`, `C+R`, `F+R`, `G+R`,
+   and `C_1+R` at seed 123.
+3. Train the matched comparator/location cells `I+R`, `A`, and `A_post+R`.
+4. Preserve historical search results outside the main ablation matrix.
+5. Run checkpoint-only mechanism analyses.
 
 This stage is mandatory. If `C+R` does not remain the best attention-local
 method at mature horizon, revise the paper hierarchy but do not hide the
@@ -381,11 +459,11 @@ result.
 
 ### Stage B: robustness breadth
 
-1. FineWeb-Edu M-scale pair (`R`, `C+R`), 200k.
-2. Context-512 and context-2048 M-scale pairs, 200k.
-3. Learning-rate outer-point pairs, 100k.
-4. Optional S-scale pair, 200k.
-5. Modern-backbone M-scale pair, 200k.
+1. FineWeb-Edu M-scale pair (`R`, `C+R`) at the frozen paper budget.
+2. Learning-rate outer-point pairs at the frozen batch and a reduced budget.
+3. Fresh L-scale `R`/`C+R` pair with an appropriately increased token budget.
+4. Optional S-scale pair.
+5. Modern-backbone M-scale pair.
 
 Stop expanding an axis if the paired effect reverses materially. Diagnose the
 interaction before averaging incompatible settings.
@@ -395,7 +473,9 @@ interaction before averaging incompatible settings.
 1. Implement and audit the recognized baseline table at canonical M scale.
 2. ViT-S/16 2D transfer.
 3. Replicate only the successful transferred result.
-4. Consider DiT only after the ViT endpoint.
+4. If the modern M-scale result is positive, benchmark and run the roughly
+   1.3B `R`/`C+R` pair on four H200s.
+5. Consider DiT only after the ViT endpoint.
 
 ### Discovery during paper experiments
 
@@ -404,19 +484,41 @@ hypothesis. Test it on a separate development slice/configuration, document
 the revision, then rerun every affected primary comparison. Do not silently
 tune against the frozen paper holdout.
 
+The first such isolated branch is Phase 43: three rank-32, position-only
+low-rank pathway variants at batch 32 for 20k steps. They test a residual
+pre-map, a dedicated Q/K replacement, and a dedicated Q/K residual, alongside
+matched 20k RoPE and scalar-carrier controls. Phase 43 does not alter the
+Stage-A table. Promotion requires a meaningful improvement over the matched
+parent together with active, finite adapter optimization; any promoted method
+then requires a newly frozen matched evidence cohort.
+
+For this development screen, replacement is paired with the 20k RoPE control;
+pre-map and Q/K residual are paired with the 20k scalar-carrier control. The
+predeclared promotion gate is `-0.003` mean NLL on the disjoint 1,024-example
+holdout with a below-zero paired interval, a non-collapsing late curve, and
+finite active adapter updates. A passing arm receives a longer confirmation
+and a parameter-matched FFN control before affecting the primary method.
+
 ## 13. Immediate run recommendation
 
-The next GPU batch should be Stage A, not more seed replication:
+After the batch benchmark freezes the paper recipe, the first evidence batch
+should be the primary seed-123 cells, not more learned carrier-shape variants:
 
-1. mature NoPE;
-2. mature residual-input sinusoid + RoPE;
-3. mature fixed AddRoPE without RoPE;
-4. mature fixed post-RoPE AddRoPE + RoPE.
+1. NoPE (`N`);
+2. RoPE (`R`);
+3. pre-Q/K carrier without RoPE (`C`);
+4. pre-Q/K carrier + RoPE (`C+R`);
+5. fixed-gate carrier + RoPE (`F+R`);
+6. globally shared learned gate + RoPE (`G+R`);
+7. first-block-only pre-Q/K carrier + RoPE (`C_1+R`);
+8. residual-input sinusoid + RoPE (`I+R`);
+9. fixed native AddRoPE without RoPE (`A`);
+10. fixed post-RoPE head-space carrier + RoPE (`A_post+R`).
 
-All four are M-scale, seed 123, 200k-step runs and can execute in parallel.
-They close the factorial and location comparisons using already completed
-`R`, `C`, and `C+R` controls. Expected wall time is about 2.5 hours per GPU on
-the current box, plus validation and compilation.
+Run up to seven concurrently on the currently available 5090s and let the
+shared queue start the remaining three as devices free up. The old batch-8
+controls are reused as preliminary and batch-robustness evidence, not as
+matched controls for this new cohort.
 
 ## 14. Literature anchors for the protocol
 
@@ -434,3 +536,6 @@ the current box, plus validation and compilation.
 - [FineWeb](https://arxiv.org/abs/2406.17557) and a candidate pinned
   [FineWeb-Edu 10B sample revision](https://huggingface.co/datasets/HuggingFaceFW/fineweb-edu/tree/05c1931294b0d1379055d1f802d369f2c3bb2f4b/sample/10BT):
   proposed second-corpus source; pin a commit rather than using a moving branch.
+- [Training Compute-Optimal Large Language Models](https://arxiv.org/abs/2203.15556):
+  motivates increasing the token budget with model scale; the proposed XL
+  setting is a transfer test, not a new scaling-law estimate.

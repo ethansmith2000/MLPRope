@@ -3340,3 +3340,87 @@ steps through `gpu-claim`. Peak reserved memory was 4.89--5.02 GiB for the
 no-QKNorm h768 pair and 9.34--9.59 GiB for the h1024 pair. The 20-step design
 intentionally consumed the complete throughput warmup window, so it validates
 execution and memory rather than providing a throughput estimate.
+
+## 2026-09-06 — Batch-32 paper cohort launched
+
+The paper plan dropped context-length training as an experimental axis and
+fixed all language-model runs at context 1024. A 120-step compiled RoPE
+benchmark compared sequence batches 8, 16, 32, and 64 on individual RTX 5090s.
+Target-token throughput was 187,843, 207,515, 215,031, and 221,831 tokens/s;
+peak allocated memory was 5,066, 8,136, 14,277, and 26,558 MiB, respectively.
+Batch 32 was selected: batch 64 added only 3.2% throughput while using 86% more
+allocated memory.
+
+The new primary cohort uses sequence batch 32, 100k optimizer updates, and
+3.277B nominal tokens. It is a fresh matched protocol; completed batch-8/200k
+models remain separately labeled preliminary and batch-robustness evidence.
+The seed-123 matrix has ten cells: NoPE, RoPE, carrier-only, carrier+RoPE,
+fixed-gate carrier+RoPE, globally shared-gate carrier+RoPE, first-block-only
+carrier+RoPE, input-sinusoid+RoPE, fixed AddRoPE without RoPE, and fixed
+post-RoPE AddRoPE+RoPE.
+
+The implementation added only the two final-method ablation controls:
+`gate_sharing` and `active_layers`. The 52-test focused suite passed, and all
+three new structures completed compiled bf16 batch-32 preflights. The first
+NoPE launch exposed a resolved-config round-trip bug for the derived
+`pos_variant="none"` label; it failed before model construction, the loader was
+fixed with a regression test, and NoPE was requeued. The remaining jobs were
+healthy at launch and are managed exclusively through `gpu-claim`.
+
+## 2026-09-07 — Phase 43 low-rank positional-pathway screen staged
+
+Three static position-only adapters were added to test whether the full-width
+pre-Q/K sinusoid is necessary and whether position benefits from parameters
+not shared with content. Every adapter consumes the same frozen model-width
+Fourier basis. The rank-32 pre-map uses a shared residual
+`s + Up(Down(s))` before `W_q/W_k`; its zero-initialized up-projection makes it
+exactly equal to the promoted scalar carrier at initialization. The dedicated
+replacement uses one shared `Down(s)` and separate zero-initialized Q/K
+readouts, so it starts exactly at fixed RoPE. The dedicated residual adds those
+readouts on top of the scalar pre-Q/K carrier, so it also starts exactly at the
+promoted method.
+
+The latter two implement the proposed `d -> r -> 2d` factorization with a
+shared bottleneck and branch-specific output maps. At h768/d8 and rank 32, the
+pre-map adds 393,224 positional parameters, the replacement 589,824, and the
+residual 589,832. All direct outputs enter before the existing method-aware Q/K
+RMSNorm and standard RoPE. There are no biases, content inputs, scans, learned
+frequencies, or causal-state dependencies.
+
+This is related to the old Phase-2 low-rank shared-trunk/separate-readout run,
+but is not a duplicate: Phase 2 operated in head-space without standard RoPE
+and at a 10k batch-8 horizon. Phase 43 uses the current model-space sinusoid,
+standard RoPE, batch 32, and 20k steps. It is explicitly a development screen,
+not part of the frozen Phase-42 paper cohort.
+
+The three modes match their intended parent models bit-exactly at
+initialization in CPU integration tests, their zero output projections receive
+finite nonzero first-step gradients, all 121 CPU tests pass with one expected
+CUDA-only skip, and every generated config round-trips and dry-runs. Three
+20-step compiled GPU preflights will run first; only if all succeed will the
+five 20k jobs be submitted through `gpu-claim`: the three adapters plus matched
+20k RoPE and scalar-carrier controls. Separate controls are required because a
+20k linear schedule is not comparable to step 20k of Phase 42's 100k linear
+schedule. The launcher waits for all ten Phase-42 completion markers before
+releasing Phase 43, preserving paper-cohort priority.
+
+The replacement is compared with the matched RoPE control; the pre-map and
+dedicated residual are compared with the matched scalar-carrier control. The
+screen gate is at least `-0.003` mean NLL on the disjoint 1,024-example final
+holdout with a below-zero paired interval, non-collapsing late development
+curves, and finite active adapter diagnostics. Passing promotes a longer
+confirmation and parameter-matched FFN control, not an automatic paper claim.
+
+## 2026-09-07 — Phase 42 interruption and durable resume
+
+The interactive Phase-42 launcher and its seven active children disappeared
+while training logs were near step 58k. There was no model failure or OOM, and
+all seven runs contained complete `CHECKPOINT_COMPLETE.json` markers at step
+55k. No Phase-43 preflight had started. Other projects subsequently claimed
+all GPUs.
+
+The ten-cell Phase-42 launcher and dependent Phase-43 preflight/main/analysis
+chain were moved under supervisor as `mlprope-phase42-43`. Ten cooperative
+`gpu-claim` waiters are now active. The seven partial runs will restore model,
+optimizer, scheduler, sampler, and RNG state from step 55k; the three untouched
+arms will start normally. Phase 43 remains downstream of completed Phase 42.

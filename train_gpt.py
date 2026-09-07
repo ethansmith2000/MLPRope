@@ -367,7 +367,14 @@ def load_config(cli_args):
     # ``custom`` is a derived label written into completed training configs,
     # not a construction preset. Accepting it here makes current saved configs
     # round-trip without weakening unknown-key validation.
-    preset = None if cfg["pos_variant"] == "custom" else cfg["pos_variant"]
+    # ``custom`` and ``none`` are derived labels written into resolved configs,
+    # not construction presets. Both must round-trip when a generated config is
+    # loaded for training.
+    preset = (
+        None
+        if cfg["pos_variant"] in {"custom", "none"}
+        else cfg["pos_variant"]
+    )
     if preset is not None and preset not in POSITION_PRESETS:
         raise ValueError(f"Unknown position preset: {preset!r}")
 

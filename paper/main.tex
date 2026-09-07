@@ -191,8 +191,19 @@ language-model head). A width-1024, 12-layer, eight-head model contains
 We train on concatenated, 1024-token OpenWebText blocks using the GPT-2
 tokenizer. AdamW uses learning rate $3\times10^{-4}$, betas $(0.9,0.98)$,
 weight decay 0.01, 200 warmup steps, linear decay, global gradient norm 1.0,
-and bf16 arithmetic. A batch contains eight sequences, or 8192 nominal
-tokens. Mature runs use 200k optimizer steps (1.638B nominal tokens).
+and bf16 arithmetic. The preliminary cohort uses eight sequences per update
+for 200k optimizer steps (1.638B nominal tokens). The matched paper cohort
+uses 32 sequences per update for 100k steps (3.277B nominal tokens), selected
+by a predeclared throughput and memory benchmark. Results from the two batch
+regimes are reported separately rather than pooled as matched runs.
+
+The component ablation first completes a two-by-two factorial over carrier
+presence and RoPE presence. Within the carrier-plus-RoPE method, it then tests
+fixed unit magnitude versus learned magnitude, a globally shared versus
+per-layer learned gate, and first-block-only versus repeated all-block
+injection. Exploratory
+learned phases, frequencies, and content-dependent carrier mappers are not
+part of this primary matrix.
 
 \subsection{Evaluation and uncertainty}
 
@@ -246,7 +257,6 @@ Residual-input sinusoid + RoPE & 3.78165 \\
 Pre-Q/K carrier + RoPE & \textbf{3.72102} \\
 Fixed head-space carrier before RoPE & 3.77546 \\
 Fixed head-space carrier after RoPE & 3.73960 \\
-Learned head-space carrier after RoPE & 3.73679 \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -254,9 +264,7 @@ Learned head-space carrier after RoPE & 3.73679 \\
 The same carrier is substantially more effective at the pre-Q/K location than
 as a one-shot residual-stream input. Moving a fixed head-space carrier from
 before to after RoPE improves NLL by 0.03585 nats, consistent with the phase
-composition in Equation~\ref{eq:postrope}. Learning separate per-pair query
-and key amplitudes and phases adds only 0.00282 nats over the fixed post-RoPE
-carrier in this screen.
+composition in Equation~\ref{eq:postrope}.
 
 \section{Mechanistic Analysis}
 \label{sec:mechanism}
@@ -294,7 +302,7 @@ priors.
 
 \section{Limitations}
 
-The mature evidence currently uses one corpus, one training context, two model
+The mature evidence currently uses one corpus, one fixed training context, two model
 sizes below one billion parameters, and autoregressive language modeling. The
 injection-location and RoPE-ordering tables are shorter one-seed screens.
 Evaluation-block bootstrap intervals do not measure training-seed variation.
@@ -307,10 +315,11 @@ frozen plan are complete.
 
 Repeatedly exposing a fixed sinusoidal carrier only to query and key
 projections is a small, kernel-compatible complement to RoPE. Existing results
-suggest that application site and composition order matter more than learning
-carrier phase, amplitude, or frequency. The remaining experiments test
-whether this effect survives mature comparisons, data and context shifts,
-modern architectural choices, and two-dimensional spatial attention.
+suggest that application site and composition order are important. The
+remaining experiments isolate the contribution of RoPE, learned layerwise
+gating, and repeated per-block access, then test whether the effect survives
+data shifts, a larger-batch paper recipe, modern architectural choices, scale,
+and two-dimensional spatial attention.
 
 \bibliography{references}
 \bibliographystyle{iclr2025_conference}
