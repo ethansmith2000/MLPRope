@@ -6,12 +6,12 @@ construction. The active runtime deliberately supports three core families:
 1. fixed standard RoPE, or a NoPE control;
 2. additive Fourier features on projected Q/K (AddRoPE);
 3. a sinusoid added immediately before the Q/K projections; and
-4. a deliberately minimal one-shot input sinusoid used only as a placement
-   control.
+4. a one-shot input sinusoid with a narrow set of static adapter controls.
 
-Learned AddRoPE amplitude/phase acts only on its additive carrier; the pre-Q/K
-carrier exposes only a scalar gate. RoPE is always standard and fixed when
-enabled; otherwise the backbone is NoPE. The active design contract is
+Learned AddRoPE amplitude/phase acts only on its additive carrier. The promoted
+pre-Q/K carrier exposes only a scalar gate; isolated static low-rank pathways
+remain available for development comparisons. RoPE is always standard and
+fixed when enabled; otherwise the backbone is NoPE. The active design contract is
 [`SINUSOID_INTERVENTION_POLICY.md`](SINUSOID_INTERVENTION_POLICY.md).
 
 The research rationale and experiment plan are in
@@ -70,11 +70,14 @@ raise a clear migration error.
 ```yaml
 qk_preprojection:
   enabled: false
-  mode: tied_scalar
+  mode: tied_scalar       # promoted; static development modes are listed below
   basis_dim: null       # resolves to model width; other widths are rejected
   theta: null           # resolves to rope_theta
   gate_init: 1.0
   learnable_gate: true
+  rank: 32
+  readout_lr_multiplier: 1.0
+  compensate_readout_weight_decay: true
 ```
 
 For the normalized block input `x_p` and frozen full-width Fourier vector
@@ -91,31 +94,69 @@ and the residual stream are untouched. It may be used alone, with fixed RoPE,
 or together with AddRoPE. The latter combination is supported for controlled
 factorials even though Phase 30 found the two additive routes sub-additive.
 
-`tied_scalar` is the only active mode. The scalar gain and frozen Fourier table
-remain fp32 under module-wide bf16/fp16 conversion. The completed carrier is
-cast to the activation dtype before addition to `x`.
+`tied_scalar` is the promoted mode. The development-only
+`low_rank_premap`, `low_rank_qk_replace`, `low_rank_qk_residual`, and
+`low_rank_qk_shared_residual` modes test a shared position bottleneck with
+either a model-space residual or shared/separate projected-space output maps.
+The scalar gain and frozen Fourier table remain fp32 under module-wide
+bf16/fp16 conversion. The completed carrier is cast to the activation dtype
+before addition to `x`.
+
+Phase-45 breadth controls add `dense_premap_residual`,
+`dense_qk_shared_residual`, `dense_qk_residual`, and
+`low_rank_qk_mlp_residual`. They distinguish a dense map before the existing
+Q/K projections from shared versus separate native projected-space maps and a
+nonlinear shared bottleneck. Every residual output is zero-initialized, so all
+four begin exactly at `tied_scalar`; `rank` is the hidden width for the MLP
+mode.
+
+`readout_lr_multiplier` applies only to `shared_up`, `q_up`, and `k_up`; it
+does not change the bottleneck or scalar-gate LR. When
+`compensate_readout_weight_decay=true`, the readout group's AdamW coefficient
+is divided by the same multiplier, preserving the per-step `lr * weight_decay`
+shrinkage. Phase 47 uses `sqrt(model_dim/rank)` to compare low-rank widths on a
+dimension-aware function-update scale.
 
 ## One-shot input sinusoid control
 
 ```yaml
 input_sinusoid:
   enabled: false
+  mode: tied_scalar     # tied_scalar | low_rank_linear_residual |
+                        # dense_linear_residual | residual_mlp |
+                        # per_pair_amplitude
   basis_dim: null       # resolves to model width
   theta: null           # resolves to rope_theta
   gate_init: 1.0
   learnable_gate: true
+  rank: 32
+  hidden_dim: null      # resolves to model width for residual_mlp
 ```
 
-This control computes
+The scalar control computes
 
 ```text
 x_0 = in_proj(token_embedding) + beta z(p)
 ```
 
-once, before the first Transformer block. It may be combined with standard
-RoPE. It exists to test residual-input placement against repeated pre-Q/K
-injection; it does not restore the former generic residual/per-layer position
-framework. The gate and carrier table retain fp32 master values.
+once, before the first Transformer block. The static adapter modes instead use
+
+```text
+low_rank_linear_residual: x_0 = in_proj(token) + beta z(p) + U V z(p)
+dense_linear_residual:    x_0 = in_proj(token) + beta z(p) + D z(p)
+residual_mlp:              x_0 = in_proj(token) + beta z(p) + W2 GELU(W1 z(p))
+per_pair_amplitude:       x_0 = in_proj(token) + A z(p)
+```
+
+where the low-rank `U`, dense `D`, and MLP `W2` output maps are
+zero-initialized, so their residuals begin exactly at the scalar parent, and
+`A` has one signed coefficient shared by each cosine/sine frequency pair and
+begins at identity. It may be combined with standard RoPE.
+This remains a one-shot, position-only intervention and does not restore the
+former generic residual/per-layer framework. Gates, pair amplitudes, and the
+carrier table retain fp32 master values. Evidence and the distinction between
+low-rank residual and replacement maps are summarized in
+[`INPUT_SINUSOID_DESIGN.md`](INPUT_SINUSOID_DESIGN.md).
 
 ## Additive Q/K channel
 

@@ -1,0 +1,61 @@
+{
+  "caveat": "Paired-example intervals measure holdout precision within one seed, not training-seed uncertainty.",
+  "comparisons": {
+    "lowrank-linear-r32_minus_input-scalar-control": {
+      "delta": -0.0017723580822348595,
+      "paired_example_bootstrap_ci95": [
+        -0.0022429785691201686,
+        -0.0012914487626403586
+      ]
+    },
+    "per-pair-amplitude_minus_input-scalar-control": {
+      "delta": -0.0026311869733035564,
+      "paired_example_bootstrap_ci95": [
+        -0.003147719276603311,
+        -0.0021037920669186865
+      ]
+    }
+  },
+  "context": 1024,
+  "runs": {
+    "input-scalar-control": {
+      "final_holdout_loss": 3.4718623366206884,
+      "input_diagnostics": {
+        "position/input_sinusoid/amplitude_max": 0.09889889508485794,
+        "position/input_sinusoid/amplitude_mean": 0.09889889508485794,
+        "position/input_sinusoid/amplitude_min": 0.09889889508485794,
+        "position/input_sinusoid/amplitude_rms": 0.09889889508485794,
+        "position/input_sinusoid/carrier_rms": 0.06993208080530167,
+        "position/input_sinusoid/gate": 0.09889889508485794
+      }
+    },
+    "lowrank-linear-r32": {
+      "final_holdout_loss": 3.4700899785384536,
+      "input_diagnostics": {
+        "position/input_sinusoid/adapter_rms": 0.16715800762176514,
+        "position/input_sinusoid/adapter_to_anchor_rms_ratio": 13.557653427124023,
+        "position/input_sinusoid/amplitude_max": 0.017436433583498,
+        "position/input_sinusoid/amplitude_mean": 0.017436433583498,
+        "position/input_sinusoid/amplitude_min": 0.017436433583498,
+        "position/input_sinusoid/amplitude_rms": 0.017436433583498,
+        "position/input_sinusoid/anchor_rms": 0.012329420074820518,
+        "position/input_sinusoid/carrier_rms": 0.17275092005729675,
+        "position/input_sinusoid/gate": 0.017436433583498
+      }
+    },
+    "per-pair-amplitude": {
+      "final_holdout_loss": 3.469231149647385,
+      "input_diagnostics": {
+        "position/input_sinusoid/amplitude_max": 1.0355557203292847,
+        "position/input_sinusoid/amplitude_mean": 0.5922324657440186,
+        "position/input_sinusoid/amplitude_min": 0.011504181660711765,
+        "position/input_sinusoid/amplitude_rms": 0.7070015072822571,
+        "position/input_sinusoid/carrier_rms": 0.49992555379867554
+      }
+    }
+  },
+  "scope": "phase44_input_adapters",
+  "seed": 123,
+  "sequence_batch": 32,
+  "training_steps": 20000
+}

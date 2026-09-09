@@ -874,16 +874,9 @@ class Transformer(torch.nn.Module):
                 )[None, :, :]
         if self.input_sinusoid is not None:
             prefix = "position/input_sinusoid"
-            gate = self.input_sinusoid.gate_value().detach().float()
-            metrics[f"{prefix}/gate"] = gate.item()
             if seq_len is not None:
-                carrier = self.input_sinusoid(
-                    seq_len,
-                    dtype=torch.float32,
-                ).detach()
-                metrics[f"{prefix}/carrier_rms"] = (
-                    carrier.square().mean().sqrt().item()
-                )
+                for key, value in self.input_sinusoid.diagnostics(seq_len).items():
+                    metrics[f"{prefix}/{key}"] = value
         for layer_idx, block in enumerate(self.blocks):
             actual_qk_summary = None
             normalized_diagnostic_x = None

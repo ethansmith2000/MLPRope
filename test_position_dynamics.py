@@ -108,6 +108,11 @@ class QKPreprojectionTest(unittest.TestCase):
                 "low_rank_premap",
                 "low_rank_qk_replace",
                 "low_rank_qk_residual",
+                "low_rank_qk_shared_residual",
+                "dense_premap_residual",
+                "dense_qk_shared_residual",
+                "dense_qk_residual",
+                "low_rank_qk_mlp_residual",
             },
         )
         module = QKPreprojectionPosition(
@@ -176,6 +181,7 @@ class QKPreprojectionTest(unittest.TestCase):
             "low_rank_premap": 1 + 2 * basis_dim * rank,
             "low_rank_qk_replace": 3 * basis_dim * rank,
             "low_rank_qk_residual": 1 + 3 * basis_dim * rank,
+            "low_rank_qk_shared_residual": 1 + 2 * basis_dim * rank,
         }
         for mode, expected_count in expected_counts.items():
             with self.subTest(mode=mode):
@@ -224,6 +230,7 @@ class QKPreprojectionTest(unittest.TestCase):
             "low_rank_premap",
             "low_rank_qk_replace",
             "low_rank_qk_residual",
+            "low_rank_qk_shared_residual",
         ):
             with self.subTest(mode=mode):
                 config = normalize_qk_preprojection_config(
@@ -241,7 +248,7 @@ class QKPreprojectionTest(unittest.TestCase):
                 loss.backward()
                 output_modules = (
                     (module.shared_up,)
-                    if mode == "low_rank_premap"
+                    if mode in {"low_rank_premap", "low_rank_qk_shared_residual"}
                     else (module.q_up, module.k_up)
                 )
                 self.assertTrue(
@@ -249,6 +256,66 @@ class QKPreprojectionTest(unittest.TestCase):
                         readout.weight.grad is not None
                         and readout.weight.grad.abs().sum().item() > 0
                         for readout in output_modules
+                    )
+                )
+
+    def test_dense_and_nonlinear_modes_have_exact_live_anchors(self):
+        basis_dim = 8
+        rank = 2
+        expected_counts = {
+            "dense_premap_residual": 1 + basis_dim * basis_dim,
+            "dense_qk_shared_residual": 1 + basis_dim * basis_dim,
+            "dense_qk_residual": 1 + 2 * basis_dim * basis_dim,
+            "low_rank_qk_mlp_residual": 1 + 3 * basis_dim * rank,
+        }
+        for mode, expected_count in expected_counts.items():
+            with self.subTest(mode=mode):
+                config = normalize_qk_preprojection_config(
+                    {"enabled": True, "mode": mode, "rank": rank},
+                    model_dim=basis_dim,
+                    rope_theta=10_000.0,
+                )
+                module = QKPreprojectionPosition(config, model_dim=8, extent=16)
+                module.reset_output_parameters()
+                output = module(11, dtype=torch.float32)
+                basis = module.basis(11)
+                self.assertEqual(
+                    sum(parameter.numel() for parameter in module.parameters()),
+                    expected_count,
+                )
+                torch.testing.assert_close(output.q_input, basis, rtol=0, atol=0)
+                torch.testing.assert_close(output.k_input, basis, rtol=0, atol=0)
+                if mode == "dense_premap_residual":
+                    self.assertIsNone(output.q_projected)
+                    self.assertIsNone(output.k_projected)
+                    readouts = (module.shared_up,)
+                elif mode == "dense_qk_shared_residual":
+                    torch.testing.assert_close(
+                        output.q_projected, torch.zeros_like(basis), rtol=0, atol=0
+                    )
+                    torch.testing.assert_close(
+                        output.k_projected, torch.zeros_like(basis), rtol=0, atol=0
+                    )
+                    self.assertIs(output.q_projected, output.k_projected)
+                    readouts = (module.shared_up,)
+                else:
+                    torch.testing.assert_close(
+                        output.q_projected, torch.zeros_like(basis), rtol=0, atol=0
+                    )
+                    torch.testing.assert_close(
+                        output.k_projected, torch.zeros_like(basis), rtol=0, atol=0
+                    )
+                    readouts = (module.q_up, module.k_up)
+                loss = sum(
+                    (value * torch.randn_like(value)).sum()
+                    for value in output.carrier_tensors()
+                )
+                loss.backward()
+                self.assertTrue(
+                    all(
+                        readout.weight.grad is not None
+                        and readout.weight.grad.abs().sum().item() > 0
+                        for readout in readouts
                     )
                 )
 
@@ -284,6 +351,28 @@ class QKPreprojectionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "rank"):
             normalize_qk_preprojection_config(
                 {"enabled": True, "mode": "low_rank_premap", "rank": 9},
+                model_dim=8,
+                rope_theta=10_000.0,
+            )
+        with self.assertRaisesRegex(TypeError, "readout_lr_multiplier"):
+            normalize_qk_preprojection_config(
+                {"readout_lr_multiplier": "2"},
+                model_dim=8,
+                rope_theta=10_000.0,
+            )
+        with self.assertRaisesRegex(ValueError, "readout_lr_multiplier"):
+            normalize_qk_preprojection_config(
+                {
+                    "enabled": True,
+                    "mode": "tied_scalar",
+                    "readout_lr_multiplier": 2.0,
+                },
+                model_dim=8,
+                rope_theta=10_000.0,
+            )
+        with self.assertRaisesRegex(TypeError, "compensate_readout_weight_decay"):
+            normalize_qk_preprojection_config(
+                {"compensate_readout_weight_decay": 1},
                 model_dim=8,
                 rope_theta=10_000.0,
             )
@@ -362,6 +451,146 @@ class InputSinusoidTest(unittest.TestCase):
         module.bfloat16()
         self.assertEqual(module.gate.dtype, torch.float32)
         self.assertEqual(module.basis.basis.dtype, torch.float32)
+
+    def test_low_rank_linear_residual_has_exact_live_anchor(self):
+        module = InputSinusoidPosition(
+            self._config(mode="low_rank_linear_residual", rank=2),
+            model_dim=8,
+            extent=16,
+        )
+        module.reset_output_parameters()
+        torch.testing.assert_close(
+            module(11, dtype=torch.float32),
+            module.basis(11),
+            rtol=0,
+            atol=0,
+        )
+        self.assertEqual(sum(p.numel() for p in module.parameters()), 33)
+        target = torch.randn(11, 8)
+        torch.nn.functional.mse_loss(
+            module(11, dtype=torch.float32), target
+        ).backward()
+        self.assertGreater(module.gate.grad.abs().item(), 0)
+        self.assertGreater(module.up.weight.grad.abs().sum().item(), 0)
+        self.assertEqual(module.down.weight.grad.abs().sum().item(), 0)
+
+    def test_dense_linear_and_mlp_residuals_have_exact_live_anchors(self):
+        cases = (
+            ("dense_linear_residual", {}, 65, "dense"),
+            ("residual_mlp", {"hidden_dim": 6}, 97, "up"),
+        )
+        for mode, updates, expected_count, readout_name in cases:
+            with self.subTest(mode=mode):
+                module = InputSinusoidPosition(
+                    self._config(mode=mode, **updates),
+                    model_dim=8,
+                    extent=16,
+                )
+                module.reset_output_parameters()
+                torch.testing.assert_close(
+                    module(11, dtype=torch.float32),
+                    module.basis(11),
+                    rtol=0,
+                    atol=0,
+                )
+                self.assertEqual(
+                    sum(parameter.numel() for parameter in module.parameters()),
+                    expected_count,
+                )
+                torch.nn.functional.mse_loss(
+                    module(11, dtype=torch.float32), torch.randn(11, 8)
+                ).backward()
+                readout = getattr(module, readout_name)
+                self.assertGreater(readout.weight.grad.abs().sum().item(), 0)
+
+    def test_per_pair_amplitudes_preserve_phase_pairs_and_receive_gradients(self):
+        module = InputSinusoidPosition(
+            self._config(mode="per_pair_amplitude"),
+            model_dim=8,
+            extent=16,
+        )
+        torch.testing.assert_close(
+            module(11, dtype=torch.float32),
+            module.basis(11),
+            rtol=0,
+            atol=0,
+        )
+        self.assertEqual(sum(p.numel() for p in module.parameters()), 4)
+        with torch.no_grad():
+            module.pair_amplitude.copy_(torch.tensor([0.5, -1.0, 2.0, 0.0]))
+        expected = (
+            module.basis(7).unflatten(-1, (4, 2))
+            * module.pair_amplitude[:, None]
+        ).flatten(-2)
+        torch.testing.assert_close(module(7, dtype=torch.float32), expected)
+        module(7, dtype=torch.float32).square().sum().backward()
+        self.assertTrue(torch.isfinite(module.pair_amplitude.grad).all())
+        self.assertGreater(module.pair_amplitude.grad.abs().sum().item(), 0)
+        module.bfloat16()
+        self.assertEqual(module.pair_amplitude.dtype, torch.float32)
+        self.assertEqual(module.basis.basis.dtype, torch.float32)
+
+    def test_input_mode_validation(self):
+        with self.assertRaisesRegex(ValueError, "mode"):
+            self._config(mode="unknown")
+        with self.assertRaisesRegex(TypeError, "rank"):
+            self._config(mode="low_rank_linear_residual", rank=2.0)
+        with self.assertRaisesRegex(ValueError, "rank"):
+            self._config(mode="low_rank_linear_residual", rank=9)
+        with self.assertRaisesRegex(TypeError, "hidden_dim"):
+            self._config(mode="residual_mlp", hidden_dim=2.0)
+        with self.assertRaisesRegex(ValueError, "hidden_dim"):
+            self._config(mode="residual_mlp", hidden_dim=0)
+
+    def test_new_modes_match_scalar_full_model_at_initialization(self):
+        scalar = IntegratedPreprojectionTest._model(
+            input_sinusoid_config={
+                "enabled": True,
+                "mode": "tied_scalar",
+                "gate_init": 1.0,
+            },
+        ).eval()
+        candidates = (
+            IntegratedPreprojectionTest._model(
+                input_sinusoid_config={
+                    "enabled": True,
+                    "mode": "low_rank_linear_residual",
+                    "rank": 4,
+                    "gate_init": 1.0,
+                },
+            ).eval(),
+            IntegratedPreprojectionTest._model(
+                input_sinusoid_config={
+                    "enabled": True,
+                    "mode": "per_pair_amplitude",
+                    "gate_init": 1.0,
+                },
+            ).eval(),
+            IntegratedPreprojectionTest._model(
+                input_sinusoid_config={
+                    "enabled": True,
+                    "mode": "dense_linear_residual",
+                    "gate_init": 1.0,
+                },
+            ).eval(),
+            IntegratedPreprojectionTest._model(
+                input_sinusoid_config={
+                    "enabled": True,
+                    "mode": "residual_mlp",
+                    "hidden_dim": 16,
+                    "gate_init": 1.0,
+                },
+            ).eval(),
+        )
+        input_ids = torch.randint(0, 32, (2, 10))
+        reference = scalar(input_ids)
+        for candidate in candidates:
+            torch.testing.assert_close(
+                candidate(input_ids),
+                reference,
+                rtol=0,
+                atol=0,
+            )
 
     def test_integrated_input_is_added_once_after_input_projection(self):
         model = IntegratedPreprojectionTest._model(
@@ -503,9 +732,18 @@ class IntegratedPreprojectionTest(unittest.TestCase):
                 "rank": 4,
             },
         ).eval()
+        shared_residual = self._model(
+            use_rope=True,
+            qk_preprojection_config={
+                "enabled": True,
+                "mode": "low_rank_qk_shared_residual",
+                "rank": 4,
+            },
+        ).eval()
         torch.testing.assert_close(replacement(ids), rope(ids), rtol=0, atol=0)
         torch.testing.assert_close(premap(ids), tied(ids), rtol=0, atol=0)
         torch.testing.assert_close(residual(ids), tied(ids), rtol=0, atol=0)
+        torch.testing.assert_close(shared_residual(ids), tied(ids), rtol=0, atol=0)
 
     def test_low_rank_modes_have_finite_end_to_end_gradients(self):
         ids = torch.randint(0, 32, (2, 10))
@@ -514,6 +752,7 @@ class IntegratedPreprojectionTest(unittest.TestCase):
             "low_rank_premap",
             "low_rank_qk_replace",
             "low_rank_qk_residual",
+            "low_rank_qk_shared_residual",
         ):
             with self.subTest(mode=mode):
                 model = self._model(
@@ -530,8 +769,53 @@ class IntegratedPreprojectionTest(unittest.TestCase):
                 adapter = model.blocks[0].attn.qk_preprojection
                 readouts = (
                     (adapter.shared_up,)
-                    if mode == "low_rank_premap"
+                    if mode in {"low_rank_premap", "low_rank_qk_shared_residual"}
                     else (adapter.q_up, adapter.k_up)
+                )
+                self.assertTrue(torch.isfinite(loss).item())
+                self.assertTrue(
+                    all(
+                        readout.weight.grad is not None
+                        and torch.isfinite(readout.weight.grad).all().item()
+                        and readout.weight.grad.abs().sum().item() > 0
+                        for readout in readouts
+                    )
+                )
+
+    def test_dense_and_nonlinear_modes_match_tied_and_backpropagate(self):
+        ids = torch.randint(0, 32, (2, 10))
+        targets = torch.randint(0, 32, (2, 10))
+        tied = self._model(
+            use_rope=True,
+            qk_norm_mode="method_aware_rms",
+            qk_preprojection_config={"enabled": True, "mode": "tied_scalar"},
+        ).eval()
+        reference = tied(ids)
+        for mode in (
+            "dense_premap_residual",
+            "dense_qk_shared_residual",
+            "dense_qk_residual",
+            "low_rank_qk_mlp_residual",
+        ):
+            with self.subTest(mode=mode):
+                model = self._model(
+                    use_rope=True,
+                    qk_norm_mode="method_aware_rms",
+                    qk_preprojection_config={
+                        "enabled": True,
+                        "mode": mode,
+                        "rank": 4,
+                    },
+                ).eval()
+                torch.testing.assert_close(model(ids), reference, rtol=0, atol=0)
+                model.train()
+                loss = model(ids, targets)
+                loss.backward()
+                adapter = model.blocks[0].attn.qk_preprojection
+                readouts = tuple(
+                    module
+                    for module in (adapter.shared_up, adapter.q_up, adapter.k_up)
+                    if module is not None
                 )
                 self.assertTrue(torch.isfinite(loss).item())
                 self.assertTrue(
@@ -675,6 +959,56 @@ class IntegratedPreprojectionTest(unittest.TestCase):
         self.assertEqual(group["group_name"], "position")
         self.assertAlmostEqual(group["lr"], 7.5e-5)
         self.assertEqual(group["weight_decay"], 0.0)
+
+    def test_readout_lr_multiplier_is_local_and_decay_compensated(self):
+        multiplier = 5.0
+        model = self._model(
+            qk_preprojection_config={
+                "enabled": True,
+                "mode": "low_rank_qk_residual",
+                "rank": 4,
+                "readout_lr_multiplier": multiplier,
+                "compensate_readout_weight_decay": True,
+            }
+        )
+        optimizer_args = Namespace(
+            optimizer="adamw",
+            exclude_position_from_decay=False,
+            position_lr_multiplier=1.0,
+            weight_decay=0.1,
+            learning_rate=3.0e-4,
+            beta1=0.9,
+            beta2=0.98,
+        )
+        with mock.patch("torch.cuda.is_available", return_value=False):
+            optimizer = make_optimizer(optimizer_args, model)
+        adapter = model.blocks[0].attn.qk_preprojection
+
+        def group_for(parameter):
+            return next(
+                group
+                for group in optimizer.param_groups
+                if any(candidate is parameter for candidate in group["params"])
+            )
+
+        gate_group = group_for(adapter.gate)
+        down_group = group_for(adapter.down.weight)
+        q_group = group_for(adapter.q_up.weight)
+        k_group = group_for(adapter.k_up.weight)
+        self.assertEqual(gate_group["group_name"], "position")
+        self.assertEqual(down_group["group_name"], "position")
+        self.assertAlmostEqual(gate_group["lr"], 3.0e-4)
+        self.assertAlmostEqual(down_group["lr"], 3.0e-4)
+        self.assertAlmostEqual(gate_group["weight_decay"], 0.1)
+        self.assertAlmostEqual(down_group["weight_decay"], 0.1)
+        for readout_group in (q_group, k_group):
+            self.assertEqual(readout_group["group_name"], "position_readout")
+            self.assertAlmostEqual(readout_group["lr"], 1.5e-3)
+            self.assertAlmostEqual(readout_group["weight_decay"], 0.02)
+            self.assertAlmostEqual(
+                readout_group["lr"] * readout_group["weight_decay"],
+                gate_group["lr"] * gate_group["weight_decay"],
+            )
 
     def test_optimizer_monitor_tracks_static_carrier_function_step(self):
         model = self._model(qk_preprojection_config={"enabled": True})

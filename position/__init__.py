@@ -35,6 +35,7 @@ from position.config import (
 from position.mappers import FeatureMapper, build_mapper
 from position.input_sinusoid import (
     INPUT_SINUSOID_DEFAULTS,
+    INPUT_SINUSOID_MODES,
     InputSinusoidPosition,
     normalize_input_sinusoid_config,
 )
@@ -61,6 +62,7 @@ __all__ = [
     "FrozenFourierBasis",
     "FeatureMapper",
     "INPUT_SINUSOID_DEFAULTS",
+    "INPUT_SINUSOID_MODES",
     "InputSinusoidPosition",
     "InterventionOptimizationMonitor",
     "POSITION_PRESETS",

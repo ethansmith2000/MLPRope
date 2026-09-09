@@ -3424,3 +3424,168 @@ chain were moved under supervisor as `mlprope-phase42-43`. Ten cooperative
 `gpu-claim` waiters are now active. The seven partial runs will restore model,
 optimizer, scheduler, sampler, and RNG state from step 55k; the three untouched
 arms will start normally. Phase 43 remains downstream of completed Phase 42.
+
+## 2026-09-07 — Phases 42--44 completed; input-map design consolidated
+
+All Phase-42, Phase-43, and Phase-44 jobs completed cleanly under supervisor.
+The Phase-42 100k batch-32 component matrix confirmed scalar pre-Q/K + RoPE as
+the strongest arm at NLL `3.146756`, versus `3.183766` for fixed RoPE,
+`3.153390` for input sinusoid + RoPE, and `3.151333` for fixed post-RoPE
+AddRoPE + RoPE. A fixed pre-Q/K gate was worse by `+0.006464`; one learned gate
+shared globally was statistically tied to separate per-layer gates
+(`+0.000421`, paired interval crossing zero). First-layer-only injection was
+worse by `+0.002696`. See `results/phase42_paper_components/REPORT.md`.
+
+The Phase-43 20k static low-rank screen passed all three parent contrasts. The
+shared rank-32 pre-map improved the matched scalar carrier by `-0.005127`; the
+dedicated Q/K replacement improved matched RoPE by `-0.037260`; and the
+dedicated Q/K residual was best at NLL `3.445677`, `-0.009401` versus matched
+scalar pre-Q/K. This is evidence for position-only parameters and separate Q/K
+readouts, but remains one-seed development evidence rather than a promoted
+paper result. See `results/phase43_lowrank_qk_pathways/REPORT.md`.
+
+Phase 44 then isolated input-only adapters at the same 20k schedule. The scalar
+input control reached `3.471862`, the rank-32 linear residual `3.470090`
+(`-0.001772`), and direct per-pair amplitude `3.469231` (`-0.002631`). Both
+paired-example intervals excluded zero, but neither gain met the Phase-43
+`-0.003` promotion margin and training-seed uncertainty is unknown.
+
+The input diagnostics changed the interpretation. The low-rank residual's
+scalar anchor fell to `0.0174`, while adapter RMS reached `0.1672`, 13.6 times
+the anchor RMS: it behaved nearly like a learned replacement, not a small
+LoRA-style correction. Per-pair amplitudes ranged from `0.0115` to `1.0356`
+with RMS `0.7070`, demonstrating strong spectral selection, although active
+weight decay confounds literal interpretation of the shrinkage.
+
+[`INPUT_SINUSOID_DESIGN.md`](INPUT_SINUSOID_DESIGN.md) now records the exact
+distinctions among scalar, per-pair, low-rank replacement, low-rank residual,
+dense-linear, and residual-MLP maps. It also records the optimizer-scaling
+issue: Adam's coordinate normalization does not equalize function-space steps
+across ranks, so an explicit `sqrt(d/r)` gain or output-factor LR multiplier
+is a meaningful rank ablation rather than a missing LoRA convention.
+
+## 2026-09-07 — Phase 45 novel static-map breadth screen launched
+
+Mature reproduction was deferred until the remaining novel static function
+classes have been screened. Phase 45 contains six h768/d8, context-1024,
+batch-32, seed-123 arms at 20k steps:
+
+1. one-shot `gate*s + D*s`, with a zero-initialized dense `D`;
+2. one-shot `gate*s + W2*GELU(W1*s)`, with hidden width 768 and zero `W2`;
+3. a zero-initialized dense residual pre-map before the existing Wq/Wk;
+4. one zero-initialized dense projected-space residual shared by Q and K;
+5. separate zero-initialized dense projected-space Q and K residuals;
+6. a rank-128 nonlinear shared trunk with separate zero-initialized Q/K
+   readouts.
+
+Every arm begins bit-exactly at its scalar parent. The two input arms compare
+with Phase 44's scalar-input control; the four attention-local arms compare
+with Phase 43's scalar pre-Q/K control. Those controls share the exact schedule,
+paired initialization seed, data order, and disjoint final holdout. This avoids
+spending two GPUs on redundant parents while retaining paired-example
+comparisons. The breadth gate remains delta at most `-0.003` with the upper
+paired interval below zero; it is a filter, not training-seed evidence.
+
+The implementation and all six resolved configs passed 123 positional tests
+with one expected CUDA-only skip, plus CPU construction dry-runs. Six compiled
+20-step preflights and the dependent main cohort were submitted through
+`gpu-claim` under non-autostarting supervisor service
+`mlprope-phase45-novel-static-maps`. Main jobs are released only if every
+preflight succeeds.
+
+## 2026-09-07 — Phase 45 completed: native projected-space maps survive
+
+All six preflights and 20k main jobs completed successfully, and the supervisor
+generated `results/phase45_novel_static_maps/REPORT.md`. Heavy one-shot input
+maps did not pass: dense linear was `+0.001721` worse than scalar input, while
+the width-768 MLP was only `-0.001691` better and was `+0.000940` worse than
+Phase 44's much smaller per-pair amplitude map.
+
+The dense pre-map passed its scalar-parent contrast at `-0.005913`, but was
+statistically tied to the earlier rank-32 pre-map (`-0.000785`, interval
+crossing zero). Full rank therefore did not add evidence in the pathway before
+the existing Q/K projections.
+
+All native projected-space pathways passed strongly. Shared dense reached NLL
+`3.440949` (`-0.014128` versus scalar pre-Q/K), separate dense reached
+`3.441223` (`-0.013855`), and nonlinear rank-128 reached `3.441467`
+(`-0.013611`). Their pairwise differences were at most `0.000517`, with all
+paired intervals crossing zero. Separate Q/K maps and nonlinearity have thus
+not shown independent value. All three beat Phase 43's linear rank-32 Q/K
+residual by `0.0042--0.0047`, with intervals below zero, pointing instead to
+map capacity or update calibration.
+
+The clean remaining development comparison is a linear rank-128 native map in
+shared and separate forms. It can determine whether the top cluster requires
+dense rank, Q/K separation, or nonlinearity before any 100k reproduction is
+commissioned.
+
+## 2026-09-08 — Phase 46 linear rank-128 isolation launched
+
+Phase 46 tests linear rank-128 native projected-space residuals in two forms:
+one readout shared by Q/K and separate Q/K readouts. Both retain the learned
+scalar pre-Q/K anchor and zero-initialize their direct outputs, making them
+bit-exact to the matched scalar parent at step zero. The shared arm adds about
+1.57M positional parameters across eight layers; the separate arm adds about
+2.36M.
+
+The two arms use the Phase-45 protocol exactly: h768/d8, fixed RoPE, context
+1024, sequence batch 32, seed 123, 200 warmup steps, and 20k total updates.
+Analysis pairs them with the existing scalar, linear rank-32, dense, and
+nonlinear rank-128 results. This is the final capacity/nonlinearity filter, not
+a reproduction run.
+
+The shared-mode implementation passed the full positional suite (123 tests,
+one expected CUDA-only skip), both resolved full-size configurations completed
+CPU dry runs, and both compiled 20-step GPU preflights exited successfully.
+The 20k jobs are running under `gpu-claim` and supervisor service
+`mlprope-phase46-linear-rank128`.
+
+## 2026-09-08 — Phase 46 completed: linear rank 128 recovers the top cluster
+
+Both Phase-46 jobs completed cleanly. The shared linear rank-128 map reached
+NLL `3.442932` (`-0.012146` versus scalar pre-Q/K); separate readouts reached
+`3.441766` (`-0.013312`). Separate was better by `-0.001166`, with the paired
+interval narrowly excluding zero. This supplies modest evidence that Q/K
+separation matters once the bottleneck is rank constrained.
+
+The separate linear map statistically tied dense separate (`+0.000544`) and
+nonlinear rank-128 (`+0.000300`), while using 2.36M positional parameters. It
+beat the earlier linear rank-32 separate map by `-0.003910`. Dense capacity and
+nonlinearity can therefore be pruned from the current candidate, subject to
+the single-seed/20k limitation.
+
+The optimization monitor exposed a remaining confound anticipated in the
+design discussion. At equal Adam LR, rank 128's carrier-function step was
+3.40x rank 32 through step 64 and 1.80x at the median sampled step from 1k to
+19k (range 1.19x--2.46x). The rank-128 advantage cannot yet be assigned purely
+to representational capacity. The next narrow screen should calibrate update
+scale—for example, boosted rank 32 and/or damped rank 128—before committing to
+a long reproduction.
+
+## 2026-09-09 — Phase 47 dimension-aware rank calibration launched
+
+The earlier low-rank screens had no dimension-relative correction: both rank
+32 and rank 128 used `position_lr_multiplier=1`, and the forward branch had no
+rank gain. Phase 47 now applies `sqrt(768/rank)` only to the zero-initialized
+Q/K output-factor LR: 4.898979 at rank 32 and 2.449490 at rank 128. The shared
+down projection and learned scalar anchor retain base LR.
+
+Because AdamW decay is multiplied by group LR, each readout group's configured
+weight decay is divided by its LR multiplier. This preserves the effective
+per-step decay product rather than silently regularizing the accelerated
+readouts more strongly. The forward computation and initialization are
+unchanged and remain bit-exact to the scalar parent at step zero.
+
+The primary validity gate is optimizer-level: the median rank-128/rank-32
+carrier-function-step ratio over sampled steps 1k--19k must lie in `[0.8,
+1.25]`. Only then is the loss contrast interpreted as evidence about rank.
+Gradient clipping, raw gradients, Adam moments, parameter updates, and
+function-space steps remain logged.
+
+The new optimizer grouping passed the full positional suite (124 tests, one
+expected CUDA-only skip), including a check that only output factors receive
+the multiplier and that `lr * weight_decay` remains constant. Both full-size
+configs passed CPU dry runs and were submitted through `gpu-claim` under
+supervisor service `mlprope-phase47-rank-calibration`; 20k runs are gated on
+two compiled 20-step preflights.

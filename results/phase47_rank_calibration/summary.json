@@ -1,0 +1,92 @@
+{
+  "caveat": "All references use the identical schedule, paired initialization seed, data order, and holdout. Paired-example intervals do not estimate training-seed uncertainty.",
+  "comparisons": {
+    "calibrated-r128_minus_dense-separate": {
+      "delta": -0.0029001011280342937,
+      "paired_example_bootstrap_ci95": [
+        -0.00403230577649083,
+        -0.0017815190687542784
+      ]
+    },
+    "calibrated-r128_minus_scalar-parent": {
+      "delta": -0.016755319433286786,
+      "paired_example_bootstrap_ci95": [
+        -0.018067057733424007,
+        -0.015468095405958596
+      ]
+    },
+    "calibrated-r128_minus_uncalibrated-r128": {
+      "delta": -0.003443688852712512,
+      "paired_example_bootstrap_ci95": [
+        -0.0045129531703423705,
+        -0.00237710228539072
+      ]
+    },
+    "calibrated-r32_minus_calibrated-r128": {
+      "delta": 0.002946330583654344,
+      "paired_example_bootstrap_ci95": [
+        0.001947741411277093,
+        0.003956969888531598
+      ]
+    },
+    "calibrated-r32_minus_dense-separate": {
+      "delta": 4.622945562005043e-05,
+      "paired_example_bootstrap_ci95": [
+        -0.0009868839348200708,
+        0.0010877239634282867
+      ]
+    },
+    "calibrated-r32_minus_scalar-parent": {
+      "delta": -0.013808988849632442,
+      "paired_example_bootstrap_ci95": [
+        -0.015102966266567819,
+        -0.012510440210462548
+      ]
+    },
+    "calibrated-r32_minus_uncalibrated-r32": {
+      "delta": -0.004407764412462711,
+      "paired_example_bootstrap_ci95": [
+        -0.0055539928958751265,
+        -0.0032742091920226818
+      ]
+    }
+  },
+  "context": 1024,
+  "function_step_scale_r128_over_r32": {
+    "early_through_step_64_median": 1.7034934240923902,
+    "passes_predeclared_match": false,
+    "postwarmup_max": 1.7901264296547188,
+    "postwarmup_min": 0.9203031100019577,
+    "postwarmup_step_1000_to_19000_median": 1.2997578757740733
+  },
+  "reference_losses": {
+    "dense-separate": 3.441222572233528,
+    "scalar-parent": 3.4550777905387804,
+    "uncalibrated-r128": 3.441766159958206,
+    "uncalibrated-r32": 3.4456765661016107
+  },
+  "runs": {
+    "calibrated-r128": {
+      "final_holdout_loss": 3.4383224711054936,
+      "minimum_gradient_clip_ratio": 0.47149104227019056,
+      "peak_reserved_mib": 16770.0,
+      "position_params": 2359304,
+      "rank": 128,
+      "readout_lr_multiplier": 2.449489742783178,
+      "target_tokens_per_second": 210097.77787311925
+    },
+    "calibrated-r32": {
+      "final_holdout_loss": 3.441268801689148,
+      "minimum_gradient_clip_ratio": 0.47172098377172444,
+      "peak_reserved_mib": 16726.0,
+      "position_params": 589832,
+      "rank": 32,
+      "readout_lr_multiplier": 4.898979485566356,
+      "target_tokens_per_second": 209310.42769699768
+    }
+  },
+  "scope": "phase47_rank_calibration",
+  "seed": 123,
+  "sequence_batch": 32,
+  "training_steps": 20000
+}

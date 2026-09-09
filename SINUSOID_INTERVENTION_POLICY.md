@@ -1,6 +1,6 @@
 # Sinusoidal intervention policy
 
-_Active design contract, 2026-09-05. Historical implementations and protocols
+_Active design contract, 2026-09-07. Historical implementations and protocols
 are available from git; their compact evidence remains in `results/`._
 
 ## Architectural boundary
@@ -18,8 +18,8 @@ Every principal experiment makes two independent choices:
 | AddRoPE | AddRoPE + NoPE | AddRoPE + RoPE |
 
 No active pre-Q/K or AddRoPE intervention changes the RoPE rotation or writes
-to V/the residual stream. Phase 39 additionally has one deliberately narrow
-one-shot residual-input sinusoid, used only as a placement control.
+to V/the residual stream. The one-shot residual-input sinusoid remains an
+explicitly separate placement and static-mapping control.
 
 ## Promoted pre-Q/K method
 
@@ -55,9 +55,32 @@ did not improve loss. Phase 37 then paired scalar and two rank-4 smooth
 amplitude parameterizations for 200k; both were null on the disjoint primary
 holdout despite healthy, substantial functional movement.
 
-Therefore the active pre-Q/K runtime contains only `tied_scalar`. Frequency,
-phase, spectral shape, and Q/K-untying are closed unless a new structural
-hypothesis—not merely a new parameterization—justifies reopening them.
+Therefore `tied_scalar` remains the promoted pre-Q/K method. Phase 43 reopened
+one structural question, not the old shape sweep: can parameters used only for
+position provide a better map than the Q/K matrices shared with content? Its
+rank-32 shared-bottleneck/separate-Q/K residual improved the scalar parent by
+`-0.009401` at 20k in one seed and now warrants mature confirmation. Frequency,
+phase, and token-conditioned carrier shape remain closed.
+
+The one-shot input controls are documented separately in
+[`INPUT_SINUSOID_DESIGN.md`](INPUT_SINUSOID_DESIGN.md). Their Phase-44 gains
+were smaller: per-pair amplitude improved the scalar input carrier by
+`-0.002631`, and a rank-32 linear residual by `-0.001772`, at 20k in one seed.
+
+Phase 45 closes the heavier one-shot input branch for now and sharpens the
+attention-local hypothesis. Dense shared, dense separate, and nonlinear
+rank-128 native projected-space residuals all improved scalar pre-Q/K by about
+`-0.014` at 20k, while remaining statistically tied to one another. Dense
+pre-mapping was no better than rank-32 pre-mapping. These are one-seed
+development results, so they identify a candidate family rather than replacing
+the promoted replicated scalar method.
+
+Phase 46 found that a linear rank-128 separate-Q/K bottleneck statistically
+matches the dense and nonlinear members of that family, allowing both extra
+capacity classes to be pruned. Its advantage over rank 32 is optimization-
+confounded: measured carrier-function steps were roughly 1.8x larger after
+warmup at equal Adam LR. Rank is therefore not promoted until update-scale
+calibration distinguishes capacity from step size.
 
 ## AddRoPE boundary
 

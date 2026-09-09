@@ -1,0 +1,87 @@
+{
+  "caveat": "All references use the identical schedule, paired initialization seed, data order, and holdout. Paired-example intervals do not estimate training-seed uncertainty.",
+  "comparisons": {
+    "linear-r128-separate_minus_dense-separate": {
+      "delta": 0.0005435877246782184,
+      "paired_example_bootstrap_ci95": [
+        -0.0004824299045139924,
+        0.0015814079815754639
+      ]
+    },
+    "linear-r128-separate_minus_linear-r32-separate": {
+      "delta": -0.003910406143404543,
+      "paired_example_bootstrap_ci95": [
+        -0.004952770008821971,
+        -0.002858872507931665
+      ]
+    },
+    "linear-r128-separate_minus_nonlinear-r128-separate": {
+      "delta": 0.00029951869510114193,
+      "paired_example_bootstrap_ci95": [
+        -0.0004200753290206194,
+        0.0010214502923190589
+      ]
+    },
+    "linear-r128-separate_minus_scalar-parent": {
+      "delta": -0.013311630580574274,
+      "paired_example_bootstrap_ci95": [
+        -0.014526748418575153,
+        -0.012093232688494028
+      ]
+    },
+    "linear-r128-shared_minus_dense-shared": {
+      "delta": 0.0019824932096526027,
+      "paired_example_bootstrap_ci95": [
+        0.0010269219754263758,
+        0.0029450696369167414
+      ]
+    },
+    "linear-r128-shared_minus_linear-r128-separate": {
+      "delta": 0.0011658135335892439,
+      "paired_example_bootstrap_ci95": [
+        8.514734799973668e-05,
+        0.0022261959908064454
+      ]
+    },
+    "linear-r128-shared_minus_scalar-parent": {
+      "delta": -0.01214581704698503,
+      "paired_example_bootstrap_ci95": [
+        -0.013443419884424657,
+        -0.010857426724396647
+      ]
+    }
+  },
+  "context": 1024,
+  "function_step_scale_r128_over_r32": {
+    "early_through_step_64_median": 3.4025893466631967,
+    "interpretation": "Rank 128 took materially larger carrier-function steps under the same Adam LR, so its loss gain does not isolate capacity.",
+    "postwarmup_max": 2.4617236500237314,
+    "postwarmup_min": 1.1888623114477819,
+    "postwarmup_step_1000_to_19000_median": 1.8007082268195043
+  },
+  "reference_losses": {
+    "dense-separate": 3.441222572233528,
+    "dense-shared": 3.4409494802821428,
+    "linear-r32-separate": 3.4456765661016107,
+    "nonlinear-r128-separate": 3.441466641263105,
+    "scalar-parent": 3.4550777905387804
+  },
+  "runs": {
+    "linear-r128-separate": {
+      "final_holdout_loss": 3.441766159958206,
+      "peak_reserved_mib": 16770.0,
+      "position_params": 2359304,
+      "target_tokens_per_second": 207226.74233900965
+    },
+    "linear-r128-shared": {
+      "final_holdout_loss": 3.4429319734917954,
+      "peak_reserved_mib": 16728.0,
+      "position_params": 1572872,
+      "target_tokens_per_second": 209221.45047657622
+    }
+  },
+  "scope": "phase46_linear_rank128",
+  "seed": 123,
+  "sequence_batch": 32,
+  "training_steps": 20000
+}

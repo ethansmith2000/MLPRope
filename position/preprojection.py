@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 import torch
+import torch.nn.functional as F
 
 from position.basis import FrozenFourierBasis
 from position.precision import PreserveFP32BuffersMixin
@@ -18,14 +19,30 @@ QKPreprojectionMode = Literal[
     "low_rank_premap",
     "low_rank_qk_replace",
     "low_rank_qk_residual",
+    "low_rank_qk_shared_residual",
+    "dense_premap_residual",
+    "dense_qk_shared_residual",
+    "dense_qk_residual",
+    "low_rank_qk_mlp_residual",
 ]
 QK_PREPROJECTION_MODES = {
     "tied_scalar",
     "low_rank_premap",
     "low_rank_qk_replace",
     "low_rank_qk_residual",
+    "low_rank_qk_shared_residual",
+    "dense_premap_residual",
+    "dense_qk_shared_residual",
+    "dense_qk_residual",
+    "low_rank_qk_mlp_residual",
 }
-QK_PREPROJECTION_LOW_RANK_MODES = QK_PREPROJECTION_MODES - {"tied_scalar"}
+QK_PREPROJECTION_LOW_RANK_MODES = {
+    "low_rank_premap",
+    "low_rank_qk_replace",
+    "low_rank_qk_residual",
+    "low_rank_qk_shared_residual",
+    "low_rank_qk_mlp_residual",
+}
 
 # Historical modes remain recognizable so archived disabled configs normalize
 # cleanly and archived enabled configs fail with an actionable message. Their
@@ -49,6 +66,10 @@ QK_PREPROJECTION_DEFAULTS = {
     "gate_init": 1.0,
     "learnable_gate": True,
     "rank": 32,
+    # Optional rank calibration for the zero-initialized projected-space
+    # readout only. The bottleneck and scalar anchor retain the base position LR.
+    "readout_lr_multiplier": 1.0,
+    "compensate_readout_weight_decay": True,
     # Model-level ablation axes. ``active_layers=None`` means every layer.
     "gate_sharing": "per_layer",
     "active_layers": None,
@@ -179,6 +200,34 @@ def normalize_qk_preprojection_config(
             "low-rank qk_preprojection.rank must be no larger than model_dim"
         )
     normalized["rank"] = rank
+    readout_lr_multiplier = normalized["readout_lr_multiplier"]
+    if isinstance(readout_lr_multiplier, bool) or not isinstance(
+        readout_lr_multiplier, (int, float)
+    ):
+        raise TypeError("qk_preprojection.readout_lr_multiplier must be a number")
+    readout_lr_multiplier = float(readout_lr_multiplier)
+    if not math.isfinite(readout_lr_multiplier) or readout_lr_multiplier <= 0:
+        raise ValueError(
+            "qk_preprojection.readout_lr_multiplier must be finite and positive"
+        )
+    normalized["readout_lr_multiplier"] = readout_lr_multiplier
+    if not isinstance(normalized["compensate_readout_weight_decay"], bool):
+        raise TypeError(
+            "qk_preprojection.compensate_readout_weight_decay must be a boolean"
+        )
+    projected_readout_modes = {
+        "low_rank_qk_replace",
+        "low_rank_qk_residual",
+        "low_rank_qk_shared_residual",
+        "low_rank_qk_mlp_residual",
+        "dense_qk_shared_residual",
+        "dense_qk_residual",
+    }
+    if readout_lr_multiplier != 1.0 and mode not in projected_readout_modes:
+        raise ValueError(
+            "qk_preprojection.readout_lr_multiplier may differ from 1 only "
+            "for a projected-space Q/K readout mode"
+        )
     if mode == "low_rank_qk_replace":
         # This arm is nested at the standard-RoPE baseline: there is no
         # pre-projection identity carrier and therefore no meaningful gate.
@@ -214,9 +263,10 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
     """Add a static Fourier carrier around the Q and K projections.
 
     The low-rank modes use a shared ``model_dim -> rank`` positional trunk.
-    ``low_rank_premap`` maps back to one shared model-space carrier before
-    W_q/W_k. The two ``low_rank_qk_*`` modes instead use separate Q/K
-    readouts in projected space. V and the residual stream are untouched.
+    Premap modes return one model-space residual before W_q/W_k. Q/K modes
+    provide shared or separate projected-space readouts. Dense and nonlinear
+    variants preserve the same exact scalar anchor at initialization. V and
+    the residual stream are untouched.
     """
 
     _fp32_buffer_names = ("fixed_gate",)
@@ -246,11 +296,18 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
         if self.mode in QK_PREPROJECTION_LOW_RANK_MODES:
             rank = int(config["rank"])
             self.down = torch.nn.Linear(model_dim, rank, bias=False)
-            if self.mode == "low_rank_premap":
+            if self.mode in {"low_rank_premap", "low_rank_qk_shared_residual"}:
                 self.shared_up = torch.nn.Linear(rank, model_dim, bias=False)
             else:
                 self.q_up = torch.nn.Linear(rank, model_dim, bias=False)
                 self.k_up = torch.nn.Linear(rank, model_dim, bias=False)
+        elif self.mode == "dense_premap_residual":
+            self.shared_up = torch.nn.Linear(model_dim, model_dim, bias=False)
+        elif self.mode == "dense_qk_shared_residual":
+            self.shared_up = torch.nn.Linear(model_dim, model_dim, bias=False)
+        elif self.mode == "dense_qk_residual":
+            self.q_up = torch.nn.Linear(model_dim, model_dim, bias=False)
+            self.k_up = torch.nn.Linear(model_dim, model_dim, bias=False)
 
         gate = torch.tensor(float(config["gate_init"]), dtype=torch.float32)
         if config["learnable_gate"]:
@@ -294,10 +351,35 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
         if self.mode == "tied_scalar":
             return QKPreprojectionOutput(q_input=anchor, k_input=anchor)
 
-        hidden = self.down(basis)
+        if self.mode == "dense_premap_residual":
+            positional = anchor + self.shared_up(basis)
+            return QKPreprojectionOutput(q_input=positional, k_input=positional)
+
+        if self.mode == "dense_qk_shared_residual":
+            direct = self.shared_up(basis)
+            return QKPreprojectionOutput(
+                q_input=anchor,
+                k_input=anchor,
+                q_projected=direct,
+                k_projected=direct,
+            )
+
+        hidden = basis if self.mode == "dense_qk_residual" else self.down(basis)
         if self.mode == "low_rank_premap":
             positional = anchor + self.shared_up(hidden)
             return QKPreprojectionOutput(q_input=positional, k_input=positional)
+
+        if self.mode == "low_rank_qk_shared_residual":
+            direct = self.shared_up(hidden)
+            return QKPreprojectionOutput(
+                q_input=anchor,
+                k_input=anchor,
+                q_projected=direct,
+                k_projected=direct,
+            )
+
+        if self.mode == "low_rank_qk_mlp_residual":
+            hidden = F.gelu(hidden)
 
         q_projected = self.q_up(hidden)
         k_projected = self.k_up(hidden)
@@ -306,7 +388,11 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
                 q_projected=q_projected,
                 k_projected=k_projected,
             )
-        if self.mode == "low_rank_qk_residual":
+        if self.mode in {
+            "low_rank_qk_residual",
+            "dense_qk_residual",
+            "low_rank_qk_mlp_residual",
+        }:
             return QKPreprojectionOutput(
                 q_input=anchor,
                 k_input=anchor,

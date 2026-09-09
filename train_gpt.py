@@ -40,6 +40,7 @@ from position import (
     POSITION_PRESETS,
     POSITION_SCHEMA_VERSION,
     QK_PREPROJECTION_DEFAULTS,
+    QKPreprojectionPosition,
     V1_CHANNEL_DEFAULTS,
     deep_merge,
     collect_intervention_parameter_groups,
@@ -985,6 +986,19 @@ def make_optimizer(args, model):
     position_lr_multiplier = float(
         getattr(args, "position_lr_multiplier", 1.0)
     )
+    readout_settings: dict[int, tuple[float, bool]] = {}
+    for module in model.modules():
+        if not isinstance(module, QKPreprojectionPosition):
+            continue
+        multiplier = float(module.config.get("readout_lr_multiplier", 1.0))
+        compensate_decay = bool(
+            module.config.get("compensate_readout_weight_decay", True)
+        )
+        for readout in (module.shared_up, module.q_up, module.k_up):
+            if readout is None:
+                continue
+            for parameter in readout.parameters():
+                readout_settings[id(parameter)] = (multiplier, compensate_decay)
     grouped = {}
     for name, param in model.named_parameters():
         if not param.requires_grad:
@@ -994,9 +1008,28 @@ def make_optimizer(args, model):
             exempt_position
             and is_position
         )
+        readout_setting = readout_settings.get(id(param))
+        readout_multiplier = (
+            readout_setting[0] if readout_setting is not None else 1.0
+        )
+        compensate_decay = bool(
+            readout_setting is not None and readout_setting[1]
+        )
         wd = 0.0 if exempt else args.weight_decay
-        lr_multiplier = position_lr_multiplier if is_position else 1.0
-        group_name = "position" if is_position else "model"
+        if wd and compensate_decay:
+            # AdamW applies decay as lr * weight_decay. Preserve that product
+            # while changing only the adaptive update scale of the readout.
+            wd /= readout_multiplier
+        lr_multiplier = (
+            position_lr_multiplier * readout_multiplier
+            if is_position
+            else 1.0
+        )
+        group_name = (
+            "position_readout"
+            if readout_setting is not None and readout_multiplier != 1.0
+            else ("position" if is_position else "model")
+        )
         grouped.setdefault((wd, lr_multiplier, group_name), []).append(param)
     param_groups = [
         {
