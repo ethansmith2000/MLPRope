@@ -44,6 +44,18 @@ QK_PREPROJECTION_LOW_RANK_MODES = {
     "low_rank_qk_mlp_residual",
 }
 
+# Analysis-only counterfactuals for a trained projected-space carrier. These
+# are runtime attributes, not configuration or state-dict fields, so training
+# remains bit-for-bit unchanged unless an evaluator opts in after ``eval()``.
+QK_PREPROJECTION_EVALUATION_INTERVENTIONS = {
+    "full",
+    "direct_mean_only",
+    "direct_mean_removed",
+    "direct_zero",
+    "scalar_zero",
+    "all_zero",
+}
+
 # Historical modes remain recognizable so archived disabled configs normalize
 # cleanly and archived enabled configs fail with an actionable message. Their
 # implementations and parameters live in git history and the phase reports.
@@ -278,6 +290,7 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
         self.model_dim = model_dim
         self.extent = extent
         self.mode: QKPreprojectionMode = config["mode"]
+        self.evaluation_intervention = "full"
         if self.mode not in QK_PREPROJECTION_MODES:
             raise ValueError(
                 f"QKPreprojectionPosition received inactive mode {self.mode!r}; "
@@ -340,14 +353,49 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
         value = self.gate_value()
         return value, value
 
+    def set_evaluation_intervention(self, intervention: str) -> None:
+        """Select a trained-carrier counterfactual for evaluation only.
+
+        ``direct_mean_only`` broadcasts the positional mean of each direct
+        Q/K readout; ``direct_mean_removed`` retains only its centered
+        position-varying component. The scalar interventions act on the
+        model-space sinusoidal anchor. No parameter or persistent buffer is
+        modified.
+        """
+        if intervention not in QK_PREPROJECTION_EVALUATION_INTERVENTIONS:
+            raise ValueError(
+                "Unknown Q/K preprojection evaluation intervention "
+                f"{intervention!r}; expected one of "
+                f"{sorted(QK_PREPROJECTION_EVALUATION_INTERVENTIONS)}"
+            )
+        self.evaluation_intervention = intervention
+
+    def _intervene_direct(self, value: torch.Tensor) -> torch.Tensor:
+        intervention = self.evaluation_intervention
+        if intervention in {"direct_zero", "all_zero"}:
+            return torch.zeros_like(value)
+        mean = value.mean(dim=0, keepdim=True)
+        if intervention == "direct_mean_only":
+            return mean.expand_as(value)
+        if intervention == "direct_mean_removed":
+            return value - mean
+        return value
+
     def forward(
         self,
         length: int,
         *,
         dtype: torch.dtype,
     ) -> QKPreprojectionOutput:
+        if self.training and self.evaluation_intervention != "full":
+            raise RuntimeError(
+                "Q/K preprojection counterfactuals are evaluation-only; "
+                "call eval() before using one"
+            )
         basis = self.basis(length).to(dtype=dtype)
         anchor = basis * self.gate_value().to(dtype=dtype)
+        if self.evaluation_intervention in {"scalar_zero", "all_zero"}:
+            anchor = torch.zeros_like(anchor)
         if self.mode == "tied_scalar":
             return QKPreprojectionOutput(q_input=anchor, k_input=anchor)
 
@@ -356,7 +404,7 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
             return QKPreprojectionOutput(q_input=positional, k_input=positional)
 
         if self.mode == "dense_qk_shared_residual":
-            direct = self.shared_up(basis)
+            direct = self._intervene_direct(self.shared_up(basis))
             return QKPreprojectionOutput(
                 q_input=anchor,
                 k_input=anchor,
@@ -370,7 +418,7 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
             return QKPreprojectionOutput(q_input=positional, k_input=positional)
 
         if self.mode == "low_rank_qk_shared_residual":
-            direct = self.shared_up(hidden)
+            direct = self._intervene_direct(self.shared_up(hidden))
             return QKPreprojectionOutput(
                 q_input=anchor,
                 k_input=anchor,
@@ -381,8 +429,8 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
         if self.mode == "low_rank_qk_mlp_residual":
             hidden = F.gelu(hidden)
 
-        q_projected = self.q_up(hidden)
-        k_projected = self.k_up(hidden)
+        q_projected = self._intervene_direct(self.q_up(hidden))
+        k_projected = self._intervene_direct(self.k_up(hidden))
         if self.mode == "low_rank_qk_replace":
             return QKPreprojectionOutput(
                 q_projected=q_projected,

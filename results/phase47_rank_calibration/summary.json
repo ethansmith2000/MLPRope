@@ -52,6 +52,11 @@
     }
   },
   "context": 1024,
+  "decision": {
+    "observed_best_endpoint": "calibrated-r128",
+    "rank_comparison_interpretable_as_capacity": false,
+    "reason": "The predeclared carrier-function-step match failed; the rank-128 endpoint advantage cannot be attributed cleanly to representational rank."
+  },
   "function_step_scale_r128_over_r32": {
     "early_through_step_64_median": 1.7034934240923902,
     "passes_predeclared_match": false,

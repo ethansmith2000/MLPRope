@@ -3589,3 +3589,205 @@ the multiplier and that `lr * weight_decay` remains constant. Both full-size
 configs passed CPU dry runs and were submitted through `gpu-claim` under
 supervisor service `mlprope-phase47-rank-calibration`; 20k runs are gated on
 two compiled 20-step preflights.
+
+## 2026-09-09 — Phase 47 completed: calibration helps, rank gate narrowly fails
+
+Both 20k arms and their compiled preflights completed cleanly. The calibrated
+rank-32 readout reached final holdout NLL `3.441269`; calibrated rank 128
+reached `3.438322`. Relative to the otherwise matched uncalibrated arms, these
+are improvements of `-0.004408` and `-0.003444`, respectively. Rank 32 now
+ties dense separate (`+0.000046`, paired interval crossing zero), while rank
+128 beats it by `-0.002900` (paired interval `[-0.004032, -0.001782]`). Rank
+128 also beats calibrated rank 32 by `-0.002946` (paired interval
+`[-0.003957, -0.001948]` when expressed as rank 128 minus rank 32).
+
+The primary calibration gate did not pass. Median rank-128/rank-32
+carrier-function movement was `1.703x` through step 64 and `1.300x` over the
+predeclared step-1k--19k samples, versus the required `[0.8, 1.25]` interval.
+The sampled post-warmup ratio ranged from `0.920x` to `1.790x`; restricting to
+steps 10k--19k gives a post-hoc median of `1.221x`, but that does not override
+the predeclared failure. Consequently, the rank-128 endpoint is the strongest
+current optimization result, but its advantage is not a clean causal estimate
+of representational rank.
+
+The optimizer remained healthy. Global clipping affected the earliest logged
+steps similarly in both arms (minimum intervention clip ratios `0.4717` and
+`0.4715`) and was inactive from step 64 onward. Throughput was approximately
+209k--210k target tokens/s, with each run finishing in about 52 minutes. At
+the final checkpoint, the two ranks had nearly identical mean direct-carrier
+RMS across layers (Q: `1.54` versus `1.53`; K: `2.11` versus `2.13`), so the
+endpoint difference is not explained by a simple larger final carrier
+amplitude. The durable report is in `results/phase47_rank_calibration/`.
+
+## 2026-09-09 — Phase 48 one-shot empirical rank-32 close-out queued
+
+The final local rank calibration reruns only rank 32. Its readout LR
+multiplier is fixed at `6.367487 = 4.898979 * 1.299758`, where the second
+factor is Phase 47's predeclared median rank-128/rank-32 carrier-function-step
+ratio. This selection uses the optimizer diagnostic and not validation loss.
+The completed Phase-47 calibrated rank-128 arm remains the frozen comparator.
+
+The protocol, data order, initialization seed, schedule, holdout, and
+function-step gate remain unchanged. If the median ratio over steps 1k--19k
+falls in `[0.8, 1.25]`, the endpoint contrast can be interpreted as
+development evidence about rank; if it misses again, the capacity claim is
+closed without another LR adjustment. The generated main config differs from
+Phase 47 rank 32 only in paths, labels, and readout multiplier. It passed a
+CPU construction dry run. A compiled 20-step preflight gates the 20k run under
+supervisor service `mlprope-phase48-empirical-rank32`. At submission, all
+eight GPUs were cooperatively claimed and the Phase-48 preflight entered the
+shared `gpu-claim` wait queue.
+
+## 2026-09-09 — Phase 48 completed: gate passes and scout closes
+
+The compiled preflight and 20k empirical rank-32 run completed cleanly. The
+post-warmup rank-128/rank-32 carrier-function-step ratio was `1.090`, passing
+the predeclared `[0.8, 1.25]` gate. Early movement was also substantially
+closer (`1.322x` through step 64), global gradient clipping was inactive from
+step 64 onward, and the run sustained about 210k target tokens/s.
+
+Empirical rank 32 reached final holdout NLL `3.439380`. It improved the
+Phase-47 theoretical-calibration rank-32 run by `-0.001889`, the scalar
+pre-Q/K parent by `-0.015698`, and dense separate by `-0.001842`. The frozen
+calibrated rank-128 comparator remained better by `-0.001058`; expressed as
+empirical rank 32 minus rank 128, the paired interval was
+`[+0.000150, +0.001997]`.
+
+This matching closes 73% of the original `0.003910` equal-LR rank gap. The
+remaining difference is consistent with a modest capacity benefit, but is
+below the `0.003` scout materiality margin, changes sign on the 128-block
+step-20k development slice, and has no training-seed replication. The result does
+not justify another local calibration or promote rank 128 as intrinsically
+superior. Phase 48 closes the architecture/parameterization scout: rank 32 is
+the efficient primary candidate, rank 128 is the optional scaling ablation,
+and the next work is mature confirmation, mechanism analysis, and transfer.
+
+## 2026-09-10 — Phase 49 frozen mature confirmation launched
+
+The first post-scout cohort freezes five h768/d8, context-1024, sequence-batch
+32, seed-123 arms for 100k updates: fixed RoPE; scalar pre-Q/K + RoPE; scalar
+pre-Q/K with a parameter-matched FFN control; calibrated rank-32 dedicated Q/K
+readouts; and calibrated rank-128 readouts. The rank settings are unchanged
+from the completed scout: readout LR multipliers `6.367487` and `2.449490`,
+with inverse AdamW decay compensation and no forward rank gain.
+
+The evidence holdout is newly frozen at validation blocks `[4096, 5119]`.
+Every previous full repository config used start 2048, while preflights used
+256; thus this window was not inspected during design selection. The normal
+128-block development slice remains at start zero and cannot substitute for
+the final result.
+
+The non-positional capacity control retains the scalar carrier and widens
+GeGLU hidden width from 3072 to 3136 in layers `[0, 2, 4, 6]`. It adds 590,336
+parameters versus the rank-32 readout's 589,824 incremental parameters, a
+512-parameter mismatch. This compares position-specific capacity against
+nearly identical generic FFN capacity without removing the established scalar
+carrier.
+
+The predeclared rank-32 replication gate requires delta at most `-0.003`
+against both scalar and FFN controls, paired-example interval upper bounds
+below zero, negative rank-32-minus-scalar development deltas at all five
+checkpoints from 80k through 100k, and finite candidate diagnostics. The rank
+comparison additionally requires a median rank-128/rank-32 carrier-step ratio
+in `[0.8, 1.25]` over sampled steps 5k--95k. Rank 128 is called materially
+better only if it then beats rank 32 by at least `0.003` with a below-zero
+paired interval. A passing rank-32 result triggers seeds 456 and 789; a failed
+gate does not trigger local redesign.
+
+All five resolved main configurations passed CPU construction dry runs where
+the architecture was novel or changed, and the main rank-32 and FFN models
+were verified to differ by only 512 total parameters. Five compiled 20-step
+preflights and the dependent main cohort were launched through the shared
+`gpu-claim` protocol under supervisor service
+`mlprope-phase49-mature-qk-readout`.
+
+## 2026-09-10 — Phase 49 completed: rank 32 passes mature confirmation
+
+All five 100k jobs and the dependent analyzer completed cleanly. Rank 32
+reached final holdout NLL `3.159413`, improving on scalar pre-Q/K by
+`-0.010140` with paired interval `[-0.011564, -0.008712]`. It improved on the
+512-parameter-mismatch FFN-capacity control by `-0.009576`, with interval
+`[-0.010979, -0.008172]`. It also remained ahead of scalar at every
+predeclared development checkpoint from 80k through 100k, and its diagnostics
+were finite. The training-seed replication gate therefore passed.
+
+Rank 128 and rank 32 remained function-step matched at a `1.029` median ratio
+over 5k--95k. Rank 128 was only `-0.000750` better at the endpoint, with paired
+interval `[-0.001978, +0.000486]`. It did not clear materiality and is not
+promoted over rank 32.
+
+## 2026-09-10 — Phase 50 training-seed replication launched
+
+Phase 50 adds seeds 456 and 789 for fixed RoPE, scalar pre-Q/K, scalar plus the
+matched FFN widening, and calibrated rank-32 Q/K readouts. All settings are
+copied from Phase 49, including context 1024, sequence batch 32, 100k updates,
+paired per-seed initialization/data order, rank-32 readout multiplier
+`6.367487`, and final validation blocks `[4096, 5119]`.
+
+The predeclared replication decision uses the three training seeds 123, 456,
+and 789. Rank 32 must beat scalar and the FFN control in every seed, with each
+three-seed mean delta at most `-0.003`; all diagnostics must remain finite.
+Example-level paired intervals are retained only as within-seed evaluation
+precision, while seed-level means, sample standard deviations, and descriptive
+t intervals carry the replication summary.
+
+The launcher admits at most two lifetime `gpu-claim` processes concurrently.
+The other six configurations remain in its local pending queue, preventing
+Phase 50 from occupying more than two GPUs while other projects are active.
+All eight resolved configurations passed CPU construction dry runs and matched
+their Phase-49 counterparts after excluding only seed and bookkeeping fields.
+The seed-456 rank-32/scalar pair entered training first under supervisor service
+`mlprope-phase50-training-seed-replication`; the remaining runs will be admitted
+one at a time as either of the two slots becomes free, followed automatically
+by the three-seed analyzer.
+
+## 2026-09-11 — Mechanism audit and conservative storage pass
+
+A read-only audit of the mature rank-32 checkpoints exposed a stronger
+alternative interpretation than the existing amplitude summaries. For the
+direct projected carriers `C_q(p)=U_q D s(p)` and `C_k(p)=U_k D s(p)`, the
+fraction `||mean_p C||^2 / mean_p ||C||^2` is `96.54%--99.52%` across the
+seed-123 Q/K layers and `94.65%--99.56%` across seed 456. The scalar projected
+anchor is only `0.00135--0.03724` of direct-branch RMS. The direct branch is
+active, but mostly learning a positional mean rather than visibly rich
+variation.
+
+A constant vector before RoPE is not position-free: after rotation its pure
+position term is `b_q^T R(r-p)b_k`, with content-position cross terms also
+present. The result nevertheless raises the possibility that the adapter is
+an indirect way to restore bias-like Q/K structure omitted by the bias-free
+Q/K projections. The prior diagnostic ratio `||P||^2/(||C||^2+||P||^2)` did
+not include interference and was descriptive rather than causal; the content
+mixture diagnostic also sampled only the first evaluation sequence.
+
+Phase 51 now registers six trained-checkpoint interventions: full,
+direct-mean-only, direct-mean-removed, direct-zero, scalar-zero, and all-zero.
+They recompute joint QK normalization and downstream states and write compact
+loss/provenance artifacts only. New training is conditional on those results:
+a constant carrier and tiny Q/K bias if the mean suffices, a no-anchor arm if
+only the endpoint scalar is dispensable, or a matched content adapter if
+position specificity remains unresolved. The implementation rejects all
+counterfactual modes during training.
+
+The audit also corrected an ordering statement. RMSNorm's scalar denominator
+commutes with orthogonal RoPE, but its learned coordinate gain generally does
+not (`R Gamma != Gamma R`). Earlier before/after-RoPE controls therefore mix
+carrier rotation with gain/rotation order; the Phase-49 rank-32 versus scalar
+comparison is unaffected because both use the same ordering.
+
+Before deletion, the workspace was 94% full with 70 GiB available. Fifty-two
+completed-run `step_*` directories were proven redundant against parent
+`COMPLETED` markers and retained standalone final weights, recorded in an
+exact manifest, and removed. They occupied 99,875,665,697 bytes (93.02 GiB).
+All final weights and compact evidence were preserved, and active Phase-50
+rolling checkpoints were excluded. Post-cleanup, `model-output/` is 54 GiB
+and the workspace has 162 GiB available. Future runs default to no checkpoints
+and no final weights; either is enabled only for a named recovery or analysis
+need.
+
+The metric-only Phase-51 evaluator is queued as dependent supervisor service
+`mlprope-phase51-carrier-mechanism`. It waits for the complete Phase-50 report,
+then removes Phase-50's validated redundant recovery directories, reruns the
+weight diagnostic over all three rank-32 seeds, and evaluates the six
+counterfactuals through at most two concurrent `gpu-claim` jobs. It cannot
+consume a GPU while Phase 50 is active.

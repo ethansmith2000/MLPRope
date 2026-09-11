@@ -82,6 +82,19 @@ confounded: measured carrier-function steps were roughly 1.8x larger after
 warmup at equal Adam LR. Rank is therefore not promoted until update-scale
 calibration distinguishes capacity from step size.
 
+Phase 47's `sqrt(model_dim/rank)` readout-LR correction improved both ranks
+and reduced the median post-warmup function-step ratio to `1.300x`, but missed
+the predeclared `1.25x` ceiling. The calibrated rank-128 arm produced the best
+20k endpoint (`3.438322`), yet rank itself remains unpromoted because that
+endpoint contrast is still partly optimization-confounded.
+
+Phase 48's one-shot empirical rank-32 correction passed the function-step gate
+at `1.090x` and closed about 73% of the original equal-LR rank gap. Rank 128
+retained a small `0.001058` advantage, below the `0.003` scout materiality
+margin and supported by only one training seed. The local design scout is
+closed: use calibrated rank 32 as the efficient primary candidate, retain
+rank 128 only as a scaling ablation, and do not reopen LR or mapper searches.
+
 ## AddRoPE boundary
 
 AddRoPE remains a distinct post-projection carrier:

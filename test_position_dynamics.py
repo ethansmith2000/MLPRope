@@ -144,6 +144,85 @@ class QKPreprojectionTest(unittest.TestCase):
         module.reset_output_parameters()
         self.assertEqual(module.gate.item(), 0.25)
 
+    def test_projected_carrier_evaluation_counterfactuals(self):
+        config = normalize_qk_preprojection_config(
+            {
+                "enabled": True,
+                "mode": "low_rank_qk_residual",
+                "rank": 2,
+                "gate_init": 0.5,
+            },
+            model_dim=8,
+            rope_theta=10_000.0,
+        )
+        module = QKPreprojectionPosition(config, model_dim=8, extent=16).eval()
+        with torch.no_grad():
+            module.down.weight.copy_(torch.randn_like(module.down.weight))
+            module.q_up.weight.copy_(torch.randn_like(module.q_up.weight))
+            module.k_up.weight.copy_(torch.randn_like(module.k_up.weight))
+
+        module.set_evaluation_intervention("full")
+        full = module(11, dtype=torch.float32)
+        q_mean = full.q_projected.mean(dim=0, keepdim=True)
+        k_mean = full.k_projected.mean(dim=0, keepdim=True)
+
+        module.set_evaluation_intervention("direct_mean_only")
+        mean_only = module(11, dtype=torch.float32)
+        torch.testing.assert_close(
+            mean_only.q_projected, q_mean.expand_as(full.q_projected)
+        )
+        torch.testing.assert_close(
+            mean_only.k_projected, k_mean.expand_as(full.k_projected)
+        )
+        torch.testing.assert_close(mean_only.q_input, full.q_input)
+
+        module.set_evaluation_intervention("direct_mean_removed")
+        centered = module(11, dtype=torch.float32)
+        torch.testing.assert_close(
+            centered.q_projected,
+            full.q_projected - q_mean,
+        )
+        torch.testing.assert_close(
+            centered.k_projected,
+            full.k_projected - k_mean,
+        )
+        torch.testing.assert_close(
+            centered.q_projected.mean(dim=0),
+            torch.zeros_like(centered.q_projected.mean(dim=0)),
+            atol=1e-6,
+            rtol=0,
+        )
+
+        module.set_evaluation_intervention("direct_zero")
+        direct_zero = module(11, dtype=torch.float32)
+        self.assertEqual(direct_zero.q_projected.count_nonzero().item(), 0)
+        torch.testing.assert_close(direct_zero.q_input, full.q_input)
+
+        module.set_evaluation_intervention("scalar_zero")
+        scalar_zero = module(11, dtype=torch.float32)
+        self.assertEqual(scalar_zero.q_input.count_nonzero().item(), 0)
+        torch.testing.assert_close(scalar_zero.q_projected, full.q_projected)
+
+        module.set_evaluation_intervention("all_zero")
+        all_zero = module(11, dtype=torch.float32)
+        self.assertEqual(all_zero.q_input.count_nonzero().item(), 0)
+        self.assertEqual(all_zero.q_projected.count_nonzero().item(), 0)
+
+    def test_counterfactual_is_rejected_during_training(self):
+        config = normalize_qk_preprojection_config(
+            {
+                "enabled": True,
+                "mode": "low_rank_qk_residual",
+                "rank": 2,
+            },
+            model_dim=8,
+            rope_theta=10_000.0,
+        )
+        module = QKPreprojectionPosition(config, model_dim=8, extent=16)
+        module.set_evaluation_intervention("direct_zero")
+        with self.assertRaisesRegex(RuntimeError, "evaluation-only"):
+            module(8, dtype=torch.float32)
+
     def test_fixed_gate_state_and_fp32_cast_behavior(self):
         fixed = QKPreprojectionPosition(
             _config(gate_init=0.3, learnable_gate=False),

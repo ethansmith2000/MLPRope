@@ -150,6 +150,26 @@ by the multiplier so AdamW's actual per-step shrink coefficient is preserved.
 The comparison is considered rank-calibrated only if the median carrier-step
 ratio from steps 1k--19k lies between 0.8 and 1.25.
 
+The theoretical correction substantially improved both ranks but missed that
+gate narrowly. Rank 128 still moved `1.300x` as far at the median sampled
+post-warmup step. Its final NLL (`3.438322`) was better than rank 32
+(`3.441269`), but that contrast cannot yet be read as a pure capacity effect.
+This is useful in its own right: `sqrt(d/r)` is an effective optimization
+default, not an exact function-space normalization for a trained two-factor
+map. Any final rank ablation needs either empirical recalibration on a
+development run or an explicitly adaptive function-step control.
+
+A minimal empirical close-out would keep the calibrated rank-128 run fixed and
+rerun only rank 32 at readout multiplier `4.898979 * 1.300 ~= 6.37`. That
+number is selected from the function-step diagnostic rather than validation
+loss. The rank contrast becomes interpretable only if the same predeclared
+function-step gate passes; otherwise rank should be omitted as a causal claim.
+Phase 48 implements this one-shot close-out at the unrounded multiplier
+`6.367487`. It reached a matched post-warmup function-step ratio of `1.090`
+and closed about 73% of the original rank gap. Rank 128 retained only a
+`0.001058` NLL advantage, below the scout materiality margin and unreplicated
+across training seeds. This completes the local LR adjustment program.
+
 ## Current interpretation and next clean tests
 
 The main method remains scalar pre-Q/K + fixed RoPE. Phase 43 is the strongest
@@ -215,9 +235,11 @@ the top cluster.
 
 However, its carrier-function updates were not scale matched: rank 128 took
 3.40x larger steps than rank 32 through step 64 and 1.80x larger steps at the
-median sampled post-warmup point under the same Adam LR. The observed rank
-gain therefore mixes capacity and optimization. A calibrated rank comparison
-should precede the confirmation cohort:
+median sampled post-warmup point under the same Adam LR. Phase 47 reduced the
+post-warmup ratio to `1.300x`, but narrowly failed the predeclared `1.25x`
+upper bound. The observed rank gain therefore still mixes capacity and
+optimization. A truly matched rank comparison should precede any capacity
+claim in the confirmation cohort:
 
 1. confirm the Phase-43 dedicated Q/K residual at the paper horizon, alongside
    its scalar parent and a parameter-matched non-positional control;
@@ -230,4 +252,44 @@ frequencies, EMA controllers, dynamic RoPE, or noncausal sequence reductions.
 
 Detailed machine-readable and written reports are in
 `results/phase42_paper_components/`, `results/phase43_lowrank_qk_pathways/`,
-and `results/phase44_input_adapters/`.
+`results/phase44_input_adapters/`, `results/phase45_novel_static_maps/`,
+`results/phase46_linear_rank128/`, and `results/phase47_rank_calibration/`.
+
+## Phase 51 correction: projected readout versus rotated bias
+
+The mature rank-32 result does not yet establish that a richly varying Fourier
+map is the useful object. The actual pre-RoPE Q branch in layer `l` is
+
+```text
+z_q(p) = W_q h(p) + alpha W_q s(p) + U_q D s(p)
+q(p)   = R(p) Gamma_q z_q(p) / rms(z_q(p)).
+```
+
+`Gamma_q` is the learned coordinatewise gain inside QK RMSNorm. The K branch
+is analogous. A weight audit over the 1,023 positions actually entering each
+attention call found that `U_q D s(p)` and `U_k D s(p)` are overwhelmingly
+constant across position: their mean accounts for `94.65%--99.56%` of raw
+direct-carrier energy across the mature seed-123 and seed-456 layers.
+
+This is not equivalent to a position-independent logit bias. If
+`U_q D s(p) approximately b_q` and `U_k D s(p) approximately b_k`, standard
+RoPE turns the pure bias term into
+
+```text
+b_q^T R(r-p) b_k,
+```
+
+a relative Toeplitz kernel, while the mixed terms remain content dependent.
+The finding nevertheless means the rank-32 model may mostly be learning Q/K
+bias vectors—omitted from the backbone's bias-free Q/K projections—through an
+indirect Fourier parameterization.
+
+Phase 51 therefore freezes new mapper design and first runs trained-checkpoint
+counterfactuals: full; direct mean only; direct mean removed; direct zero;
+scalar zero; and both zero. QK normalization and downstream hidden states are
+recomputed for every intervention. If mean-only preserves the improvement,
+the next training controls are a matched constant carrier and a tiny direct
+Q/K-bias parameterization. If mean removal preserves it, the centered Fourier
+component remains the likely mechanism. If scalar removal is neutral only at
+the endpoint but no-anchor training loses, the scalar should be described as
+optimization scaffolding.

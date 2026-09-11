@@ -114,8 +114,13 @@ mode.
 does not change the bottleneck or scalar-gate LR. When
 `compensate_readout_weight_decay=true`, the readout group's AdamW coefficient
 is divided by the same multiplier, preserving the per-step `lr * weight_decay`
-shrinkage. Phase 47 uses `sqrt(model_dim/rank)` to compare low-rank widths on a
-dimension-aware function-update scale.
+shrinkage. Phase 47 used `sqrt(model_dim/rank)` to compare low-rank widths on a
+dimension-aware function-update scale. It improved both endpoints but left a
+`1.300x` median rank-128/rank-32 function-step ratio, narrowly missing the
+predeclared `1.25x` ceiling; the setting is therefore a useful default rather
+than an exact rank normalization. Phase 48's one-shot empirical rank-32
+multiplier `6.367487` brought the ratio to `1.090x` and is the frozen efficient
+candidate setting; no further local LR tuning is planned.
 
 ## One-shot input sinusoid control
 
@@ -226,11 +231,14 @@ q_p = R_p RMSNorm(W_q x_p + e_q(p)).
 q_p = RMSNorm(R_p W_q x_p + e_q(p)).
 ```
 
-It requires standard RoPE and `method_aware_rms`. Because RMSNorm commutes with
-an orthogonal rotation, this is a controlled test of whether RoPE also rotates
-the additive carrier. In particular, applying `R_p` to a canonical carrier
-already at phase `omega*p` advances it to phase `2*omega*p`; post-RoPE
-placement keeps the carrier at its original frequency.
+It requires standard RoPE and `method_aware_rms`. The scalar RMS denominator
+commutes with an orthogonal rotation, but the learned coordinatewise RMSNorm
+gain generally does not: `R_p Gamma != Gamma R_p` unless the gain is equal
+within every rotary pair. The comparison therefore changes both whether RoPE
+rotates the additive carrier and whether the learned gain occurs before or
+after rotation. Applying `R_p` to a canonical matched-frequency carrier does
+advance that carrier from phase `omega*p` to `2*omega*p`; this remains a useful
+idealized account of one effect, not a complete isolation of ordering.
 
 `additive_normalization=rms` normalizes the position branch per token/head and
 then applies a bounded learned gain. It controls branch magnitude without
@@ -354,7 +362,9 @@ shared `.tokenized-cache-manifest.json` filename. Every run copies all
 available cache manifests, their SHA-256 hashes, split counts, and dataset
 fingerprints into `run_provenance.json`.
 
-Long runs should use:
+Runs default to `checkpointing_steps: null` and `save_final_model: false`.
+Enable recovery state only when interruption recovery is worth its storage
+cost; a typical explicitly resumable long run uses:
 
 ```yaml
 checkpointing_steps: 5000
@@ -370,6 +380,12 @@ pruned. `checkpoint_keep_latest` retains that many newest complete states;
 steps named in `checkpoint_milestones` are retained in addition. A policy file
 makes automatic resume ignore a newer partial directory after an interrupted
 save. Null `checkpoint_keep_latest` preserves the historical keep-all policy.
+The active default is `1`, so merely enabling checkpointing cannot silently
+accumulate every periodic state. Delete the final recovery directory after a
+successful run and its declared downstream analyses unless resume remains a
+named need. Save final weights only for a specified evaluation or intervention;
+configs, metrics, evaluation details, provenance, logs, and summaries remain
+the durable evidence layer.
 
 `run_provenance.json` appends one launch record on every restart. It includes
 the exact resolved config and its hash, source commit and dirty-tree listing,

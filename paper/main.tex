@@ -45,8 +45,9 @@ training seeds in a 153M-parameter model trained on 1.64B tokens, by 0.041 nats
 in a 306M-parameter model, and by 0.050 nats without query-key normalization.
 Controlled injection-site experiments indicate that the gain does not follow
 from adding the same sinusoid to the residual stream, while an ordering
-ablation shows that rotating an already indexed additive carrier can create
-destructive phase composition. We use these observations to study how
+ablation shows that rotating an already indexed additive carrier changes both
+its phase composition and its order relative to learned query-key gains. We
+use these observations to study how
 additive absolute carriers and rotary relative geometry divide positional
 work inside attention.
 \end{abstract}
@@ -171,7 +172,10 @@ An additive carrier can instead be inserted after RoPE,
 with an analogous key. This exposes a native head-space carrier but does not
 pass it through $W_q$ or $W_k$. If the same indexed carrier is added before
 RoPE, $R(p)\mathbf{e}(p)$ has doubled phase when its frequencies match RoPE;
-the two orderings are consequently not interchangeable.
+the two orderings are consequently not interchangeable. This is not a pure
+phase ablation when query-key RMS normalization has learned coordinatewise
+gain $\Gamma$: although its scalar denominator commutes with rotation,
+$R(p)\Gamma\neq\Gamma R(p)$ unless gains are equal within every rotary pair.
 
 \section{Experimental Design}
 
@@ -264,7 +268,8 @@ Fixed head-space carrier after RoPE & 3.73960 \\
 The same carrier is substantially more effective at the pre-Q/K location than
 as a one-shot residual-stream input. Moving a fixed head-space carrier from
 before to after RoPE improves NLL by 0.03585 nats, consistent with the phase
-composition in Equation~\ref{eq:postrope}.
+composition in Equation~\ref{eq:postrope}, while also potentially reflecting
+the changed order of learned query-key gains and rotation.
 
 \section{Mechanistic Analysis}
 \label{sec:mechanism}
@@ -277,8 +282,10 @@ We will evaluate trained checkpoints on identical documents and report:
     \item absolute- and relative-position correlations of attention patterns;
     \item pre-normalization magnitudes of the four terms in
     Equation~\ref{eq:fourterms}; and
-    \item counterfactual changes after zeroing the learned carrier gates,
-    explicitly labeled as an inference-time distribution shift.
+    \item counterfactual changes after preserving only or removing only the
+    positional mean of a learned direct carrier, and after zeroing its direct
+    and scalar branches, explicitly labeled as inference-time distribution
+    shifts.
 \end{enumerate}
 Because RMS normalization makes the final logit decomposition nonlinear, term
 magnitudes will be paired with full forward-pass counterfactuals rather than
@@ -293,9 +300,10 @@ frequency bands are actually used and motivate partial rotation
 \citep{barbero2025round}. Other work learns context-dependent positions
 \citep{golovneva2024cope}, mixes RoPE and position-free attention across
 layers \citep{yang2025ropenope}, or adapts RoPE to two-dimensional vision
-tokens \citep{heo2024ropevit}. Our focus is orthogonal: a fixed absolute
-carrier is repeatedly made available inside each attention block while the
-standard RoPE rotation remains intact. The final version will expand this
+tokens \citep{heo2024ropevit}. Our focus is complementary but functionally
+overlapping: a fixed absolute carrier is repeatedly made available inside
+each attention block while the standard RoPE rotation remains intact. The
+final version will expand this
 section to cover additive attention decompositions, learned Fourier features,
 relative attention biases, learned RoPE spectra, and SDPA-compatible Fourier
 priors.

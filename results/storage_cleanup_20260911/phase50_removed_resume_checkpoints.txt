@@ -1,0 +1,6 @@
+model-output/position_bias_phase50_training_seed_replication/phase50-qk-readout-r32-seed789-b32-s100000-h768d8/step_100000
+model-output/position_bias_phase50_training_seed_replication/phase50-rope-seed456-b32-s100000-h768d8/step_100000
+model-output/position_bias_phase50_training_seed_replication/phase50-rope-seed789-b32-s100000-h768d8/step_100000
+model-output/position_bias_phase50_training_seed_replication/phase50-scalar-ffnmatch-r32-seed456-b32-s100000-h768d8/step_100000
+model-output/position_bias_phase50_training_seed_replication/phase50-scalar-ffnmatch-r32-seed789-b32-s100000-h768d8/step_100000
+model-output/position_bias_phase50_training_seed_replication/phase50-scalar-qkpre-seed789-b32-s100000-h768d8/step_100000

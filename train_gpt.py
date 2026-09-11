@@ -152,8 +152,10 @@ DEFAULT_CONFIG = {
     "paired_initialization_seed": None,
     "max_grad_norm": 1.0,
     "checkpointing_steps": None,
-    # Null preserves historical keep-all behavior. Long runs set this to one.
-    "checkpoint_keep_latest": None,
+    # If checkpointing is explicitly enabled, retain only the newest complete
+    # recovery state by default. Set null only to reproduce a historical
+    # keep-all policy deliberately.
+    "checkpoint_keep_latest": 1,
     "checkpoint_milestones": [],
     "save_final_model": False,
     "resume_from_checkpoint": None,

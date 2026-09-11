@@ -1,0 +1,556 @@
+{
+  "analysis_kind": "weight_only_noncausal_structure_diagnostic",
+  "generated_at": "2026-09-11T11:06:10.392750+00:00",
+  "runs": {
+    "123": {
+      "carrier_length": 1023,
+      "definition": "||mean_p C(p)||_2^2 / mean_p ||C(p)||_2^2 over positions p=0,...,training_length-2",
+      "layers": [
+        {
+          "direct_mean_qk_cosine": 0.662070631980896,
+          "gate": 0.029830366373062134,
+          "k_direct_mean_energy_fraction": 0.9908397197723389,
+          "k_direct_rms": 3.6494016647338867,
+          "k_scalar_rms": 0.08438383787870407,
+          "k_scalar_to_direct_rms": 0.02312265013033508,
+          "k_total_mean_energy_fraction": 0.9906289577484131,
+          "latent_mean_energy_fraction": 0.9603222608566284,
+          "layer": 0,
+          "q_direct_mean_energy_fraction": 0.9756935834884644,
+          "q_direct_rms": 2.630661725997925,
+          "q_scalar_rms": 0.09797119349241257,
+          "q_scalar_to_direct_rms": 0.03724203401912035,
+          "q_total_mean_energy_fraction": 0.9748871326446533
+        },
+        {
+          "direct_mean_qk_cosine": 0.6752215027809143,
+          "gate": 0.008605357259511948,
+          "k_direct_mean_energy_fraction": 0.9875516891479492,
+          "k_direct_rms": 2.4254367351531982,
+          "k_scalar_rms": 0.02046126313507557,
+          "k_scalar_to_direct_rms": 0.008436114963758547,
+          "k_total_mean_energy_fraction": 0.9875537753105164,
+          "latent_mean_energy_fraction": 0.9487101435661316,
+          "layer": 1,
+          "q_direct_mean_energy_fraction": 0.9653676152229309,
+          "q_direct_rms": 1.6794520616531372,
+          "q_scalar_rms": 0.02036071941256523,
+          "q_scalar_to_direct_rms": 0.01212342994328968,
+          "q_total_mean_energy_fraction": 0.96561199426651
+        },
+        {
+          "direct_mean_qk_cosine": 0.7023560404777527,
+          "gate": 0.004554263316094875,
+          "k_direct_mean_energy_fraction": 0.9920939207077026,
+          "k_direct_rms": 2.667010545730591,
+          "k_scalar_rms": 0.009453780017793179,
+          "k_scalar_to_direct_rms": 0.0035447103997871317,
+          "k_total_mean_energy_fraction": 0.9920766949653625,
+          "latent_mean_energy_fraction": 0.9463830590248108,
+          "layer": 2,
+          "q_direct_mean_energy_fraction": 0.9886179566383362,
+          "q_direct_rms": 1.7873742580413818,
+          "q_scalar_rms": 0.009305045008659363,
+          "q_scalar_to_direct_rms": 0.005205985801124775,
+          "q_total_mean_energy_fraction": 0.9886084794998169
+        },
+        {
+          "direct_mean_qk_cosine": 0.6326141357421875,
+          "gate": 0.008271933533251286,
+          "k_direct_mean_energy_fraction": 0.9897204041481018,
+          "k_direct_rms": 3.2168285846710205,
+          "k_scalar_rms": 0.018305698409676552,
+          "k_scalar_to_direct_rms": 0.005690604248205114,
+          "k_total_mean_energy_fraction": 0.9896965622901917,
+          "latent_mean_energy_fraction": 0.9076639413833618,
+          "layer": 3,
+          "q_direct_mean_energy_fraction": 0.9886869192123413,
+          "q_direct_rms": 2.514890193939209,
+          "q_scalar_rms": 0.019931936636567116,
+          "q_scalar_to_direct_rms": 0.007925569348754206,
+          "q_total_mean_energy_fraction": 0.9886789917945862
+        },
+        {
+          "direct_mean_qk_cosine": 0.628549337387085,
+          "gate": 0.004764735233038664,
+          "k_direct_mean_energy_fraction": 0.9951986074447632,
+          "k_direct_rms": 3.123368740081787,
+          "k_scalar_rms": 0.00914456881582737,
+          "k_scalar_to_direct_rms": 0.0029277903369129303,
+          "k_total_mean_energy_fraction": 0.9951984882354736,
+          "latent_mean_energy_fraction": 0.9516334533691406,
+          "layer": 4,
+          "q_direct_mean_energy_fraction": 0.9888845682144165,
+          "q_direct_rms": 2.492250442504883,
+          "q_scalar_rms": 0.009817509911954403,
+          "q_scalar_to_direct_rms": 0.003939214833516945,
+          "q_total_mean_energy_fraction": 0.9888970255851746
+        },
+        {
+          "direct_mean_qk_cosine": 0.613287091255188,
+          "gate": 0.002401278354227543,
+          "k_direct_mean_energy_fraction": 0.9942810535430908,
+          "k_direct_rms": 3.468693256378174,
+          "k_scalar_rms": 0.004678797442466021,
+          "k_scalar_to_direct_rms": 0.0013488645713663865,
+          "k_total_mean_energy_fraction": 0.9942786693572998,
+          "latent_mean_energy_fraction": 0.9366109371185303,
+          "layer": 5,
+          "q_direct_mean_energy_fraction": 0.9861069917678833,
+          "q_direct_rms": 3.2017099857330322,
+          "q_scalar_rms": 0.004981829784810543,
+          "q_scalar_to_direct_rms": 0.0015559903323567115,
+          "q_total_mean_energy_fraction": 0.9861099720001221
+        },
+        {
+          "direct_mean_qk_cosine": 0.5454224348068237,
+          "gate": 0.003972067963331938,
+          "k_direct_mean_energy_fraction": 0.9906047582626343,
+          "k_direct_rms": 2.8797547817230225,
+          "k_scalar_rms": 0.008050642907619476,
+          "k_scalar_to_direct_rms": 0.00279560015273335,
+          "k_total_mean_energy_fraction": 0.9906105995178223,
+          "latent_mean_energy_fraction": 0.9584255218505859,
+          "layer": 6,
+          "q_direct_mean_energy_fraction": 0.9762656092643738,
+          "q_direct_rms": 3.147091865539551,
+          "q_scalar_rms": 0.009053811430931091,
+          "q_scalar_to_direct_rms": 0.0028768818381407074,
+          "q_total_mean_energy_fraction": 0.9763326048851013
+        },
+        {
+          "direct_mean_qk_cosine": 0.6598175764083862,
+          "gate": 0.0034938091412186623,
+          "k_direct_mean_energy_fraction": 0.992575466632843,
+          "k_direct_rms": 2.8677802085876465,
+          "k_scalar_rms": 0.007393790874630213,
+          "k_scalar_to_direct_rms": 0.0025782278755147633,
+          "k_total_mean_energy_fraction": 0.9925749897956848,
+          "latent_mean_energy_fraction": 0.9784498810768127,
+          "layer": 7,
+          "q_direct_mean_energy_fraction": 0.9900912642478943,
+          "q_direct_rms": 2.8886728286743164,
+          "q_scalar_rms": 0.008108421228826046,
+          "q_scalar_to_direct_rms": 0.0028069711281727954,
+          "q_total_mean_energy_fraction": 0.9901148080825806
+        }
+      ],
+      "run_dir": "model-output/position_bias_phase49_mature_qk_readout/phase49-qk-readout-r32-seed123-b32-s100000-h768d8",
+      "seed": 123,
+      "summary": {
+        "direct_mean_qk_cosine": {
+          "max": 0.7023560404777527,
+          "mean": 0.6399173438549042,
+          "min": 0.5454224348068237
+        },
+        "k_direct_mean_energy_fraction": {
+          "max": 0.9951986074447632,
+          "mean": 0.991608202457428,
+          "min": 0.9875516891479492
+        },
+        "k_scalar_to_direct_rms": {
+          "max": 0.02312265013033508,
+          "mean": 0.006305570334826663,
+          "min": 0.0013488645713663865
+        },
+        "k_total_mean_energy_fraction": {
+          "max": 0.9951984882354736,
+          "mean": 0.9915773421525955,
+          "min": 0.9875537753105164
+        },
+        "latent_mean_energy_fraction": {
+          "max": 0.9784498810768127,
+          "mean": 0.9485248997807503,
+          "min": 0.9076639413833618
+        },
+        "q_direct_mean_energy_fraction": {
+          "max": 0.9900912642478943,
+          "mean": 0.9824643135070801,
+          "min": 0.9653676152229309
+        },
+        "q_scalar_to_direct_rms": {
+          "max": 0.03724203401912035,
+          "mean": 0.009209509655559521,
+          "min": 0.0015559903323567115
+        },
+        "q_total_mean_energy_fraction": {
+          "max": 0.9901148080825806,
+          "mean": 0.9824051260948181,
+          "min": 0.96561199426651
+        }
+      },
+      "weights": {
+        "mtime_ns": 1789017084306874120,
+        "path": "model-output/position_bias_phase49_mature_qk_readout/phase49-qk-readout-r32-seed123-b32-s100000-h768d8/pytorch_model.bin",
+        "size_bytes": 616402663
+      }
+    },
+    "456": {
+      "carrier_length": 1023,
+      "definition": "||mean_p C(p)||_2^2 / mean_p ||C(p)||_2^2 over positions p=0,...,training_length-2",
+      "layers": [
+        {
+          "direct_mean_qk_cosine": 0.6578133702278137,
+          "gate": 0.026156587526202202,
+          "k_direct_mean_energy_fraction": 0.9887790679931641,
+          "k_direct_rms": 3.475142240524292,
+          "k_scalar_rms": 0.07408662140369415,
+          "k_scalar_to_direct_rms": 0.021319018410169237,
+          "k_total_mean_energy_fraction": 0.9885960221290588,
+          "latent_mean_energy_fraction": 0.9206416606903076,
+          "layer": 0,
+          "q_direct_mean_energy_fraction": 0.9757209420204163,
+          "q_direct_rms": 2.523921251296997,
+          "q_scalar_rms": 0.08742395788431168,
+          "q_scalar_to_direct_rms": 0.03463814801645895,
+          "q_total_mean_energy_fraction": 0.9752225279808044
+        },
+        {
+          "direct_mean_qk_cosine": 0.6820377707481384,
+          "gate": 0.008974184282124043,
+          "k_direct_mean_energy_fraction": 0.9899539947509766,
+          "k_direct_rms": 2.0526628494262695,
+          "k_scalar_rms": 0.023037416860461235,
+          "k_scalar_to_direct_rms": 0.011223185954235163,
+          "k_total_mean_energy_fraction": 0.9899646043777466,
+          "latent_mean_energy_fraction": 0.9461796283721924,
+          "layer": 1,
+          "q_direct_mean_energy_fraction": 0.9749258756637573,
+          "q_direct_rms": 1.348389983177185,
+          "q_scalar_rms": 0.02367856353521347,
+          "q_scalar_to_direct_rms": 0.017560619576407806,
+          "q_total_mean_energy_fraction": 0.9751651287078857
+        },
+        {
+          "direct_mean_qk_cosine": 0.7607306241989136,
+          "gate": 0.004694418516010046,
+          "k_direct_mean_energy_fraction": 0.9955414533615112,
+          "k_direct_rms": 3.2185962200164795,
+          "k_scalar_rms": 0.009962540119886398,
+          "k_scalar_to_direct_rms": 0.0030953059777828825,
+          "k_total_mean_energy_fraction": 0.9955254197120667,
+          "latent_mean_energy_fraction": 0.9504184722900391,
+          "layer": 2,
+          "q_direct_mean_energy_fraction": 0.9951794743537903,
+          "q_direct_rms": 2.00813889503479,
+          "q_scalar_rms": 0.00954414438456297,
+          "q_scalar_to_direct_rms": 0.004752731202090292,
+          "q_total_mean_energy_fraction": 0.9951471090316772
+        },
+        {
+          "direct_mean_qk_cosine": 0.6284337639808655,
+          "gate": 0.004623677581548691,
+          "k_direct_mean_energy_fraction": 0.9911094307899475,
+          "k_direct_rms": 3.101614236831665,
+          "k_scalar_rms": 0.009241998195648193,
+          "k_scalar_to_direct_rms": 0.0029797381266501413,
+          "k_total_mean_energy_fraction": 0.9911124110221863,
+          "latent_mean_energy_fraction": 0.9557167887687683,
+          "layer": 3,
+          "q_direct_mean_energy_fraction": 0.9785764813423157,
+          "q_direct_rms": 2.1883180141448975,
+          "q_scalar_rms": 0.009797130711376667,
+          "q_scalar_to_direct_rms": 0.004477014148789052,
+          "q_total_mean_energy_fraction": 0.9786244034767151
+        },
+        {
+          "direct_mean_qk_cosine": 0.6075521111488342,
+          "gate": 0.003310431959107518,
+          "k_direct_mean_energy_fraction": 0.9941633939743042,
+          "k_direct_rms": 3.023437023162842,
+          "k_scalar_rms": 0.0068301428109407425,
+          "k_scalar_to_direct_rms": 0.002259065678767033,
+          "k_total_mean_energy_fraction": 0.9941554069519043,
+          "latent_mean_energy_fraction": 0.9584140777587891,
+          "layer": 4,
+          "q_direct_mean_energy_fraction": 0.9917297959327698,
+          "q_direct_rms": 2.478518009185791,
+          "q_scalar_rms": 0.007193041034042835,
+          "q_scalar_to_direct_rms": 0.0029021540321209106,
+          "q_total_mean_energy_fraction": 0.9917210340499878
+        },
+        {
+          "direct_mean_qk_cosine": 0.6340389251708984,
+          "gate": 0.0025211721658706665,
+          "k_direct_mean_energy_fraction": 0.99560546875,
+          "k_direct_rms": 3.1359381675720215,
+          "k_scalar_rms": 0.004676705691963434,
+          "k_scalar_to_direct_rms": 0.0014913258623285744,
+          "k_total_mean_energy_fraction": 0.9956062436103821,
+          "latent_mean_energy_fraction": 0.9740285277366638,
+          "layer": 5,
+          "q_direct_mean_energy_fraction": 0.9940845370292664,
+          "q_direct_rms": 2.8489174842834473,
+          "q_scalar_rms": 0.0050965286791324615,
+          "q_scalar_to_direct_rms": 0.0017889351682694762,
+          "q_total_mean_energy_fraction": 0.9940804243087769
+        },
+        {
+          "direct_mean_qk_cosine": 0.2964608371257782,
+          "gate": 0.003494333941489458,
+          "k_direct_mean_energy_fraction": 0.9788191318511963,
+          "k_direct_rms": 2.6206600666046143,
+          "k_scalar_rms": 0.005922527518123388,
+          "k_scalar_to_direct_rms": 0.002259937331664975,
+          "k_total_mean_energy_fraction": 0.9788427352905273,
+          "latent_mean_energy_fraction": 0.9402208924293518,
+          "layer": 6,
+          "q_direct_mean_energy_fraction": 0.9464910626411438,
+          "q_direct_rms": 4.046645641326904,
+          "q_scalar_rms": 0.009486758150160313,
+          "q_scalar_to_direct_rms": 0.0023443510974312993,
+          "q_total_mean_energy_fraction": 0.9465859532356262
+        },
+        {
+          "direct_mean_qk_cosine": 0.6386451721191406,
+          "gate": 0.005967677570879459,
+          "k_direct_mean_energy_fraction": 0.9936124086380005,
+          "k_direct_rms": 2.709862232208252,
+          "k_scalar_rms": 0.011990349739789963,
+          "k_scalar_to_direct_rms": 0.004424708236927267,
+          "k_total_mean_energy_fraction": 0.9936195015907288,
+          "latent_mean_energy_fraction": 0.9659571051597595,
+          "layer": 7,
+          "q_direct_mean_energy_fraction": 0.9873649477958679,
+          "q_direct_rms": 2.630230665206909,
+          "q_scalar_rms": 0.013690561056137085,
+          "q_scalar_to_direct_rms": 0.005205080009612049,
+          "q_total_mean_energy_fraction": 0.98741614818573
+        }
+      ],
+      "run_dir": "model-output/position_bias_phase50_training_seed_replication/phase50-qk-readout-r32-seed456-b32-s100000-h768d8",
+      "seed": 456,
+      "summary": {
+        "direct_mean_qk_cosine": {
+          "max": 0.7607306241989136,
+          "mean": 0.6132140718400478,
+          "min": 0.2964608371257782
+        },
+        "k_direct_mean_energy_fraction": {
+          "max": 0.99560546875,
+          "mean": 0.9909480437636375,
+          "min": 0.9788191318511963
+        },
+        "k_scalar_to_direct_rms": {
+          "max": 0.021319018410169237,
+          "mean": 0.006131535697315659,
+          "min": 0.0014913258623285744
+        },
+        "k_total_mean_energy_fraction": {
+          "max": 0.9956062436103821,
+          "mean": 0.9909277930855751,
+          "min": 0.9788427352905273
+        },
+        "latent_mean_energy_fraction": {
+          "max": 0.9740285277366638,
+          "mean": 0.951447144150734,
+          "min": 0.9206416606903076
+        },
+        "q_direct_mean_energy_fraction": {
+          "max": 0.9951794743537903,
+          "mean": 0.9805091395974159,
+          "min": 0.9464910626411438
+        },
+        "q_scalar_to_direct_rms": {
+          "max": 0.03463814801645895,
+          "mean": 0.00920862915639748,
+          "min": 0.0017889351682694762
+        },
+        "q_total_mean_energy_fraction": {
+          "max": 0.9951471090316772,
+          "mean": 0.9804953411221504,
+          "min": 0.9465859532356262
+        }
+      },
+      "weights": {
+        "mtime_ns": 1789079035806740077,
+        "path": "model-output/position_bias_phase50_training_seed_replication/phase50-qk-readout-r32-seed456-b32-s100000-h768d8/pytorch_model.bin",
+        "size_bytes": 616402663
+      }
+    },
+    "789": {
+      "carrier_length": 1023,
+      "definition": "||mean_p C(p)||_2^2 / mean_p ||C(p)||_2^2 over positions p=0,...,training_length-2",
+      "layers": [
+        {
+          "direct_mean_qk_cosine": 0.709831953048706,
+          "gate": 0.025207780301570892,
+          "k_direct_mean_energy_fraction": 0.9882805943489075,
+          "k_direct_rms": 3.100735902786255,
+          "k_scalar_rms": 0.0765511691570282,
+          "k_scalar_to_direct_rms": 0.024688064884287937,
+          "k_total_mean_energy_fraction": 0.9882224202156067,
+          "latent_mean_energy_fraction": 0.9139539003372192,
+          "layer": 0,
+          "q_direct_mean_energy_fraction": 0.9811286330223083,
+          "q_direct_rms": 2.3288490772247314,
+          "q_scalar_rms": 0.08205472677946091,
+          "q_scalar_to_direct_rms": 0.0352340250735547,
+          "q_total_mean_energy_fraction": 0.9806789755821228
+        },
+        {
+          "direct_mean_qk_cosine": 0.6542746424674988,
+          "gate": 0.008218751288950443,
+          "k_direct_mean_energy_fraction": 0.9872310757637024,
+          "k_direct_rms": 1.9165682792663574,
+          "k_scalar_rms": 0.02027047984302044,
+          "k_scalar_to_direct_rms": 0.01057644544277847,
+          "k_total_mean_energy_fraction": 0.9872488975524902,
+          "latent_mean_energy_fraction": 0.8773403167724609,
+          "layer": 1,
+          "q_direct_mean_energy_fraction": 0.972442626953125,
+          "q_direct_rms": 1.3904917240142822,
+          "q_scalar_rms": 0.020193377509713173,
+          "q_scalar_to_direct_rms": 0.01452247227435189,
+          "q_total_mean_energy_fraction": 0.9726378917694092
+        },
+        {
+          "direct_mean_qk_cosine": 0.7025062441825867,
+          "gate": 0.006574078928679228,
+          "k_direct_mean_energy_fraction": 0.9929748177528381,
+          "k_direct_rms": 3.0456016063690186,
+          "k_scalar_rms": 0.014720193110406399,
+          "k_scalar_to_direct_rms": 0.00483326285342878,
+          "k_total_mean_energy_fraction": 0.9929383993148804,
+          "latent_mean_energy_fraction": 0.9258131980895996,
+          "layer": 2,
+          "q_direct_mean_energy_fraction": 0.9922339916229248,
+          "q_direct_rms": 2.1394898891448975,
+          "q_scalar_rms": 0.014289247803390026,
+          "q_scalar_to_direct_rms": 0.006678810624854644,
+          "q_total_mean_energy_fraction": 0.9922024011611938
+        },
+        {
+          "direct_mean_qk_cosine": 0.630109429359436,
+          "gate": 0.007295692805200815,
+          "k_direct_mean_energy_fraction": 0.994529664516449,
+          "k_direct_rms": 3.2695252895355225,
+          "k_scalar_rms": 0.015854693949222565,
+          "k_scalar_to_direct_rms": 0.004849234229803105,
+          "k_total_mean_energy_fraction": 0.9945065975189209,
+          "latent_mean_energy_fraction": 0.9696693420410156,
+          "layer": 3,
+          "q_direct_mean_energy_fraction": 0.9920428991317749,
+          "q_direct_rms": 2.4518582820892334,
+          "q_scalar_rms": 0.01652948185801506,
+          "q_scalar_to_direct_rms": 0.006741613892924617,
+          "q_total_mean_energy_fraction": 0.9920312166213989
+        },
+        {
+          "direct_mean_qk_cosine": 0.6428132057189941,
+          "gate": 0.005883232690393925,
+          "k_direct_mean_energy_fraction": 0.9946210384368896,
+          "k_direct_rms": 2.6489782333374023,
+          "k_scalar_rms": 0.011803715489804745,
+          "k_scalar_to_direct_rms": 0.004455950351443034,
+          "k_total_mean_energy_fraction": 0.9946076273918152,
+          "latent_mean_energy_fraction": 0.9768930673599243,
+          "layer": 4,
+          "q_direct_mean_energy_fraction": 0.9863947629928589,
+          "q_direct_rms": 2.0916879177093506,
+          "q_scalar_rms": 0.012941702269017696,
+          "q_scalar_to_direct_rms": 0.0061872051559156175,
+          "q_total_mean_energy_fraction": 0.9864339828491211
+        },
+        {
+          "direct_mean_qk_cosine": 0.6693178415298462,
+          "gate": 0.0039468989707529545,
+          "k_direct_mean_energy_fraction": 0.9937561750411987,
+          "k_direct_rms": 3.6274659633636475,
+          "k_scalar_rms": 0.008571301586925983,
+          "k_scalar_to_direct_rms": 0.002362889596620241,
+          "k_total_mean_energy_fraction": 0.9937599301338196,
+          "latent_mean_energy_fraction": 0.959755003452301,
+          "layer": 5,
+          "q_direct_mean_energy_fraction": 0.9895819425582886,
+          "q_direct_rms": 2.8653500080108643,
+          "q_scalar_rms": 0.008084917441010475,
+          "q_scalar_to_direct_rms": 0.0028216160044695735,
+          "q_total_mean_energy_fraction": 0.9895853996276855
+        },
+        {
+          "direct_mean_qk_cosine": 0.5266290903091431,
+          "gate": 0.002186488127335906,
+          "k_direct_mean_energy_fraction": 0.987213134765625,
+          "k_direct_rms": 3.2648987770080566,
+          "k_scalar_rms": 0.003894193796440959,
+          "k_scalar_to_direct_rms": 0.0011927456446320784,
+          "k_total_mean_energy_fraction": 0.9872227907180786,
+          "latent_mean_energy_fraction": 0.9159626364707947,
+          "layer": 6,
+          "q_direct_mean_energy_fraction": 0.980313241481781,
+          "q_direct_rms": 4.08048152923584,
+          "q_scalar_rms": 0.005051447544246912,
+          "q_scalar_to_direct_rms": 0.0012379537826735139,
+          "q_total_mean_energy_fraction": 0.9803206920623779
+        },
+        {
+          "direct_mean_qk_cosine": 0.5879083275794983,
+          "gate": 0.004021416883915663,
+          "k_direct_mean_energy_fraction": 0.9905944466590881,
+          "k_direct_rms": 2.707078695297241,
+          "k_scalar_rms": 0.007745078299194574,
+          "k_scalar_to_direct_rms": 0.0028610466007690824,
+          "k_total_mean_energy_fraction": 0.9905956983566284,
+          "latent_mean_energy_fraction": 0.9471712112426758,
+          "layer": 7,
+          "q_direct_mean_energy_fraction": 0.9859402775764465,
+          "q_direct_rms": 2.9504292011260986,
+          "q_scalar_rms": 0.008446029387414455,
+          "q_scalar_to_direct_rms": 0.0028626443177117537,
+          "q_total_mean_energy_fraction": 0.9859606623649597
+        }
+      ],
+      "run_dir": "model-output/position_bias_phase50_training_seed_replication/phase50-qk-readout-r32-seed789-b32-s100000-h768d8",
+      "seed": 789,
+      "summary": {
+        "direct_mean_qk_cosine": {
+          "max": 0.709831953048706,
+          "mean": 0.6404238417744637,
+          "min": 0.5266290903091431
+        },
+        "k_direct_mean_energy_fraction": {
+          "max": 0.9946210384368896,
+          "mean": 0.9911501184105873,
+          "min": 0.987213134765625
+        },
+        "k_scalar_to_direct_rms": {
+          "max": 0.024688064884287937,
+          "mean": 0.0069774549504703414,
+          "min": 0.0011927456446320784
+        },
+        "k_total_mean_energy_fraction": {
+          "max": 0.9946076273918152,
+          "mean": 0.99113779515028,
+          "min": 0.9872227907180786
+        },
+        "latent_mean_energy_fraction": {
+          "max": 0.9768930673599243,
+          "mean": 0.9358198344707489,
+          "min": 0.8773403167724609
+        },
+        "q_direct_mean_energy_fraction": {
+          "max": 0.9922339916229248,
+          "mean": 0.9850097969174385,
+          "min": 0.972442626953125
+        },
+        "q_scalar_to_direct_rms": {
+          "max": 0.0352340250735547,
+          "mean": 0.009535792640807039,
+          "min": 0.0012379537826735139
+        },
+        "q_total_mean_energy_fraction": {
+          "max": 0.9922024011611938,
+          "mean": 0.9849814027547836,
+          "min": 0.9726378917694092
+        }
+      },
+      "weights": {
+        "mtime_ns": 1789109594557896268,
+        "path": "model-output/position_bias_phase50_training_seed_replication/phase50-qk-readout-r32-seed789-b32-s100000-h768d8/pytorch_model.bin",
+        "size_bytes": 616402663
+      }
+    }
+  },
+  "schema_version": 1
+}

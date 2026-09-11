@@ -208,13 +208,15 @@ mechanistic explanations.
 content–position, u·k global key bias, v·R global distance profile) is the
 direct ancestor; it needed materialized relative logits, which is exactly our
 FlexAttention 1.9x problem — the carrier gets the analogous terms inside one
-fused SDPA call. **TUPE** (ICLR 2021, arXiv:2006.15595) found the
-position–position term valuable but argued the *cross*-terms were noisy — under
-shared content/position projections, a complaint the carrier's learned per-head
-in-geometry profiles sidestep. **DeBERTa** (ICLR 2021, arXiv:2006.03654) found
-the opposite: both cross-terms carry signal on every benchmark (their p–p term
-is dropped instead). The union of their ablations weakly favors keeping all
-three terms, which is what the carrier does. No 2024–2026 paper was found that
+fused SDPA call. **TUPE** (ICLR 2021, arXiv:2006.15595) treats content and
+position with untied projections and, in its proper formulation, removes the
+content--position cross terms. Its Section 4.3 **BERT-Ad** ablation—adding
+absolute position into attention with separate projections while retaining
+cross terms—is the closer precedent for our four-term construction. **DeBERTa**
+(ICLR 2021, arXiv:2006.03654) instead finds useful disentangled cross terms
+while dropping the p--p term. These methods motivate explicit term ablations;
+they do not establish in advance that retaining all terms is best for our
+RoPE decoder. No 2024–2026 paper was found that
 simply adds a learned absolute PE into Q/K of a RoPE decoder and reports an
 in-distribution gain — the "wpe+RoPE helps nanoGPT" claim is folklore
 **[unverified]**.
@@ -231,7 +233,9 @@ translation-equivariant priors are exactly finite trigonometric polynomials —
 i.e., the carrier's function class is canonical, not incidental. 125M/C4:
 −1.55 ppl vs ALiBi. Goat is the closest competitor-and-validator: it keeps
 position in *dedicated* dims (pure prior, no cross-terms); we share dims with
-content (cross-terms included). That difference is testable (§7.4).
+content, jointly normalize them, and retain cross-terms. Its pure Fourier
+prior and sink construction are therefore functional controls, not algebraic
+equivalents of our carrier. That difference is testable (§7.4).
 
 **Explanation 2 — sink/default-attention formation.** StreamingLLM
 (ICLR 2024), "Why do LLMs attend to the first token?" (COLM 2025,

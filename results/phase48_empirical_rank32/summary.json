@@ -1,0 +1,73 @@
+{
+  "calibration_source": {
+    "empirical_r32_multiplier": 6.367487169620489,
+    "phase47_postwarmup_function_ratio": 1.2997578757740733,
+    "phase47_theoretical_r32_multiplier": 4.898979485566356,
+    "selected_without_validation_loss": true
+  },
+  "caveat": "The rank-128 comparator was frozen before selecting the empirical rank-32 multiplier. Runs share the schedule, initialization seed, data order, and holdout; paired-example intervals do not estimate training-seed uncertainty.",
+  "comparisons": {
+    "empirical-r32_minus_calibrated-r128": {
+      "delta": 0.0010577085195109248,
+      "paired_example_bootstrap_ci95": [
+        0.00014977736864238978,
+        0.0019965254177805015
+      ]
+    },
+    "empirical-r32_minus_dense-separate": {
+      "delta": -0.0018423926085233688,
+      "paired_example_bootstrap_ci95": [
+        -0.002904996310826391,
+        -0.0007922100019641226
+      ]
+    },
+    "empirical-r32_minus_scalar-parent": {
+      "delta": -0.01569761091377586,
+      "paired_example_bootstrap_ci95": [
+        -0.01701815935084596,
+        -0.014403278546524236
+      ]
+    },
+    "empirical-r32_minus_theoretical-r32": {
+      "delta": -0.0018886220641434193,
+      "paired_example_bootstrap_ci95": [
+        -0.0025176789320539685,
+        -0.001272467576200143
+      ]
+    }
+  },
+  "context": 1024,
+  "decision": "The function-step gate passed. Calibrated rank 128 retained a small paired endpoint advantage, compatible with a modest capacity effect, but it is below the project's 0.003 scout materiality margin and does not establish a robust rank claim from one training seed.",
+  "function_step_scale_r128_over_r32": {
+    "early_through_step_64_median": 1.3217021890841627,
+    "passes_predeclared_match": true,
+    "postwarmup_max": 1.573488213707476,
+    "postwarmup_min": 0.8766106938017795,
+    "postwarmup_step_1000_to_19000_median": 1.0898006245412613
+  },
+  "rank_gap_decomposition": {
+    "fraction_of_original_gap_closed_by_calibration": 0.7295144082936498,
+    "matched_function_step_rank128_advantage": 0.0010577085195109248,
+    "original_equal_lr_rank128_advantage": 0.003910406143404543
+  },
+  "reference_losses": {
+    "calibrated-r128": 3.4383224711054936,
+    "dense-separate": 3.441222572233528,
+    "scalar-parent": 3.4550777905387804,
+    "theoretical-r32": 3.441268801689148
+  },
+  "run": {
+    "final_holdout_loss": 3.4393801796250045,
+    "minimum_gradient_clip_ratio": 0.4717207777637475,
+    "peak_reserved_mib": 16726.0,
+    "position_params": 589832,
+    "rank": 32,
+    "readout_lr_multiplier": 6.367487169620489,
+    "target_tokens_per_second": 210214.7875179618
+  },
+  "scope": "phase48_empirical_rank32",
+  "scout_complete": true,
+  "seed": 123,
+  "sequence_batch": 32,
+  "training_steps": 20000
+}

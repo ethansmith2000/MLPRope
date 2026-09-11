@@ -24,4 +24,9 @@ Negative deltas favor the first named arm.
 Median rank-128/rank-32 carrier-step ratio through step 64: 1.703.
 Median ratio from step 1k through 19k: 1.300 (predeclared 0.8--1.25 match: no).
 
+## Decision
+
+The predeclared carrier-function-step match failed; the rank-128 endpoint advantage cannot be attributed cleanly to representational rank.
+Both calibrated arms remain valid optimization results, but the rank contrast is not a clean capacity ablation when the match fails.
+
 All references use the identical schedule, paired initialization seed, data order, and holdout. Paired-example intervals do not estimate training-seed uncertainty.

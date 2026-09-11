@@ -415,9 +415,11 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             position_output is not None and self.qk_placement == "after_rope"
         )
         if position_after_rope:
-            # Compare R RMS(q + e) with RMS(R q + e): RMSNorm commutes with
-            # the orthogonal RoPE rotation, so this changes only whether RoPE
-            # rotates the native additive carrier.
+            # Compare R RMS(q + e) with RMS(R q + e). The scalar RMS
+            # denominator commutes with an orthogonal rotation, but RMSNorm's
+            # learned coordinatewise gain generally does not: R Gamma !=
+            # Gamma R unless each rotary pair has equal gains. This ordering
+            # therefore changes both carrier rotation and gain/rotation order.
             q, k = self._apply_rope(q_projected, k_projected)
             q_addend = (
                 position_output.q[None]

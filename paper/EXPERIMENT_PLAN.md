@@ -7,6 +7,17 @@ Revision 2026-09-06: refocused the paper ablations on necessity of the final
 method's components, removed exploratory learned carrier variants from the
 main matrix, and added a measured 8x5090/conditional 4xH200 execution plan.
 
+Revision 2026-09-10: Phase 49 promoted the calibrated rank-32 dedicated Q/K
+readout to three-seed confirmation after it beat both its scalar parent and a
+parameter-matched FFN control at 100k. Phase 50 adds seeds 456 and 789 with a
+two-GPU concurrency ceiling; it does not reopen method search.
+
+Revision 2026-09-11: a registered checkpoint audit found that the mature
+rank-32 direct branch is overwhelmingly positional-mean dominated. Phase 51
+therefore precedes any new mapper training with causal endpoint
+counterfactuals and bias-like controls. The scalar carrier remains the primary
+minimal method until Phase 50 and this attribution close.
+
 ## 1. Claim and method freeze
 
 The narrow primary claim is:
@@ -499,7 +510,80 @@ holdout with a below-zero paired interval, a non-collapsing late curve, and
 finite active adapter updates. A passing arm receives a longer confirmation
 and a parameter-matched FFN control before affecting the primary method.
 
-## 13. Immediate run recommendation
+Phases 45--48 subsequently isolated a compact projected-space candidate: a
+linear shared bottleneck with separate Q/K readouts and a calibrated
+output-factor LR. Phase 48 matched rank-32/rank-128 function steps at a
+`1.090x` median ratio and closed about 73% of the original rank gap. Rank 128
+retained a small `0.001058` endpoint advantage, below the scout materiality
+margin and supported by only one training seed. The efficient projected-space
+candidate is therefore rank 32 at readout multiplier `6.367487`; it remains an
+extension of the minimal scalar method pending seed replication and mechanism
+attribution. Rank 128 at `2.449490` is a scaling ablation and the best observed
+20k endpoint, not a separately promoted method. No further local LR or mapper
+tuning is planned.
+
+Phase 49 is the completed frozen mature evidence cohort. It trained fixed RoPE,
+scalar pre-Q/K, calibrated rank 32, calibrated rank 128, and a scalar-carrier
+FFN-capacity control for 100k updates at the canonical M-scale recipe. The
+final 1,024-block holdout starts at validation block 4096 and was not used by
+any preceding repository configuration. The FFN control adds 590,336 generic
+parameters versus rank 32's 589,824 dedicated-readout parameters. Rank 32 must
+clear `-0.003` with a below-zero paired interval against both scalar and FFN
+controls and retain a negative late development curve before seeds 456 and
+789 could be launched. Rank comparisons retained the `[0.8, 1.25]` function-
+step match requirement and the same `-0.003` materiality threshold.
+
+Phase 49 completed and passed every rank-32 gate. Rank 32 beat scalar by
+`-0.010140` and the matched FFN control by `-0.009576`; rank 128 added only
+`-0.000750` with an interval crossing zero despite a valid `1.029` function-
+step ratio. Phase 50 therefore runs the four relevant arms at seeds 456 and
+789. The replication succeeds only if rank 32 beats both scalar controls in
+all three seeds (including Phase 49 seed 123), each mean improvement is at
+least `0.003`, and diagnostics remain finite. Report seed-level deltas and
+sample variation as the primary uncertainty; example-level bootstraps remain
+within-seed precision estimates.
+
+Seed 123 both selected and first confirmed rank 32. The frozen gate still uses
+all three seeds, but the report must additionally expose the seed-456/789 mean
+as fresh-seed evidence. It must also include a contiguous-block bootstrap
+sensitivity analysis because adjacent token blocks can share source-document
+context, and must validate the complete metric/optimizer history rather than
+letting `all([])` certify an absent diagnostic.
+
+## 13. Registered Phase-51 mechanism decision
+
+Before training another positional map, evaluate the mature rank-32 final
+models under six inference-time conditions: full branch, direct positional
+mean only, direct mean removed, direct branch zeroed, scalar anchor zeroed,
+and both branches zeroed. Every condition recomputes QK RMS normalization and
+all subsequent layers. Save only per-block losses, statistics, provenance,
+and a compact report; the existing final weights are the declared input
+artifact and no new weights are produced.
+
+The diagnostic addresses endpoint necessity, not training-time path
+dependence. Use these conditional decisions:
+
+1. If mean-only is close to full and mean-removed approaches direct-zero,
+   train an exact factorized constant-carrier control and a tiny Q/K-bias
+   control with matched initialization, LR treatment, and decay.
+2. If mean-removed remains useful, retain the Fourier interpretation and
+   characterize its centered spectrum before adding a position table.
+3. If scalar-zero is neutral, train a no-anchor rank-32 arm before deleting the
+   scalar from the method; a training loss would identify optimization
+   scaffolding that endpoint ablation cannot.
+4. Train a matched content adapter only if the rank-32 branch remains useful;
+   matching would weaken the position-specific interpretation.
+5. Do not train the constant, bias, table, or content controls as an automatic
+   sweep. The checkpoint intervention selects the smallest discriminating
+   follow-up.
+
+The structural statistic is
+`||mean_p C(p)||^2 / mean_p ||C(p)||^2` over positions 0--1022. This is a
+descriptive weight diagnostic, not causal attribution. A constant pre-RoPE
+vector is still position sensitive after rotation, producing the pure
+relative kernel `b_q^T R(r-p)b_k` before joint QK normalization.
+
+## 14. Historical paper-cohort run recommendation
 
 After the batch benchmark freezes the paper recipe, the first evidence batch
 should be the primary seed-123 cells, not more learned carrier-shape variants:
@@ -520,7 +604,7 @@ shared queue start the remaining three as devices free up. The old batch-8
 controls are reused as preliminary and batch-robustness evidence, not as
 matched controls for this new cohort.
 
-## 14. Literature anchors for the protocol
+## 15. Literature anchors for the protocol
 
 - [Attention Is All You Need](https://arxiv.org/abs/1706.03762): classic input
   sinusoid.

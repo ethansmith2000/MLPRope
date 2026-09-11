@@ -163,6 +163,7 @@ def analyze() -> dict:
         ratio for step, ratio in ratios.items() if 1_000 <= step <= 19_000
     ]
     postwarmup_median = statistics.median(postwarmup)
+    passes_match = 0.8 <= postwarmup_median <= 1.25
     return {
         "scope": "phase47_rank_calibration",
         "context": 1_024,
@@ -179,7 +180,20 @@ def analyze() -> dict:
             "postwarmup_step_1000_to_19000_median": postwarmup_median,
             "postwarmup_min": min(postwarmup),
             "postwarmup_max": max(postwarmup),
-            "passes_predeclared_match": 0.8 <= postwarmup_median <= 1.25,
+            "passes_predeclared_match": passes_match,
+        },
+        "decision": {
+            "observed_best_endpoint": "calibrated-r128",
+            "rank_comparison_interpretable_as_capacity": passes_match,
+            "reason": (
+                "The predeclared carrier-function-step match passed."
+                if passes_match
+                else (
+                    "The predeclared carrier-function-step match failed; the "
+                    "rank-128 endpoint advantage cannot be attributed cleanly "
+                    "to representational rank."
+                )
+            ),
         },
         "caveat": (
             "All references use the identical schedule, paired initialization "
@@ -232,6 +246,12 @@ def render(results: dict) -> str:
             f"Median ratio from step 1k through 19k: "
             f"{scale['postwarmup_step_1000_to_19000_median']:.3f} "
             f"(predeclared 0.8--1.25 match: {match}).",
+            "",
+            "## Decision",
+            "",
+            results["decision"]["reason"],
+            "Both calibrated arms remain valid optimization results, but the "
+            "rank contrast is not a clean capacity ablation when the match fails.",
             "",
             results["caveat"],
             "",

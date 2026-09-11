@@ -1,0 +1,393 @@
+{
+  "comparisons": {
+    "qk-readout-r32_minus_rope": {
+      "all_three_negative": true,
+      "by_seed": {
+        "123": {
+          "contiguous_block_32_bootstrap_ci95": [
+            -0.04935260142665356,
+            -0.04617238120408729
+          ],
+          "delta": -0.047743566799908876,
+          "paired_example_bootstrap_ci95": [
+            -0.049257289193337786,
+            -0.04621722920855973
+          ]
+        },
+        "456": {
+          "contiguous_block_32_bootstrap_ci95": [
+            -0.0414150425553089,
+            -0.03821665928990115
+          ],
+          "delta": -0.039798256824724376,
+          "paired_example_bootstrap_ci95": [
+            -0.04134300462028477,
+            -0.03825095088395756
+          ]
+        },
+        "789": {
+          "contiguous_block_32_bootstrap_ci95": [
+            -0.051422989746788515,
+            -0.04790379767073318
+          ],
+          "delta": -0.04973010555841029,
+          "paired_example_bootstrap_ci95": [
+            -0.0512544771481771,
+            -0.04818004183471203
+          ]
+        }
+      },
+      "candidate": "qk-readout-r32",
+      "fresh_seed_mean_delta": -0.04476418119156733,
+      "fresh_seeds_both_negative": true,
+      "reference": "rope",
+      "seed_mean_delta": -0.04575730972768118,
+      "seed_sample_std": 0.005255408422276571,
+      "seed_t_interval95": [
+        -0.05881246798059969,
+        -0.03270215147476267
+      ]
+    },
+    "qk-readout-r32_minus_scalar-ffnmatch-r32": {
+      "all_three_negative": true,
+      "by_seed": {
+        "123": {
+          "contiguous_block_32_bootstrap_ci95": [
+            -0.010901196792838163,
+            -0.008258632224169562
+          ],
+          "delta": -0.009575612959451973,
+          "paired_example_bootstrap_ci95": [
+            -0.010992126722703688,
+            -0.008178150435560383
+          ]
+        },
+        "456": {
+          "contiguous_block_32_bootstrap_ci95": [
+            -0.008050501282559708,
+            -0.004825666695251131
+          ],
+          "delta": -0.0064657790353521705,
+          "paired_example_bootstrap_ci95": [
+            -0.007895773291238584,
+            -0.005017364950617776
+          ]
+        },
+        "789": {
+          "contiguous_block_32_bootstrap_ci95": [
+            -0.005763936106814071,
+            -0.002705462015001106
+          ],
+          "delta": -0.0042149979854002595,
+          "paired_example_bootstrap_ci95": [
+            -0.00570741314732004,
+            -0.002710331001435408
+          ]
+        }
+      },
+      "candidate": "qk-readout-r32",
+      "fresh_seed_mean_delta": -0.005340388510376215,
+      "fresh_seeds_both_negative": true,
+      "reference": "scalar-ffnmatch-r32",
+      "seed_mean_delta": -0.006752129993401468,
+      "seed_sample_std": 0.00269175516687322,
+      "seed_t_interval95": [
+        -0.013438820514481508,
+        -6.543947232142723e-05
+      ]
+    },
+    "qk-readout-r32_minus_scalar-qkpre": {
+      "all_three_negative": true,
+      "by_seed": {
+        "123": {
+          "contiguous_block_32_bootstrap_ci95": [
+            -0.011715441226260736,
+            -0.008557457095594148
+          ],
+          "delta": -0.010140285594388843,
+          "paired_example_bootstrap_ci95": [
+            -0.01156045624811668,
+            -0.008714020135812461
+          ]
+        },
+        "456": {
+          "contiguous_block_32_bootstrap_ci95": [
+            -0.007578496250789613,
+            -0.004665288838441484
+          ],
+          "delta": -0.006123670958913863,
+          "paired_example_bootstrap_ci95": [
+            -0.0074620244355173785,
+            -0.004778671401436443
+          ]
+        },
+        "789": {
+          "contiguous_block_32_bootstrap_ci95": [
+            -0.01272208567825146,
+            -0.009260380867635832
+          ],
+          "delta": -0.011046129511669278,
+          "paired_example_bootstrap_ci95": [
+            -0.012463761525577866,
+            -0.009619842839310883
+          ]
+        }
+      },
+      "candidate": "qk-readout-r32",
+      "fresh_seed_mean_delta": -0.00858490023529157,
+      "fresh_seeds_both_negative": true,
+      "reference": "scalar-qkpre",
+      "seed_mean_delta": -0.009103362021657327,
+      "seed_sample_std": 0.00261993462182999,
+      "seed_t_interval95": [
+        -0.015611640418310306,
+        -0.0025950836250043484
+      ]
+    },
+    "scalar-ffnmatch-r32_minus_scalar-qkpre": {
+      "all_three_negative": false,
+      "by_seed": {
+        "123": {
+          "contiguous_block_32_bootstrap_ci95": [
+            -0.0020847688720095903,
+            0.0009672821877757041
+          ],
+          "delta": -0.0005646726349368691,
+          "paired_example_bootstrap_ci95": [
+            -0.001999954506754875,
+            0.000870520574972033
+          ]
+        },
+        "456": {
+          "contiguous_block_32_bootstrap_ci95": [
+            -0.0012999729719012977,
+            0.001889282220508903
+          ],
+          "delta": 0.00034210807643830776,
+          "paired_example_bootstrap_ci95": [
+            -0.0011434921238105745,
+            0.0018109614349668837
+          ]
+        },
+        "789": {
+          "contiguous_block_32_bootstrap_ci95": [
+            -0.008349695630022325,
+            -0.005296448778244668
+          ],
+          "delta": -0.006831131526269019,
+          "paired_example_bootstrap_ci95": [
+            -0.008355695093632676,
+            -0.005298708830378018
+          ]
+        }
+      },
+      "candidate": "scalar-ffnmatch-r32",
+      "fresh_seed_mean_delta": -0.0032445117249153554,
+      "fresh_seeds_both_negative": false,
+      "reference": "scalar-qkpre",
+      "seed_mean_delta": -0.00235123202825586,
+      "seed_sample_std": 0.003906108990908271,
+      "seed_t_interval95": [
+        -0.012054544679143043,
+        0.007352080622631324
+      ]
+    },
+    "scalar-qkpre_minus_rope": {
+      "all_three_negative": true,
+      "by_seed": {
+        "123": {
+          "contiguous_block_32_bootstrap_ci95": [
+            -0.03935531142633408,
+            -0.035934309463482354
+          ],
+          "delta": -0.037603281205520034,
+          "paired_example_bootstrap_ci95": [
+            -0.03909428828046657,
+            -0.0360676392680034
+          ]
+        },
+        "456": {
+          "contiguous_block_32_bootstrap_ci95": [
+            -0.03517540307366289,
+            -0.03212830014526844
+          ],
+          "delta": -0.033674585865810513,
+          "paired_example_bootstrap_ci95": [
+            -0.03520720903470646,
+            -0.03217363321746234
+          ]
+        },
+        "789": {
+          "contiguous_block_32_bootstrap_ci95": [
+            -0.040188460476929325,
+            -0.037174377031624316
+          ],
+          "delta": -0.03868397604674101,
+          "paired_example_bootstrap_ci95": [
+            -0.04019922927836887,
+            -0.037190669780829924
+          ]
+        }
+      },
+      "candidate": "scalar-qkpre",
+      "fresh_seed_mean_delta": -0.03617928095627576,
+      "fresh_seeds_both_negative": true,
+      "reference": "rope",
+      "seed_mean_delta": -0.03665394770602385,
+      "seed_sample_std": 0.002636175841280313,
+      "seed_t_interval95": [
+        -0.04320257152839971,
+        -0.03010532388364799
+      ]
+    }
+  },
+  "context": 1024,
+  "final_holdout": {
+    "blocks": 1024,
+    "start_batch": 4096
+  },
+  "gates": {
+    "all_diagnostics_finite": true,
+    "materiality_delta_at_most": -0.003,
+    "rank32_beats_ffn_control_in_all_seeds_with_material_mean": true,
+    "rank32_beats_scalar_in_all_seeds_with_material_mean": true,
+    "replication_passes": true
+  },
+  "inference_note": "The primary uncertainty unit is the training seed. The paired-example and contiguous-block intervals describe evaluation-sample precision within each seed; the three-seed t interval is descriptive and necessarily low-powered. Seed 123 selected this candidate, so the seeds-456/789 mean is also reported separately as fresh confirmation rather than obscured by the selected seed.",
+  "runs": {
+    "123": {
+      "qk-readout-r32": {
+        "diagnostics": {
+          "final_position_values_checked": 264,
+          "finite": true,
+          "metric_numeric_values_checked": 5859,
+          "optimization_numeric_values_checked": 3954,
+          "optimization_rows_checked": 110
+        },
+        "final_holdout_loss": 3.1594127694843337
+      },
+      "rope": {
+        "diagnostics": {
+          "final_position_values_checked": 0,
+          "finite": true,
+          "metric_numeric_values_checked": 315,
+          "optimization_numeric_values_checked": 0,
+          "optimization_rows_checked": 0
+        },
+        "final_holdout_loss": 3.2071563362842426
+      },
+      "scalar-ffnmatch-r32": {
+        "diagnostics": {
+          "final_position_values_checked": 264,
+          "finite": true,
+          "metric_numeric_values_checked": 5859,
+          "optimization_numeric_values_checked": 3952,
+          "optimization_rows_checked": 110
+        },
+        "final_holdout_loss": 3.1689883824437857
+      },
+      "scalar-qkpre": {
+        "diagnostics": {
+          "final_position_values_checked": 264,
+          "finite": true,
+          "metric_numeric_values_checked": 5859,
+          "optimization_numeric_values_checked": 3952,
+          "optimization_rows_checked": 110
+        },
+        "final_holdout_loss": 3.1695530550787225
+      }
+    },
+    "456": {
+      "qk-readout-r32": {
+        "diagnostics": {
+          "final_position_values_checked": 264,
+          "finite": true,
+          "metric_numeric_values_checked": 5859,
+          "optimization_numeric_values_checked": 3954,
+          "optimization_rows_checked": 110
+        },
+        "final_holdout_loss": 3.1595963122090325
+      },
+      "rope": {
+        "diagnostics": {
+          "final_position_values_checked": 0,
+          "finite": true,
+          "metric_numeric_values_checked": 315,
+          "optimization_numeric_values_checked": 0,
+          "optimization_rows_checked": 0
+        },
+        "final_holdout_loss": 3.199394569033757
+      },
+      "scalar-ffnmatch-r32": {
+        "diagnostics": {
+          "final_position_values_checked": 264,
+          "finite": true,
+          "metric_numeric_values_checked": 5859,
+          "optimization_numeric_values_checked": 3952,
+          "optimization_rows_checked": 110
+        },
+        "final_holdout_loss": 3.1660620912443846
+      },
+      "scalar-qkpre": {
+        "diagnostics": {
+          "final_position_values_checked": 264,
+          "finite": true,
+          "metric_numeric_values_checked": 5859,
+          "optimization_numeric_values_checked": 3952,
+          "optimization_rows_checked": 110
+        },
+        "final_holdout_loss": 3.1657199831679463
+      }
+    },
+    "789": {
+      "qk-readout-r32": {
+        "diagnostics": {
+          "final_position_values_checked": 264,
+          "finite": true,
+          "metric_numeric_values_checked": 5859,
+          "optimization_numeric_values_checked": 3954,
+          "optimization_rows_checked": 110
+        },
+        "final_holdout_loss": 3.1621798370033503
+      },
+      "rope": {
+        "diagnostics": {
+          "final_position_values_checked": 0,
+          "finite": true,
+          "metric_numeric_values_checked": 315,
+          "optimization_numeric_values_checked": 0,
+          "optimization_rows_checked": 0
+        },
+        "final_holdout_loss": 3.2119099425617605
+      },
+      "scalar-ffnmatch-r32": {
+        "diagnostics": {
+          "final_position_values_checked": 264,
+          "finite": true,
+          "metric_numeric_values_checked": 5859,
+          "optimization_numeric_values_checked": 3952,
+          "optimization_rows_checked": 110
+        },
+        "final_holdout_loss": 3.1663948349887505
+      },
+      "scalar-qkpre": {
+        "diagnostics": {
+          "final_position_values_checked": 264,
+          "finite": true,
+          "metric_numeric_values_checked": 5859,
+          "optimization_numeric_values_checked": 3952,
+          "optimization_rows_checked": 110
+        },
+        "final_holdout_loss": 3.1732259665150195
+      }
+    }
+  },
+  "scope": "phase50_training_seed_replication",
+  "seeds": [
+    123,
+    456,
+    789
+  ],
+  "sequence_batch": 32,
+  "training_steps": 100000
+}

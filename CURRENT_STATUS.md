@@ -1,6 +1,6 @@
 # MLPRope current status
 
-_Authoritative as of 2026-09-08. Older mechanisms and protocols are preserved
+_Authoritative as of 2026-09-11. Older mechanisms and protocols are preserved
 in git history; compact experimental evidence remains under `results/`._
 
 ## Bottom line
@@ -23,6 +23,26 @@ post-RoPE AddRoPE (`3.151333`) were competitive but weaker. A single learned
 gate shared globally was tied with per-layer gates; a fixed gate and
 first-layer-only injection were worse.
 
+Phase 49 has now confirmed the calibrated rank-32 dedicated Q/K readout at the
+same 100k paper budget. It reached `3.159413`, beating the scalar pre-Q/K
+parent by `-0.010140` and the nearly exact FFN-capacity control by `-0.009576`.
+Rank 128 improved by only another `-0.000750`, so rank 32 remains the efficient
+candidate and has advanced to training-seed replication.
+
+A post-hoc checkpoint audit has materially changed the interpretation of that
+rank-32 extension. Across the mature seed-123 and seed-456 checkpoints,
+`94.65%--99.56%` of each direct Q/K carrier's pre-RoPE energy lies in its
+positional mean. The original scalar branch is only `0.00135--0.03724` of the
+direct branch RMS across layers. A nearly constant vector is still positional
+after RoPE—it induces a relative kernel—but this result makes learned Q/K
+bias-like structure a serious alternative to the claimed rich Fourier map.
+Phase 51 therefore performs registered checkpoint counterfactuals before any
+new mapper training.
+
+The dependent service `mlprope-phase51-carrier-mechanism` is queued behind the
+Phase-50 report. It will use at most two `gpu-claim` slots and writes no new
+weights or checkpoints.
+
 Phase 39 separated carrier location at 30k. A sinusoid written once at model
 input helped only `-0.013170`, whereas repeated pre-Q/K access helped
 `-0.073805`. A fixed native AddRoPE+RoPE carrier helped `-0.019362`; learning
@@ -38,9 +58,11 @@ does provide one new structural lead: a static rank-32 bottleneck with
 dedicated Q/K readouts improved the scalar pre-Q/K parent by `-0.009401` at
 20k. Phase 45 strengthened that lead: dense shared, dense separate, and
 nonlinear rank-128 projected-space pathways all improved the same parent by
-about `-0.014` and were statistically tied with one another. The simplest
-interpretation is that a sufficiently expressive native Q/K positional map
-matters, while Q/K untying and nonlinearity have not shown independent value.
+about `-0.014` and were statistically tied with one another. Before the
+checkpoint audit, the simplest interpretation was that a sufficiently
+expressive native Q/K positional map matters. The surviving alternatives are
+now a rich position-varying map versus bias-like structure rotated by RoPE;
+Q/K untying and nonlinearity still have not shown independent value.
 
 ## Strongest completed evidence
 
@@ -62,6 +84,11 @@ matters, while Q/K untying and nonlinearity have not shown independent value.
 | dense pre-map vs scalar pre-Q/K | 20k, batch 32, 1 seed | `-0.005913` |
 | linear rank-128 separate Q/K map vs scalar pre-Q/K | 20k, batch 32, 1 seed | `-0.013312` |
 | linear rank-128 separate vs linear rank-32 separate | 20k, batch 32, 1 seed | `-0.003910` |
+| calibrated linear rank-128 separate vs scalar pre-Q/K | 20k, batch 32, 1 seed | `-0.016755` |
+| calibrated linear rank-128 vs calibrated rank-32 | 20k, batch 32, 1 seed | `-0.002946`; function-step gate failed |
+| calibrated rank-128 vs empirically matched rank-32 | 20k, batch 32, 1 seed | `-0.001058`; function-step gate passed |
+| calibrated rank-32 vs scalar pre-Q/K | 100k, batch 32, 1 seed | `-0.010140` |
+| calibrated rank-32 vs matched FFN capacity | 100k, batch 32, 1 seed | `-0.009576` |
 | pre-Q/K + RoPE, h1024/d12 vs matched RoPE | 200k, 1 paired seed | `-0.040581` |
 | pre-Q/K + RoPE without QKNorm vs matched RoPE | 200k, 1 paired seed | `-0.049523` |
 | pre-Q/K + RoPE vs pre-Q/K + NoPE | 200k, 1 paired seed | `-0.030773` |
@@ -158,6 +185,11 @@ blocks canonicalize to an inert active form. The new separate Q/K pathway is a
 static, position-only low-rank readout and does not restore the removed dynamic
 machinery.
 
+The rank-32 module also exposes six evaluation-only, non-persistent
+counterfactual modes: full, positional-mean-only, mean-removed, direct-zero,
+scalar-zero, and all-zero. Any non-full mode raises during training. These are
+analysis controls, not new trainable methods.
+
 ## Next evidence program
 
 The completed paper evidence cohort fixed context 1024, sequence batch 32, and
@@ -193,12 +225,87 @@ same Adam LR, rank 128's measured carrier-function step was 3.40x larger
 through step 64 and 1.80x larger at the median sampled post-warmup step. A
 narrow update-calibration experiment is warranted before mature confirmation.
 
-Phase 47 is running the predeclared calibration: separate linear Q/K readouts
-at rank 32 with multiplier `sqrt(768/32)=4.898979`, and rank 128 with
-`sqrt(768/128)=2.449490`. Only the zero-initialized output factors receive the
-larger LR; bottlenecks and scalar gates remain at base LR. AdamW coefficients
-are inversely adjusted so effective decay per step is unchanged. Interpretation
-requires the median post-warmup carrier-step ratio to lie in `[0.8, 1.25]`.
+Phase 47 completed the predeclared calibration: separate linear Q/K readouts
+at rank 32 used multiplier `sqrt(768/32)=4.898979`, and rank 128 used
+`sqrt(768/128)=2.449490`. Only the zero-initialized output factors received the
+larger LR; bottlenecks and scalar gates stayed at base LR. AdamW coefficients
+were inversely adjusted so effective decay per step was unchanged.
+
+Both arms improved materially over their uncalibrated counterparts. Rank 32
+reached `3.441269` (`-0.004408`), statistically tying dense separate; rank 128
+reached the best current 20k endpoint, `3.438322` (`-0.003444` versus its
+uncalibrated version and `-0.002900` versus dense separate). Rank 128 beat
+calibrated rank 32 by `-0.002946` on the paired final holdout.
+
+The predeclared validity gate nevertheless failed: the median post-warmup
+rank-128/rank-32 carrier-step ratio was `1.300`, just above the allowed `1.25`.
+The ratio was noisy (`0.920--1.790`) and its late-half median was `1.221`, but
+those are post-hoc sensitivity checks. Therefore the endpoint ordering is a
+real optimization result, while the claim that rank 128 wins specifically
+because of representational capacity remains unresolved. Persistent gradient
+clipping is not the explanation: clipping ended by step 64 in both arms.
+
+If rank is intended as a paper claim, the cheapest clean close-out is one
+empirically recalibrated rank-32 arm. Using only Phase-47's optimization
+diagnostic, not its holdout loss, its readout multiplier would move from
+`4.898979` to approximately `4.898979 * 1.300 = 6.37`; the existing calibrated
+rank-128 run remains the frozen comparator. This should be predeclared as a
+calibration check, not another shape search. If rank itself is not a claim, no
+further local screen is necessary: treat calibrated rank 128 as the strongest
+optimizer-tuned candidate and move to mature confirmation and generalization.
+
+Phase 48 completed the authorized one-shot close-out. It reran only rank 32 at
+the diagnostic-derived multiplier `6.367487`, selected as
+`4.898979 * 1.299758` without consulting validation loss, while retaining the
+Phase-47 rank-128 arm as the frozen comparator. The function-step gate passed:
+the median post-warmup rank-128/rank-32 ratio was `1.090`, inside `[0.8, 1.25]`.
+
+Empirical rank 32 reached `3.439380`, improving the theoretical-calibration
+rank-32 arm by `-0.001889` and the scalar parent by `-0.015698`. Rank 128
+retained a small `-0.001058` advantage, with a paired-example interval barely
+excluding zero. Function matching therefore closed about 73% of the original
+equal-LR rank gap. The residual is compatible with a modest capacity effect,
+but it is below the project's `0.003` scout materiality margin and comes from
+one training seed. It is not robust evidence that rank 128 is the intrinsically
+better operating point.
+
+The local architecture/parameterization scout is now complete. No further
+rank LR tuning or sinusoid-map expansion is planned. Rank 32 at multiplier
+`6.367487` is the efficient projected-space extension candidate, conditional
+on replication and Phase-51 attribution; the scalar carrier remains the
+minimal primary method. Rank 128 at `2.449490` is a useful scaling ablation and
+the best observed 20k endpoint.
+
+Phase 49 completed the frozen 100k mature confirmation cohort. Its five
+seed-123, batch-32, context-1024 arms were fixed RoPE, scalar pre-Q/K + RoPE,
+scalar pre-Q/K plus a parameter-matched FFN widening, calibrated rank-32 Q/K
+readout, and calibrated rank-128 Q/K readout. The final evidence window was the
+previously unused validation block range `[4096, 5119]`; scouting used
+`[2048, 3071]`, so design selection did not tune this endpoint.
+
+The rank-32 branch adds 589,824 parameters over its scalar parent. Its control
+widens four evenly spaced GeGLU blocks from 3072 to 3136, adding 590,336
+non-positional parameters—an error of only 512 parameters. Rank 32 advances
+to seed replication only if it beats both its scalar parent and this FFN
+control by at least `0.003` NLL with paired intervals below zero, remains
+better at every 80k--100k development checkpoint, and stays finite. It passed
+every gate. The median rank-128/rank-32 carrier-step ratio was `1.029`, but
+rank 128's `-0.000750` endpoint delta was below materiality and its paired
+interval crossed zero.
+
+Phase 50 now adds seeds 456 and 789 for four arms: fixed RoPE, scalar pre-Q/K,
+the matched FFN control, and calibrated rank 32. Together with Phase 49 seed
+123, success requires rank 32 to beat both scalar controls in every seed with
+a mean delta at most `-0.003`, plus finite diagnostics. A durable launcher has
+a hard ceiling of two live `gpu-claim` jobs, so the eight new runs occupy at
+most two GPUs and execute in four waves. No new architecture or method
+hyperparameter is being selected in this replication.
+
+Because seed 123 selected the rank-32 candidate, the Phase-50 report preserves
+the frozen three-seed gate but also reports the mean over fresh seeds 456 and
+789 separately. It checks finite metrics and optimizer histories rather than
+allowing an empty diagnostic list to pass, and adds a contiguous-block
+bootstrap sensitivity analysis for neighboring validation blocks.
 
 The next experiments test the method rather than search its local shape space:
 
@@ -210,6 +317,13 @@ The next experiments test the method rather than search its local shape space:
 3. **generalization:** another corpus and a modernized decoder backbone;
 4. **optional broader claim:** separable 2D pre-Q/K carriers in a ViT, followed
    by a spatial DiT only if image-classification transfer succeeds.
+
+Before items 2--4, Phase 51 asks whether the rank-32 gain is actually carried
+by its position-varying Fourier component. It evaluates trained checkpoints
+with only the direct positional mean, only the centered direct component, no
+direct component, no scalar anchor, and neither branch. Only if that remains
+ambiguous should we train a factorized constant-carrier/QK-bias control, a
+matched content adapter, a no-anchor rank-32 arm, or a direct position table.
 
 The first three should use identical data order within each pair and disjoint
 1,024-example final holdouts. No refinement arm is admitted unless a distinct,
@@ -223,5 +337,13 @@ predeclared hypothesis emerges.
 - On 2026-09-05, 14 redundant completed endpoint checkpoints plus one smoke
   checkpoint were deleted after verification, reclaiming about 24 GiB. Final
   model weights, evaluations, metrics, configs, and provenance remain.
+- On 2026-09-11, 52 additional completed-run resume directories were removed
+  from an exact manifest after verifying a completion marker and standalone
+  final model for every parent. This reclaimed 93.02 GiB; active Phase-50
+  rolling checkpoints and all compact evidence were protected. See
+  `results/storage_cleanup_20260911/`.
+- New runs default to no periodic checkpoints and no final weights. A rolling
+  recovery checkpoint or final model is enabled only for a named recovery or
+  downstream-analysis purpose; completed recovery state is removed after use.
 - `/workspace` is not a persistent Vast volume. Irreplaceable weights must be
   copied off-box before instance recycle or destruction.
