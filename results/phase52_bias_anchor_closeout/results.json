@@ -1,0 +1,178 @@
+{
+  "artifact_policy": {
+    "compact_metrics_and_per_sequence_losses": true,
+    "final_model_weights": false,
+    "periodic_checkpoints": false
+  },
+  "comparisons": {
+    "rank32_no_anchor_minus_rank32": {
+      "candidate": "qk-readout-r32-no-anchor",
+      "contiguous_block_32_bootstrap_ci95": [
+        0.0063024371377196076,
+        0.010184050919497164
+      ],
+      "iid_bootstrap_ci95": [
+        0.006804652670416545,
+        0.009833016045740805
+      ],
+      "mean_delta": 0.008294950728668482,
+      "reference": "qk-readout-r32"
+    },
+    "rank32_no_anchor_minus_rope": {
+      "candidate": "qk-readout-r32-no-anchor",
+      "contiguous_block_32_bootstrap_ci95": [
+        -0.040731408162537265,
+        -0.035709844749362674
+      ],
+      "iid_bootstrap_ci95": [
+        -0.03982101964274989,
+        -0.03659624309220817
+      ],
+      "mean_delta": -0.03820160924442462,
+      "reference": "rope"
+    },
+    "rank32_no_anchor_minus_scalar": {
+      "candidate": "qk-readout-r32-no-anchor",
+      "contiguous_block_32_bootstrap_ci95": [
+        -0.0042115877091418955,
+        -0.0009103516349568987
+      ],
+      "iid_bootstrap_ci95": [
+        -0.003987424277147511,
+        -0.0011282322087936367
+      ],
+      "mean_delta": -0.002546207295381464,
+      "reference": "scalar-qkpre"
+    },
+    "rank32_no_anchor_minus_scalar_qk_bias": {
+      "candidate": "qk-readout-r32-no-anchor",
+      "contiguous_block_32_bootstrap_ci95": [
+        -0.004288627416417512,
+        -0.0010862281782465309
+      ],
+      "iid_bootstrap_ci95": [
+        -0.004145538094917356,
+        -0.001192901797185187
+      ],
+      "mean_delta": -0.002646967086548102,
+      "reference": "scalar-qk-bias"
+    },
+    "scalar_qk_bias_minus_rank32": {
+      "candidate": "scalar-qk-bias",
+      "contiguous_block_32_bootstrap_ci95": [
+        0.009669263220803258,
+        0.012069440501181816
+      ],
+      "iid_bootstrap_ci95": [
+        0.009514918789864168,
+        0.012342747597631383
+      ],
+      "mean_delta": 0.010941917815216584,
+      "reference": "qk-readout-r32"
+    },
+    "scalar_qk_bias_minus_rope": {
+      "candidate": "scalar-qk-bias",
+      "contiguous_block_32_bootstrap_ci95": [
+        -0.037655868140291204,
+        -0.033425828252438804
+      ],
+      "iid_bootstrap_ci95": [
+        -0.037119079520971356,
+        -0.03400237403220672
+      ],
+      "mean_delta": -0.035554642157876515,
+      "reference": "rope"
+    },
+    "scalar_qk_bias_minus_scalar": {
+      "candidate": "scalar-qk-bias",
+      "contiguous_block_32_bootstrap_ci95": [
+        -0.0006635119127167855,
+        0.0008852191751884675
+      ],
+      "iid_bootstrap_ci95": [
+        -0.000818635686982816,
+        0.0010090424362715527
+      ],
+      "mean_delta": 0.00010075979116663802,
+      "reference": "scalar-qkpre"
+    }
+  },
+  "context": 1024,
+  "gates": {
+    "all_values_finite": true,
+    "descriptive_match_margin_nll": 0.003,
+    "qk_projection_biases_moved_from_zero": true,
+    "rank32_no_anchor_within_margin_of_rank32": false,
+    "scalar_qk_bias_within_margin_of_rank32": false
+  },
+  "holdout": {
+    "blocks": 1024,
+    "start_batch": 5120
+  },
+  "inference_note": "All arms use the same 1,024 untouched validation blocks, so paired example and contiguous-block intervals quantify holdout-sample precision. This is a seed-123 design close-out, not a new training-seed replication; Phase 50 supplies the three-seed evidence for the parent rank-32 method. The 0.003-NLL margin is a descriptive engineering criterion, not a formal equivalence test.",
+  "paired_initialization_seed": 123,
+  "qk_projection_bias_rms": {
+    "architecture/layer_00/qk_projection_bias/k_rms": 0.10041695833206177,
+    "architecture/layer_00/qk_projection_bias/q_rms": 0.056272029876708984,
+    "architecture/layer_01/qk_projection_bias/k_rms": 0.13612891733646393,
+    "architecture/layer_01/qk_projection_bias/q_rms": 0.06560412794351578,
+    "architecture/layer_02/qk_projection_bias/k_rms": 0.16300901770591736,
+    "architecture/layer_02/qk_projection_bias/q_rms": 0.07050151377916336,
+    "architecture/layer_03/qk_projection_bias/k_rms": 0.14312513172626495,
+    "architecture/layer_03/qk_projection_bias/q_rms": 0.0677364319562912,
+    "architecture/layer_04/qk_projection_bias/k_rms": 0.19186416268348694,
+    "architecture/layer_04/qk_projection_bias/q_rms": 0.09082541614770889,
+    "architecture/layer_05/qk_projection_bias/k_rms": 0.21387910842895508,
+    "architecture/layer_05/qk_projection_bias/q_rms": 0.10736477375030518,
+    "architecture/layer_06/qk_projection_bias/k_rms": 0.20098356902599335,
+    "architecture/layer_06/qk_projection_bias/q_rms": 0.10341835021972656,
+    "architecture/layer_07/qk_projection_bias/k_rms": 0.16506654024124146,
+    "architecture/layer_07/qk_projection_bias/q_rms": 0.09317179769277573
+  },
+  "runs": {
+    "qk-readout-r32": {
+      "mean_loss": 3.0991602691319713,
+      "parameter_counts": null
+    },
+    "qk-readout-r32-no-anchor": {
+      "mean_loss": 3.1074552198606398,
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "input_sinusoid_params": 0,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76766976,
+        "position_params": 589824,
+        "qk_position_params": 0,
+        "qk_preprojection_params": 589824,
+        "total": 154085760
+      }
+    },
+    "rope": {
+      "mean_loss": 3.1456568291050644,
+      "parameter_counts": null
+    },
+    "scalar-qk-bias": {
+      "mean_loss": 3.110102186947188,
+      "parameter_counts": {
+        "embeddings": 38633472,
+        "input_sinusoid_params": 0,
+        "lm_head": 38685312,
+        "logit_bias_params": 0,
+        "non_embed": 76189448,
+        "position_params": 8,
+        "qk_position_params": 0,
+        "qk_preprojection_params": 8,
+        "total": 153508232
+      }
+    },
+    "scalar-qkpre": {
+      "mean_loss": 3.1100014271560212,
+      "parameter_counts": null
+    }
+  },
+  "scope": "phase52_bias_anchor_closeout",
+  "sequence_batch": 32,
+  "training_seed": 123,
+  "training_steps": 100000
+}

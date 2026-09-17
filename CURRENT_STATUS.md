@@ -1,6 +1,6 @@
 # MLPRope current status
 
-_Authoritative as of 2026-09-11. Older mechanisms and protocols are preserved
+_Authoritative as of 2026-09-15. Older mechanisms and protocols are preserved
 in git history; compact experimental evidence remains under `results/`._
 
 ## Bottom line
@@ -29,6 +29,12 @@ parent by `-0.010140` and the nearly exact FFN-capacity control by `-0.009576`.
 Rank 128 improved by only another `-0.000750`, so rank 32 remains the efficient
 candidate and has advanced to training-seed replication.
 
+Phase 50 completed that replication. Rank 32 beat the scalar carrier in every
+seed by `-0.010140`, `-0.006124`, and `-0.011046` NLL (mean `-0.009103`), and
+beat the parameter-matched FFN control in every seed by `-0.009576`,
+`-0.006466`, and `-0.004215` (mean `-0.006752`). Both registered three-seed
+gates passed; the rank-32 extension is robust at this architecture and recipe.
+
 A post-hoc checkpoint audit has materially changed the interpretation of that
 rank-32 extension. Across the mature seed-123 and seed-456 checkpoints,
 `94.65%--99.56%` of each direct Q/K carrier's pre-RoPE energy lies in its
@@ -38,10 +44,6 @@ after RoPE—it induces a relative kernel—but this result makes learned Q/K
 bias-like structure a serious alternative to the claimed rich Fourier map.
 Phase 51 therefore performs registered checkpoint counterfactuals before any
 new mapper training.
-
-The dependent service `mlprope-phase51-carrier-mechanism` is queued behind the
-Phase-50 report. It will use at most two `gpu-claim` slots and writes no new
-weights or checkpoints.
 
 Phase 39 separated carrier location at 30k. A sinusoid written once at model
 input helped only `-0.013170`, whereas repeated pre-Q/K access helped
@@ -64,6 +66,94 @@ expressive native Q/K positional map matters. The surviving alternatives are
 now a rich position-varying map versus bias-like structure rotated by RoPE;
 Q/K untying and nonlinearity still have not shown independent value.
 
+Phase 51 then evaluated six causal checkpoint interventions across all three
+rank-32 seeds. Removing the direct branch was catastrophic (`+3.512501` NLL on
+average), but keeping only its positionwise mean cost just `+0.011093`;
+removing that mean cost `+3.475527`. Removing the scalar anchor at the trained
+endpoint changed NLL by only `+0.000109`. Thus the learned constant/rotated
+bias-like component is foundational, while the small centered component
+accounts for essentially all of rank 32's incremental gain over the scalar
+method. Endpoint ablation cannot determine whether the scalar was useful as
+an optimization scaffold.
+
+Phase 52 completed the final narrow close-out before transfer experiments.
+Ordinary separate Q/K projection biases moved substantially from zero but
+left the scalar parent unchanged: `3.110102` versus `3.110001`, delta
+`+0.000101`. They do not explain rank 32's improvement. Training rank 32 with
+the scalar carrier absent reached `3.107455`, better than scalar by
+`-0.002546` but worse than full rank 32 (`3.099160`) by `+0.008295`, with both
+IID and block-32 intervals excluding zero. The no-anchor arm trailed full rank
+32 at every 5k development checkpoint and retained only about 23% of its
+improvement over scalar. Thus the scalar can be removed from the trained
+endpoint but acts as important optimization scaffolding when learning the
+projected Fourier readout.
+
+These conclusions use seed 123 with paired evaluation on the untouched
+validation blocks `[5120, 6143]`; Phase 50 remains the three-seed evidence for
+the full rank-32 method. The new runs saved no recovery checkpoints or final
+weights. Their complete model outputs occupy only 2.1 MiB, and all compact
+reference evaluations and paired analyses are retained.
+
+Phase 53 completed the registered three-seed mechanism pass without new
+training. All nine RoPE/scalar/rank-32 endpoint re-evaluations matched their
+saved losses within `1.0e-4`. Scalar-minus-RoPE was negative in every target
+position bin and each seed; the rank-32 extension's seed-average gain was
+negative in all seven bins. The carrier therefore does not derive its endpoint
+gain only from late-context tokens.
+
+The stable attention signature is concentration, not uniformly shorter
+context. Relative to RoPE, scalar normalized entropy fell by `0.039706` and
+first-token mass rose by `0.012133`; both directions held in every seed.
+Attention mass consistently shifted from relative distances 64--255 toward
+1--3, but expected attended distance increased slightly for seed 123 and fell
+for seeds 456 and 789. Rank 32 left the coarse geometry close to scalar.
+
+Using a common trained Q/K RMS denominator, the four content/position score
+terms matched independently recomputed full-QK logits to maximum absolute
+error `4.005e-5`. Scalar and rank 32 had combined
+position-involving centered-logit RMS `0.836647` and `1.644923`; their
+full-versus-content-only local attention KL was `0.705940` and `1.913295`.
+Both use substantial content--position cross terms, so neither is merely an
+additive content-independent bias. These are descriptive local decompositions;
+Phases 51 and 52 remain the model-level endpoint and training-path
+interventions.
+
+Phase 54 completed a registered inference-time carrier-origin audit across
+both retained methods and all three seeds. Replacing `s(p)` by `s(p+c)` was
+essentially neutral for offsets 1 and 4: scalar penalties were `+0.000025` and
+`+0.000112`, and rank-32 penalties were `+0.000017` and `+0.000439`. Both
+methods retained nearly all of their RoPE advantage through offset 64. Large,
+out-of-distribution shifts were damaging: scalar crossed above RoPE around
+offset 1024, while rank 32 crossed around offset 256 and degraded more steeply.
+This rules out fragile dependence on the exact neighboring phase origin, but
+not dependence on the broad absolute phase region seen during training.
+
+Phase 55 completed the symmetric learning-rate audit. Scalar-minus-RoPE was
+`-0.029164`, `-0.036355`, and `-0.044780` at peak LRs `1.5e-4`, `3e-4`, and
+`6e-4`; every IID and block-32 interval excluded zero. Both arms achieved their
+best tested endpoint at the upper boundary, so the gain is clearly not a
+single-LR artifact but the grid did not bracket the recipe optimum. All new
+metrics were finite, and cleanup reclaimed 6.86 GiB of recovery states.
+
+Phase 56 completed the one-point learning-rate boundary check. At `1.2e-3`,
+RoPE and scalar development NLL were `3.089271` and `3.035378`, improving over
+their `6e-4` values `3.099196` and `3.055308`. On the common selection window,
+scalar beat RoPE by `-0.054474`, with block-32 interval
+`[-0.056115,-0.052756]`. Both runs were finite, so the frozen rule selects
+`1.2e-3` as the prospective common recipe and stops LR expansion. This is the
+best of a bounded candidate set, not an optimizer-optimum claim. Blocks
+`[7168,8191]` remain uninspected for later confirmation.
+
+Phase 57 is now active. It trains fresh RoPE, scalar pre-Q/K + RoPE, NoPE,
+fixed input sinusoid without RoPE, learned absolute position, 25% partial
+RoPE, and ALiBi arms under that common `1.2e-3` recipe. All seven 100-step GPU
+preflights completed with finite metrics, including the actual ALiBi
+FlexAttention path. The first two 100k jobs (RoPE and scalar) launched under a
+hard two-GPU `gpu-claim` cap. The final endpoint is the previously uninspected
+window `[7168,8191]`; no result has been inspected. No final weights will be
+saved, and each completed run's single recovery checkpoint will be removed
+immediately after its final evaluation is verified.
+
 ## Strongest completed evidence
 
 | Result | Protocol | Finding |
@@ -73,6 +163,9 @@ Q/K untying and nonlinearity still have not shown independent value.
 | pre-Q/K + RoPE vs fixed RoPE | 30k, 3 paired seeds | `-0.065235` mean |
 | pre-Q/K + RoPE vs fixed RoPE | 200k, 3 paired seeds | `-0.055334` mean |
 | pre-Q/K + RoPE vs fixed RoPE | 100k, batch 32, 1 seed | `-0.037011` |
+| pre-Q/K + RoPE vs fixed RoPE | 100k, batch 32, 3 seeds | `-0.036654` mean |
+| pre-Q/K + RoPE vs fixed RoPE across peak LR | 100k, batch 32, 1 seed | `-0.029164/-0.036355/-0.044780` at `1.5e-4/3e-4/6e-4` |
+| pre-Q/K + RoPE vs fixed RoPE at boundary LR | 100k, batch 32, 1 seed | `-0.054474` at `1.2e-3`; block-32 CI excludes zero |
 | global-gate vs per-layer-gate pre-Q/K | 100k, batch 32, 1 seed | `+0.000421`, interval crosses zero |
 | fixed-gate vs learned pre-Q/K | 100k, batch 32, 1 seed | `+0.006464` |
 | dedicated rank-32 Q/K residual vs scalar pre-Q/K | 20k, batch 32, 1 seed | `-0.009401` |
@@ -88,6 +181,7 @@ Q/K untying and nonlinearity still have not shown independent value.
 | calibrated linear rank-128 vs calibrated rank-32 | 20k, batch 32, 1 seed | `-0.002946`; function-step gate failed |
 | calibrated rank-128 vs empirically matched rank-32 | 20k, batch 32, 1 seed | `-0.001058`; function-step gate passed |
 | calibrated rank-32 vs scalar pre-Q/K | 100k, batch 32, 1 seed | `-0.010140` |
+| calibrated rank-32 vs scalar pre-Q/K | 100k, batch 32, 3 seeds | `-0.009103` mean |
 | calibrated rank-32 vs matched FFN capacity | 100k, batch 32, 1 seed | `-0.009576` |
 | pre-Q/K + RoPE, h1024/d12 vs matched RoPE | 200k, 1 paired seed | `-0.040581` |
 | pre-Q/K + RoPE without QKNorm vs matched RoPE | 200k, 1 paired seed | `-0.049523` |
@@ -307,27 +401,29 @@ the frozen three-seed gate but also reports the mean over fresh seeds 456 and
 allowing an empty diagnostic list to pass, and adds a contiguous-block
 bootstrap sensitivity analysis for neighboring validation blocks.
 
-The next experiments test the method rather than search its local shape space:
+The remaining experiments test generalization rather than search the local
+shape space:
 
 1. **component necessity:** Phase 42 has completed the RoPE/carrier factorial,
    fixed/global/layerwise gates, and one-block versus repeated injection;
-2. **mechanism:** position-stratified loss plus attention entropy, attended
-   distance, position correlation, and carrier-logit attribution from trained
-   checkpoints;
-3. **generalization:** another corpus and a modernized decoder backbone;
-4. **optional broader claim:** separable 2D pre-Q/K carriers in a ViT, followed
+2. **mechanism:** Phase 53 has completed position-stratified loss, attention
+   geometry, and exact local carrier-logit decomposition across three seeds;
+   Phase 54 has completed the carrier-origin sensitivity audit;
+3. **required generalization:** another corpus, a modernized decoder backbone,
+   and recognized positional baselines at the canonical scale;
+4. **reviewer-proofing:** the completed symmetric learning-rate robustness grid
+   and a fresh matched larger-scale pair after transfer succeeds;
+5. **optional broader claim:** separable 2D pre-Q/K carriers in a ViT, followed
    by a spatial DiT only if image-classification transfer succeeds.
 
-Before items 2--4, Phase 51 asks whether the rank-32 gain is actually carried
-by its position-varying Fourier component. It evaluates trained checkpoints
-with only the direct positional mean, only the centered direct component, no
-direct component, no scalar anchor, and neither branch. Only if that remains
-ambiguous should we train a factorized constant-carrier/QK-bias control, a
-matched content adapter, a no-anchor rank-32 arm, or a direct position table.
-
-The first three should use identical data order within each pair and disjoint
-1,024-example final holdouts. No refinement arm is admitted unless a distinct,
-predeclared hypothesis emerges.
+Phases 55 and 56 close optimizer sensitivity for the current paper stage. The
+prospective common recipe uses `1.2e-3`; beta, warmup, decay, and
+method-specific optimization remain outside scope.
+The next architecture-relevant priorities are the recognized positional
+baseline table and a modern-backbone RoPE/scalar pair. FineWeb-Edu remains a
+useful corpus-selection robustness test, but it follows those more diagnostic
+architecture controls. No refinement arm is admitted unless new evidence
+exposes a distinct, predeclared failure mode.
 
 ## Repository and storage state
 

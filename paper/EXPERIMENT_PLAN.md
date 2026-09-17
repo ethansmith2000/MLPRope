@@ -18,6 +18,58 @@ therefore precedes any new mapper training with causal endpoint
 counterfactuals and bias-like controls. The scalar carrier remains the primary
 minimal method until Phase 50 and this attribution close.
 
+Revision 2026-09-12: Phase 50 replicated calibrated rank 32 across all three
+seeds, and Phase 51 showed that its large positional-mean component is
+essential while its trained scalar endpoint is neutral. Phase 52 freezes one
+ordinary Q/K-bias simplification and one no-scalar rank-32 training arm before
+moving to corpus, backbone, scale, and modality transfer.
+
+Phase 52 completed on 2026-09-12. The Q/K-bias arm matched scalar
+(`+0.000101` NLL) despite nonzero learned biases, while rank 32 trained without
+the scalar lost `+0.008295` NLL versus full rank 32 and trailed it throughout
+training. The local method search is closed: ordinary bias does not explain
+the gain, and the scalar is retained as initialization scaffolding even though
+it is neutral when removed from the trained endpoint.
+
+Phase 53 completed on 2026-09-12. Its registered, training-free analysis of
+all nine RoPE/scalar/rank-32 checkpoints reproduced the endpoints, found the
+carrier gain throughout the observed context, and identified a consistent
+attention-concentration signature. The exact common-denominator logit
+decomposition also confirmed large content--position cross terms. This closes
+the planned mechanism pass; new GPU work now begins with corpus and backbone
+transfer rather than another local adapter variant.
+
+Revision 2026-09-13: Phase 54 tested inference-time carrier-origin shifts
+before spending on transfer. Offsets 1 and 4 were neutral for scalar and rank
+32; both retained most of their gain through offset 64, while much larger
+out-of-distribution shifts degraded, especially for rank 32. The registered
+small-offset gate passed. Phase 55 therefore launches the symmetric
+`1.5e-4/3e-4/6e-4` RoPE/scalar LR grid on a new holdout with a two-GPU cap.
+Recognized positional baselines and modern-backbone transfer now precede the
+second-corpus test because they are more diagnostic of an architectural claim.
+
+Revision 2026-09-14: Phase 55 passed its strong robustness gate. Scalar beat
+RoPE at all three tested LRs, with deltas `-0.029164`, `-0.036355`, and
+`-0.044780`; all block-32 intervals excluded zero. Because both arms improved
+through the `6e-4` boundary, Phase 56 adds exactly one `1.2e-3` matched point.
+It selects a future common recipe using RoPE development loss and stops LR
+expansion afterward. Adam betas, decay, warmup, clipping, and schedule remain
+fixed; optimizer-family tuning is outside the paper scope.
+
+Revision 2026-09-15: Phase 56 completed cleanly. At `1.2e-3`, scalar beat
+RoPE by `-0.054474` on the common selection window, and both development
+endpoints improved over `6e-4`. The frozen rule therefore selects `1.2e-3` as
+the prospective common recipe. LR expansion now stops; `[7168,8191]` remains
+uninspected for a later confirmatory evaluation.
+
+Revision 2026-09-15: Phase 57 freezes a fresh seven-arm recognized-baseline
+table at the selected common recipe: RoPE, scalar pre-Q/K + RoPE, NoPE, fixed
+input sinusoid without RoPE, learned absolute position, 25% partial RoPE, and
+ALiBi. All 100-step GPU preflights passed, including ALiBi's actual
+FlexAttention score-bias path, and the 100k queue is active with a hard
+two-GPU cap. The final endpoint is the reserved `[7168,8191]` window. Exact
+implementation and artifact details are in `POSITIONAL_BASELINE_PROTOCOL.md`.
+
 ## 1. Claim and method freeze
 
 The narrow primary claim is:
@@ -185,19 +237,26 @@ different optimization question. Existing runs show finite gradients,
 substantial gate movement, and no intervention-specific late clipping; there
 is no evidence that a special gate learning-rate multiplier is needed.
 
-### 5.2 One method-by-learning-rate robustness check
+### 5.2 Bounded method-by-learning-rate robustness check
 
-At the canonical architecture, compare `R` and `C+R` at peak learning rates:
+Phase 55 compared `R` and `C+R` at peak learning rates:
 
 ```text
 1.5e-4, 3.0e-4 (existing primary), 6.0e-4
 ```
 
-Keep AdamW betas, 200 warmup steps, weight decay, batch tokens, and linear decay
-fixed. The two outer points may use 100k steps as a robustness test; they are
-not used to select a new headline endpoint. If either arm is unstable at
-`6e-4`, replace it with `4.5e-4` and record the change before inspecting final
-holdout results.
+All three scalar-minus-RoPE deltas were negative with paired intervals below
+zero. Since both arms were best at `6e-4`, Phase 56 adds one final `1.2e-3`
+boundary pair. Keep AdamW betas, 200 warmup steps, weight decay, batch tokens,
+clipping, and linear decay fixed. Select the future common recipe using RoPE
+development NLL, require both arms to remain finite, and stop expansion after
+this point. The `[6144,7167]` window is selection evidence after Phase 55;
+reserve `[7168,8191]` for later confirmation.
+
+Phase 56 selected `1.2e-3`: RoPE development NLL improved from `3.099196` to
+`3.089271`, scalar development NLL improved from `3.055308` to `3.035378`,
+and the selection-window scalar-minus-RoPE delta was `-0.054474`. Both runs
+were finite. This closes the LR axis under the predeclared bounded-search rule.
 
 No theta, phase, frequency, amplitude, or gate-LR sweep is planned.
 
@@ -470,11 +529,16 @@ result.
 
 ### Stage B: robustness breadth
 
-1. FineWeb-Edu M-scale pair (`R`, `C+R`) at the frozen paper budget.
-2. Learning-rate outer-point pairs at the frozen batch and a reduced budget.
-3. Fresh L-scale `R`/`C+R` pair with an appropriately increased token budget.
-4. Optional S-scale pair.
-5. Modern-backbone M-scale pair.
+1. Preserve the completed Phase-55/56 LR evidence and use the selected
+   `1.2e-3` common recipe without further optimizer-family tuning.
+2. Complete the recognized positional baseline table on the canonical
+   architecture and corpus.
+3. Run the modern-backbone M-scale `R`/`C+R` pair; add rank 32 only after the
+   scalar transfers.
+4. Run the pinned FineWeb-Edu M-scale transfer after the more diagnostic
+   architecture controls.
+5. Run a fresh L-scale `R`/`C+R` pair with an appropriately increased token
+   budget; optional S scale remains lower priority.
 
 Stop expanding an axis if the paired effect reverses materially. Diagnose the
 interaction before averaging incompatible settings.
@@ -583,7 +647,68 @@ descriptive weight diagnostic, not causal attribution. A constant pre-RoPE
 vector is still position sensitive after rotation, producing the pure
 relative kernel `b_q^T R(r-p)b_k` before joint QK normalization.
 
-## 14. Historical paper-cohort run recommendation
+## 14. Completed Phase-52 optimization-path close-out
+
+Use seed 123, paired initialization 123, h768/d8, sequence batch 32, context
+1024, 100k updates, and validation blocks `[5120, 6143]`. Train exactly two
+arms:
+
+1. scalar pre-Q/K + RoPE with standard separate biases enabled on `W_q` and
+   `W_k`; initialize both biases at zero;
+2. calibrated rank-32 dedicated Q/K readouts + RoPE with the scalar carrier
+   absent throughout training (`low_rank_qk_replace`).
+
+Re-evaluate the retained Phase-49 RoPE, scalar, and calibrated-rank-32 weights
+on that identical untouched window. Report paired per-block deltas with IID
+and contiguous-block-32 bootstrap intervals. Treat candidate-minus-rank32 at
+most `+0.003` NLL as a descriptive match criterion, not formal equivalence.
+The bias arm asks whether ordinary bias-like capacity recovers the learned
+constant/rotated component; the replacement arm asks whether the neutral
+trained scalar was nevertheless optimization scaffolding.
+
+This is a discriminating close-out, not a new design search. Do not add bias
+granularity, rank, LR, mapper, or carrier-shape variants in response to the
+result. Neither new run needs weights for resume or downstream analysis, so
+save no periodic checkpoints and no final models; preserve compact configs,
+provenance, diagnostics, logs, and per-block losses only.
+
+Outcome: RoPE, scalar, and full rank-32 references reached `3.145657`,
+`3.110001`, and `3.099160`. Scalar plus Q/K bias reached `3.110102`; no-anchor
+rank 32 reached `3.107455`. Neither simplification met the `+0.003` match
+margin against full rank 32. The no-anchor deficit persisted at every 5k
+development checkpoint, supporting an optimization-scaffold interpretation.
+Treat that causal training-path claim as seed-123 evidence; the performance
+claim for the full rank-32 method continues to rest on Phase 50's three seeds.
+
+## 15. Completed Phase-53 mechanism analysis
+
+Use the retained RoPE, scalar, and calibrated rank-32 checkpoints at seeds
+123, 456, and 789; do not train or select a method. Evaluate all 1,024 frozen
+holdout blocks `[4096, 5119]` for target-position loss and 64 predeclared,
+evenly spaced blocks for attention measurements. The full registered protocol
+is in `paper/MECHANISM_PROTOCOL.md`.
+
+Outcome: all nine endpoint re-evaluations reproduced saved losses within
+`1.0e-4`. Scalar-minus-RoPE was negative in every position bin and seed;
+rank32-minus-scalar was negative in every seed-mean bin. Relative to RoPE, the
+scalar method lowered normalized attention entropy and raised first-token mass
+in all three seeds, while consistently moving mass from relative distances
+64--255 to 1--3. Mean attended distance was not seed-consistent and is not a
+promoted claim.
+
+The exact local logit split used a common trained Q/K RMS denominator and
+matched logits independently recomputed from full Q/K to maximum absolute
+error `4.005e-5`. Both promoted methods expressed
+large content--position cross terms. Rank 32 roughly doubled the combined
+position-involving centered-logit RMS relative to scalar (`1.644923` versus
+`0.836647`) while leaving coarse attention geometry nearly unchanged. Treat
+these as descriptive local measurements conditioned on each model's hidden
+state; Phases 51 and 52 remain the causal endpoint and training-path evidence.
+
+No weights or recovery checkpoints were created. Phase-53 retained JSON,
+compressed arrays, CSVs, logs, and the aggregate report only.
+
+## 16. Historical paper-cohort run recommendation
 
 After the batch benchmark freezes the paper recipe, the first evidence batch
 should be the primary seed-123 cells, not more learned carrier-shape variants:
@@ -604,7 +729,7 @@ shared queue start the remaining three as devices free up. The old batch-8
 controls are reused as preliminary and batch-robustness evidence, not as
 matched controls for this new cohort.
 
-## 15. Literature anchors for the protocol
+## 17. Literature anchors for the protocol
 
 - [Attention Is All You Need](https://arxiv.org/abs/1706.03762): classic input
   sinusoid.

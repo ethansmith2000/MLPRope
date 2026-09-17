@@ -1,0 +1,105 @@
+{
+  "best_by_arm": {
+    "rope": {
+      "learning_rate": 0.0006,
+      "mean_loss": 3.165109697030857
+    },
+    "scalar-qkpre": {
+      "learning_rate": 0.0006,
+      "mean_loss": 3.1203293530270457
+    }
+  },
+  "best_scalar_minus_best_rope": -0.04478034400381148,
+  "context": 1024,
+  "gates": {
+    "all_new_run_metrics_finite": true,
+    "best_scalar_beats_best_rope": true,
+    "outer_lr_deltas_both_negative": true,
+    "strong_robustness": true
+  },
+  "grid": {
+    "1.5e-04": {
+      "rope": 3.2682863246882334,
+      "scalar-qkpre": 3.2391224042512476
+    },
+    "3.0e-04": {
+      "rope": 3.19711853551592,
+      "scalar-qkpre": 3.1607631122565953
+    },
+    "6.0e-04": {
+      "rope": 3.165109697030857,
+      "scalar-qkpre": 3.1203293530270457
+    }
+  },
+  "holdout": {
+    "blocks": 1024,
+    "start_batch": 6144
+  },
+  "inference_limit": "Seed 123 audits optimizer sensitivity around an already replicated central LR; it is not an additional training-seed replication or exhaustive tuning.",
+  "matched_contrasts": {
+    "1.5e-04": {
+      "contiguous_block_32_bootstrap_ci95": [
+        -0.030884629636420868,
+        -0.027493349259020763
+      ],
+      "iid_bootstrap_ci95": [
+        -0.030679671076359227,
+        -0.027667870503501037
+      ],
+      "mean_delta": -0.02916392043698579
+    },
+    "3.0e-04": {
+      "contiguous_block_32_bootstrap_ci95": [
+        -0.03788664564507239,
+        -0.034763467337332786
+      ],
+      "iid_bootstrap_ci95": [
+        -0.03784352843695979,
+        -0.03480948338431788
+      ],
+      "mean_delta": -0.03635542325932538
+    },
+    "6.0e-04": {
+      "contiguous_block_32_bootstrap_ci95": [
+        -0.04650374868360814,
+        -0.043033952030236834
+      ],
+      "iid_bootstrap_ci95": [
+        -0.046389374296995814,
+        -0.04315748661174439
+      ],
+      "mean_delta": -0.04478034400381148
+    }
+  },
+  "paired_initialization_seed": 123,
+  "run_health": {
+    "1.5e-04_rope": {
+      "elapsed_seconds": 14974.606770501938,
+      "metrics_finite": true,
+      "peak_reserved_mib": 16258.0,
+      "target_tokens_per_second": 218566.35904772364
+    },
+    "1.5e-04_scalar-qkpre": {
+      "elapsed_seconds": 15246.202519111801,
+      "metrics_finite": true,
+      "peak_reserved_mib": 16678.0,
+      "target_tokens_per_second": 214672.81940517423
+    },
+    "6.0e-04_rope": {
+      "elapsed_seconds": 15095.099697919097,
+      "metrics_finite": true,
+      "peak_reserved_mib": 16258.0,
+      "target_tokens_per_second": 216821.70674574512
+    },
+    "6.0e-04_scalar-qkpre": {
+      "elapsed_seconds": 15090.973766939715,
+      "metrics_finite": true,
+      "peak_reserved_mib": 16678.0,
+      "target_tokens_per_second": 216880.98664448992
+    }
+  },
+  "scope": "phase55_lr_robustness",
+  "sequence_batch": 32,
+  "training_seed": 123,
+  "training_steps": 100000
+}

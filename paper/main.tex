@@ -39,17 +39,19 @@ query and key projections. The residual stream and values remain untouched,
 the ordinary query and key matrices learn separate reads of the shared
 carrier, and one learned scalar per layer controls its magnitude. The method
 adds only one parameter per layer and preserves standard fused attention. In
-preliminary causal-language-model experiments, it improves held-out negative
-log-likelihood over RoPE by an average of 0.055 nats across three paired
-training seeds in a 153M-parameter model trained on 1.64B tokens, by 0.041 nats
-in a 306M-parameter model, and by 0.050 nats without query-key normalization.
-Controlled injection-site experiments indicate that the gain does not follow
-from adding the same sinusoid to the residual stream, while an ordering
-ablation shows that rotating an already indexed additive carrier changes both
-its phase composition and its order relative to learned query-key gains. We
-use these observations to study how
-additive absolute carriers and rotary relative geometry divide positional
-work inside attention.
+a 153M-parameter causal language model trained for 3.28B tokens, it reduces
+held-out negative log-likelihood by 0.0367 nats on average across three paired
+training seeds. A rank-32 extension that learns a shared positional bottleneck
+with separate query and key readouts improves by a further 0.0091 nats and
+outperforms a parameter-matched feed-forward control. Factorial and location
+ablations show that the carrier helps both with and without RoPE, but is most
+effective when repeatedly exposed inside attention. Across seeds, the carrier
+improves loss throughout the 1,024-token context and produces lower-entropy
+attention with more mass on the first token and very recent keys. An exact
+local logit decomposition shows substantial content--position cross terms,
+rather than a purely position--position bias. These results support additive
+absolute carriers and rotary relative geometry as complementary, though
+partly overlapping, positional paths.
 \end{abstract}
 
 \section{Introduction}
@@ -80,13 +82,14 @@ The working contributions of this study are:
     layer and no changes to the attention kernel;
     \item paired evidence across seeds, model scale, and query-key
     normalization showing a persistent in-distribution language-modeling
-    improvement over RoPE;
+    improvement over RoPE, plus a parameter-matched control for a stronger
+    low-rank extension;
     \item controlled comparisons among residual-input, pre-projection, and
     head-space carrier locations, including the order of additive composition
     with RoPE; and
-    \item mechanistic measurements of position-stratified loss, attention
-    entropy and distance, and the content--position terms induced in attention
-    logits.
+    \item three-seed mechanistic measurements of position-stratified loss,
+    attention concentration, and an exact local decomposition of the
+    content--position terms induced in attention logits.
 \end{itemize}
 
 \section{Background}
@@ -160,7 +163,26 @@ attention logit yields four classes of terms:
 \end{align}
 The method can therefore express a position--position prior as well as two
 content--position cross terms. Section~\ref{sec:mechanism} describes how we
-will measure their realized contributions with normalization restored.
+measure their realized contributions with normalization restored.
+
+\paragraph{Learned low-rank readout.}
+Our enhanced variant retains the scalar path and adds a shared rank-$r$
+positional bottleneck with separate all-head query and key readouts:
+\begin{align}
+    \widehat{\mathbf q}_p
+      &= W_q(\mathbf h_p+\alpha\mathbf s_p)+U_qD\mathbf s_p, \\
+    \widehat{\mathbf k}_p
+      &= W_k(\mathbf h_p+\alpha\mathbf s_p)+U_kD\mathbf s_p, \\
+    \mathbf q_p&=R(p)\RMSNorm(\widehat{\mathbf q}_p),\qquad
+    \mathbf k_p=R(p)\RMSNorm(\widehat{\mathbf k}_p).
+    \label{eq:rankreadout}
+\end{align}
+Here $D\in\mathbb R^{r\times d}$ is shared by the two branches and
+$U_q,U_k\in\mathbb R^{d\times r}$ are separate within each layer. We use
+$r=32$, initialize $U_q$ and $U_k$ to zero so the model begins exactly at the
+scalar parent, and retain the same carrier and RoPE frequencies. This adds
+589,824 parameters across eight layers (0.38\% of the model). The readout is
+static and position-only; it is not a token-conditioned mapper.
 
 \paragraph{A distinct head-space alternative.}
 An additive carrier can instead be inserted after RoPE,
@@ -193,13 +215,26 @@ language-model head). A width-1024, 12-layer, eight-head model contains
 305.63M parameters. Input and output token embeddings are untied.
 
 We train on concatenated, 1024-token OpenWebText blocks using the GPT-2
-tokenizer. AdamW uses learning rate $3\times10^{-4}$, betas $(0.9,0.98)$,
+tokenizer. The canonical evidence in Table~\ref{tab:mature} uses AdamW
+learning rate $3\times10^{-4}$, betas $(0.9,0.98)$,
 weight decay 0.01, 200 warmup steps, linear decay, global gradient norm 1.0,
-and bf16 arithmetic. The preliminary cohort uses eight sequences per update
-for 200k optimizer steps (1.638B nominal tokens). The matched paper cohort
-uses 32 sequences per update for 100k steps (3.277B nominal tokens), selected
-by a predeclared throughput and memory benchmark. Results from the two batch
-regimes are reported separately rather than pooled as matched runs.
+and bf16 arithmetic. Our canonical cohort uses 32 sequences per update for
+100k steps (3.277B nominal tokens), selected by a predeclared throughput and
+memory benchmark. An earlier cohort uses eight sequences per update for 200k
+steps (1.638B nominal tokens); we report it only as separate robustness
+evidence because it differs in both token count and optimizer updates.
+
+A subsequent bounded learning-rate audit kept every other setting fixed and
+selected $1.2\times10^{-3}$ using RoPE development NLL rather than the carrier
+contrast. We use that common recipe prospectively; we do not relabel the
+completed $3\times10^{-4}$ cohort or claim an exhaustively tuned optimum.
+
+The rank-32 readout uses a frozen $6.367487$ learning-rate multiplier on its
+zero-initialized output factors, with inverse weight-decay compensation. This
+value was chosen in a short, disjoint development screen to match the
+function-space update scale of a wider rank-128 alternative. Rank 32 and rank
+128 were subsequently tied at the mature endpoint, so the smaller variant was
+frozen before the three-seed comparison.
 
 The component ablation first completes a two-by-two factorial over carrier
 presence and RoPE presence. Within the carrier-plus-RoPE method, it then tests
@@ -219,77 +254,225 @@ individual blocks pooled across seeds, are the unit of replication. We also
 report development curves, parameter count, peak memory, tokens per second,
 and equal-wall-clock comparisons where throughput differs.
 
-\section{Preliminary Language-Model Results}
+\section{Language-Model Results}
 
 \begin{table}[t]
 \centering
-\caption{Mature pre-Q/K carrier evidence. $\Delta$ is candidate minus the
-paired RoPE control; lower is better. Intervals quantify paired holdout
-precision within a seed.}
+\caption{Canonical 153M-parameter results at 100k updates and batch 32. The
+mean and sample standard deviation treat training seeds as replicates. Lower
+NLL is better.}
 \label{tab:mature}
-\begin{tabular}{lrrr}
+\begin{tabular}{lrrrrr}
 \toprule
-Setting & RoPE & Carrier + RoPE & $\Delta$ \\
+Method & Seed 123 & Seed 456 & Seed 789 & Mean & SD \\
 \midrule
-153M, seed 123 & 3.38744 & 3.32461 & $-0.06283$ \\
-153M, seed 456 & 3.36628 & 3.32185 & $-0.04443$ \\
-153M, seed 789 & 3.38808 & 3.32933 & $-0.05875$ \\
-306M, seed 123 & 3.21391 & 3.17333 & $-0.04058$ \\
-153M, no QK norm & 3.39405 & 3.34453 & $-0.04952$ \\
+RoPE & 3.20716 & 3.19940 & 3.21191 & 3.20615 & 0.00632 \\
+Scalar carrier & 3.16955 & 3.16572 & 3.17323 & 3.16950 & 0.00375 \\
+Matched FFN control & 3.16899 & 3.16606 & 3.16640 & 3.16715 & 0.00160 \\
+Rank-32 carrier & \textbf{3.15941} & \textbf{3.15960} & \textbf{3.16218}
+  & \textbf{3.16040} & 0.00155 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-At 153M parameters, the mean improvement across three mature training seeds
-is $-0.05533$ nats. The effect transfers to the 306M model and remains when
-query-key normalization is disabled (Table~\ref{tab:mature}). These results
-establish the primary RoPE comparison under the current OpenWebText protocol;
-they do not yet establish corpus, context-length, or modality generality.
+The scalar carrier beats RoPE in all three seeds by $-0.03665$ nats on
+average (descriptive seed-$t$ interval $[-0.04320,-0.03011]$). Rank 32 beats
+the scalar carrier in all three seeds by $-0.00910$ on average
+($[-0.01561,-0.00260]$), and beats the nearly parameter-matched FFN widening
+in all three seeds by $-0.00675$ ($[-0.01344,-0.00007]$). Seed 123 selected
+the low-rank candidate; the mean rank-32 advantage over scalar on only the two
+subsequently registered seeds is $-0.00859$ nats.
+
+The scalar method adds eight parameters and measured 213.7k target tokens/s
+versus 216.3k for RoPE in the seed-123 run. Rank 32 adds 589,824 parameters
+over scalar and measured 210.5k target tokens/s. Thus the minimal method has
+negligible parameter cost and both variants retain the fused SDPA path; the
+rank-32 extension has a modest parameter and throughput cost that should not
+be obscured by the quality result.
 
 \begin{table}[t]
 \centering
-\caption{Thirty-thousand-step injection-site screen at 153M parameters and
-seed 123. These results select paper controls but are not substitutes for
-mature training.}
-\label{tab:location}
-\begin{tabular}{lr}
+\caption{Seed-123 learning-rate robustness at 100k updates. The final column
+is a paired difference on the common selection window; all reported block-32
+95\% intervals exclude zero. The $1.2\times10^{-3}$ recipe was selected using
+RoPE development NLL.}
+\label{tab:lrsensitivity}
+\begin{tabular}{rrrr}
 \toprule
-Method & Holdout NLL \\
+Peak LR & RoPE NLL & Scalar NLL & Scalar $-$ RoPE \\
 \midrule
-RoPE & 3.79482 \\
-Residual-input sinusoid + RoPE & 3.78165 \\
-Pre-Q/K carrier + RoPE & \textbf{3.72102} \\
-Fixed head-space carrier before RoPE & 3.77546 \\
-Fixed head-space carrier after RoPE & 3.73960 \\
+$1.5\times10^{-4}$ & 3.26829 & 3.23912 & $-0.02916$ \\
+$3.0\times10^{-4}$ & 3.19712 & 3.16076 & $-0.03636$ \\
+$6.0\times10^{-4}$ & 3.16511 & 3.12033 & $-0.04478$ \\
+$1.2\times10^{-3}$ & 3.15574 & 3.10127 & $-0.05447$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The same carrier is substantially more effective at the pre-Q/K location than
-as a one-shot residual-stream input. Moving a fixed head-space carrier from
-before to after RoPE improves NLL by 0.03585 nats, consistent with the phase
-composition in Equation~\ref{eq:postrope}, while also potentially reflecting
-the changed order of learned query-key gains and rotation.
+The carrier advantage therefore is not confined to its original learning
+rate and grows across this bounded grid. Both methods improve through the
+largest tested value, so the experiment establishes robustness and a
+resource-bounded common recipe, not a bracketed optimizer optimum.
+
+The earlier batch-8 cohort independently found a mean scalar improvement of
+$-0.05533$ across three seeds. A one-seed 306M model retained a $-0.04058$
+improvement, and a one-seed 153M ablation without query-key normalization
+retained $-0.04952$. These are supportive transfer checks, not pooled
+replicates of Table~\ref{tab:mature}.
+
+\begin{table}[t]
+\centering
+\caption{Component and location ablations at the canonical 100k-step budget,
+seed 123. The learned scalar carrier uses one gate per layer unless noted.}
+\label{tab:components}
+\begin{tabular}{llr}
+\toprule
+Carrier location & Positional backbone & Holdout NLL \\
+\midrule
+None & None & 3.26299 \\
+None & RoPE & 3.18377 \\
+Pre-Q/K scalar & None & 3.16979 \\
+Pre-Q/K scalar & RoPE & \textbf{3.14676} \\
+Pre-Q/K fixed unit gate & RoPE & 3.15322 \\
+Pre-Q/K globally shared gate & RoPE & 3.14718 \\
+Pre-Q/K first block only & RoPE & 3.14945 \\
+Residual input, one shot & RoPE & 3.15339 \\
+Fixed head-space, after projection & None & 3.16265 \\
+Fixed head-space, after RoPE & RoPE & 3.15133 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The two-by-two cells in Table~\ref{tab:components} show that the carrier helps
+without RoPE and helps further when combined with RoPE. The interaction is
+sub-additive: the joint NLL improvement is smaller than the sum of the two
+individual improvements. Repeated pre-Q/K access is 0.00663 nats better than
+writing the sinusoid once at the residual input. Learning the unit-initialized
+gate helps by 0.00646, but using one global learned gate is within 0.00042 of
+separate layerwise gates; the evidence therefore supports learned magnitude,
+not the necessity of per-layer parameters. A fixed native head-space carrier
+after RoPE is competitive but 0.00458 worse than pre-Q/K injection. This
+comparison also changes carrier phase composition and the order of learned
+query-key gains, as discussed around Equation~\ref{eq:postrope}.
 
 \section{Mechanistic Analysis}
 \label{sec:mechanism}
 
-We will evaluate trained checkpoints on identical documents and report:
-\begin{enumerate}
-    \item loss by absolute query position and available-context bucket;
-    \item attention entropy normalized by the number of visible keys;
-    \item expected attended distance and mass in logarithmic distance bins;
-    \item absolute- and relative-position correlations of attention patterns;
-    \item pre-normalization magnitudes of the four terms in
-    Equation~\ref{eq:fourterms}; and
-    \item counterfactual changes after preserving only or removing only the
-    positional mean of a learned direct carrier, and after zeroing its direct
-    and scalar branches, explicitly labeled as inference-time distribution
-    shifts.
-\end{enumerate}
-Because RMS normalization makes the final logit decomposition nonlinear, term
-magnitudes will be paired with full forward-pass counterfactuals rather than
-treated as an exact additive attribution.
+We evaluated all nine checkpoints from Table~\ref{tab:mature} on the same
+1,024-block frozen holdout. Attention statistics use 64 evenly spaced blocks
+chosen before inspection. The training seed is the replication unit; blocks,
+layers, and heads are not treated as independent runs.
+
+\begin{table}[t]
+\centering
+\caption{Seed-mean NLL differences by next-token target position. Negative
+values favor the first method named.}
+\label{tab:positionloss}
+\begin{tabular}{lrrr}
+\toprule
+Target position & Scalar $-$ RoPE & Rank 32 $-$ RoPE & Rank 32 $-$ scalar \\
+\midrule
+1--15    & $-0.02066$ & $-0.02923$ & $-0.00857$ \\
+16--31   & $-0.03792$ & $-0.04181$ & $-0.00388$ \\
+32--63   & $-0.03234$ & $-0.04144$ & $-0.00910$ \\
+64--127  & $-0.03489$ & $-0.04672$ & $-0.01183$ \\
+128--255 & $-0.03582$ & $-0.04406$ & $-0.00824$ \\
+256--511 & $-0.03625$ & $-0.04604$ & $-0.00979$ \\
+512--1023& $-0.03795$ & $-0.04679$ & $-0.00883$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The scalar improvement is present in every position bin and each training
+seed; it is smaller for the first 15 targets, where little context is
+available. The rank-32 extension improves the seed mean in every bin. It is
+therefore not obtaining its endpoint gain only from late-context positions.
+
+\begin{table}[t]
+\centering
+\caption{Attention geometry averaged first over sampled blocks, layers, and
+heads within a seed, then over three seeds.}
+\label{tab:attentiongeometry}
+\begin{tabular}{lrrr}
+\toprule
+Metric & RoPE & Scalar & Rank 32 \\
+\midrule
+Normalized entropy & 0.61563 & 0.57592 & 0.57657 \\
+First-token mass & 0.01517 & 0.02731 & 0.02979 \\
+Same-token mass & 0.06483 & 0.07083 & 0.07059 \\
+Distance 1--3 mass & 0.19829 & 0.22227 & 0.22254 \\
+Distance 64--255 mass & 0.24340 & 0.22151 & 0.22153 \\
+Distance 256+ mass & 0.11370 & 0.10877 & 0.10903 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Relative to RoPE, both carrier models have lower normalized attention entropy
+in every seed, more first-token mass in every seed, and consistently move mass
+from distances 64--255 toward distances 1--3. We do not summarize this as a
+universal shortening of attention: expected attended distance increases for
+one seed and decreases for two. Rank 32 changes these coarse attention
+statistics little relative to scalar despite its additional NLL gain.
+
+To restore query-key normalization in Equation~\ref{eq:fourterms}, we split
+each raw projected vector into content and positional components, divide both
+by the common RMS denominator computed from their trained sum, apply the
+learned RMS gain and the same RoPE rotation to each, and then form
+$L_{cc},L_{cp},L_{pc},L_{pp}$. The sum is algebraically exact and matches
+logits recomputed directly from full Q/K to maximum absolute error
+$4.01\times10^{-5}$. Table~\ref{tab:logitdecomposition} reports RMS after centering
+each query row over its visible keys, which removes score shifts that cannot
+affect softmax.
+
+\begin{table}[t]
+\centering
+\caption{Exact local logit decomposition, averaged over three seeds. ``Pos.
+total'' is $L_{cp}+L_{pc}+L_{pp}$; KL compares full local attention with
+$\operatorname{softmax}(L_{cc})$.}
+\label{tab:logitdecomposition}
+\begin{tabular}{lrr}
+\toprule
+Metric & Scalar & Rank 32 \\
+\midrule
+$L_{cc}$ centered RMS & 1.3441 & 0.9131 \\
+$L_{cp}$ centered RMS & 0.3444 & 0.5500 \\
+$L_{pc}$ centered RMS & 0.4512 & 1.0961 \\
+$L_{pp}$ centered RMS & 0.3187 & 1.1476 \\
+Pos. total centered RMS & 0.8366 & 1.6449 \\
+Cosine(pos. total, full logits) & 0.8234 & 0.8638 \\
+KL(full $\Vert$ content-only) & 0.7059 & 1.9133 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Both methods make substantial use of the two content--position cross terms;
+the carrier is not well described as only adding a content-independent
+relative bias. Rank 32 moves considerably more local score variation into the
+explicit positional and cross terms, while reducing the content--content RMS.
+This is a descriptive decomposition conditioned on each trained hidden state,
+not an independently runnable counterfactual model.
+
+We therefore pair it with checkpoint interventions. Across three seeds,
+replacing the rank-32 readout by its positionwise mean costs only 0.01109 NLL,
+whereas removing that mean costs 3.47553 and zeroing the complete direct path
+costs 3.51250. Zeroing the trained scalar endpoint changes NLL by only
+0.00011. Yet a separately trained rank-32 model without the scalar anchor is
+0.00830 worse than the full method at seed 123 and trails throughout training.
+Together these results suggest that the scalar path is useful optimization
+scaffolding, while the learned readout is dominated by a pre-RoPE constant
+component whose rotation still creates a relative-position kernel. Ordinary
+learned Q/K biases do not substitute for it: adding them to the scalar parent
+changes NLL by only $+0.00010$ in the matched seed-123 control.
+
+Finally, we tested whether the retained carrier solutions depend narrowly on
+the exact sinusoidal origin. Replacing $\mathbf s(p)$ by
+$\mathbf s(p+c)$ costs at most 0.00044 mean NLL for $c\in\{1,4\}$ across both
+methods, and both retain most of their RoPE advantage at $c=64$. Much larger
+out-of-distribution shifts are damaging: the scalar model crosses above RoPE
+around $c=1024$, while rank 32 crosses around $c=256$. This is checkpoint
+sensitivity rather than randomized-origin training evidence; it rules out
+fragility to a neighboring phase origin, not dependence on the broad absolute
+phase region observed during training.
 
 \section{Related Work}
 
@@ -303,31 +486,36 @@ layers \citep{yang2025ropenope}, or adapts RoPE to two-dimensional vision
 tokens \citep{heo2024ropevit}. Our focus is complementary but functionally
 overlapping: a fixed absolute carrier is repeatedly made available inside
 each attention block while the standard RoPE rotation remains intact. The
-final version will expand this
-section to cover additive attention decompositions, learned Fourier features,
-relative attention biases, learned RoPE spectra, and SDPA-compatible Fourier
-priors.
+camera-ready literature review will additionally cover additive attention
+decompositions, learned Fourier features, relative attention biases, learned
+RoPE spectra, and SDPA-compatible Fourier priors.
 
 \section{Limitations}
 
-The mature evidence currently uses one corpus, one fixed training context, two model
-sizes below one billion parameters, and autoregressive language modeling. The
-injection-location and RoPE-ordering tables are shorter one-seed screens.
-Evaluation-block bootstrap intervals do not measure training-seed variation.
-The models are controlled research Transformers rather than replicas of a
-specific production LLM. We therefore avoid claims of universal positional
-encoding superiority or length extrapolation until the experiments in the
-frozen plan are complete.
+The replicated evidence uses one corpus, one fixed training context, one
+153M-parameter architecture, and autoregressive language modeling. Scale and
+query-key-normalization transfer each use one seed under the earlier batch-8
+recipe. Component, location, and optimization-path ablations also use one
+seed. The selected rank-32 method has only two fresh confirmatory seeds because
+seed 123 participated in design selection. Evaluation-block bootstrap
+intervals do not measure training-seed variation, and three-seed $t$ intervals
+remain low-powered. The models are controlled research Transformers rather
+than replicas of a production LLM. We therefore make no claim of universal
+positional-encoding superiority, length extrapolation, cross-corpus
+robustness, or modality generality.
 
 \section{Conclusion}
 
 Repeatedly exposing a fixed sinusoidal carrier only to query and key
-projections is a small, kernel-compatible complement to RoPE. Existing results
-suggest that application site and composition order are important. The
-remaining experiments isolate the contribution of RoPE, learned layerwise
-gating, and repeated per-block access, then test whether the effect survives
-data shifts, a larger-batch paper recipe, modern architectural choices, scale,
-and two-dimensional spatial attention.
+projections is a small, kernel-compatible complement to RoPE. Across three
+training seeds it improves language-model NLL throughout the observed context,
+and a calibrated low-rank readout adds a further gain beyond a
+parameter-matched non-positional control. Component and location ablations
+show that RoPE and repeated attention-local access both matter, while exact
+logit measurements reveal large content--position interactions. The local
+design search is now closed. The next tests should ask whether the frozen
+methods survive a new corpus, a modern decoder backbone, and eventually
+two-dimensional spatial attention.
 
 \bibliography{references}
 \bibliographystyle{iclr2025_conference}

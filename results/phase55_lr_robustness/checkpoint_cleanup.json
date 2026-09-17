@@ -1,0 +1,24 @@
+{
+  "reason": "All Phase-55 final evaluations and aggregate analysis completed; rolling states had recovery-only purpose.",
+  "reclaimed_bytes": 7368375964,
+  "recoverable": false,
+  "removed": [
+    {
+      "bytes": 1842090247,
+      "path": "model-output/position_bias_phase55_lr_robustness/phase55-rope-lr1p5e4-seed123-b32-s100000-h768d8/step_100000"
+    },
+    {
+      "bytes": 1842097735,
+      "path": "model-output/position_bias_phase55_lr_robustness/phase55-scalar-qkpre-lr1p5e4-seed123-b32-s100000-h768d8/step_100000"
+    },
+    {
+      "bytes": 1842090247,
+      "path": "model-output/position_bias_phase55_lr_robustness/phase55-rope-lr6e4-seed123-b32-s100000-h768d8/step_100000"
+    },
+    {
+      "bytes": 1842097735,
+      "path": "model-output/position_bias_phase55_lr_robustness/phase55-scalar-qkpre-lr6e4-seed123-b32-s100000-h768d8/step_100000"
+    }
+  ],
+  "scope": "phase55_completed_recovery_cleanup"
+}

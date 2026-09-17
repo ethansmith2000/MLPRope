@@ -1,0 +1,69 @@
+{
+  "context": 1024,
+  "decision": {
+    "both_boundary_runs_finite": true,
+    "boundary_scalar_advantage_negative": true,
+    "selected_common_learning_rate": 0.0012,
+    "selection_basis": "lowest RoPE 100k development NLL among 6e-4 and 1.2e-3, conditional on both new arms being finite",
+    "stop_lr_expansion": true
+  },
+  "development": {
+    "1.2e-03": {
+      "rope": 3.089271081611514,
+      "scalar-qkpre": 3.0353783946484327
+    },
+    "6.0e-04": {
+      "rope": 3.099196247756481,
+      "scalar-qkpre": 3.055308014154434
+    }
+  },
+  "future_confirmatory_holdout": {
+    "blocks": 1024,
+    "inspected_in_phase56": false,
+    "start_batch": 7168
+  },
+  "inference_limit": "The selected LR is the best of a resource-bounded candidate set, not a claimed optimizer optimum. Adam betas, warmup, weight decay, clipping, and schedule were not tuned.",
+  "run_health": {
+    "rope": {
+      "elapsed_seconds": 15166.84466108121,
+      "metrics_finite": true,
+      "peak_reserved_mib": 16258.0,
+      "target_tokens_per_second": 215796.05733013945
+    },
+    "scalar-qkpre": {
+      "elapsed_seconds": 15067.931586732157,
+      "metrics_finite": true,
+      "peak_reserved_mib": 16678.0,
+      "target_tokens_per_second": 217212.6453561777
+    }
+  },
+  "scope": "phase56_lr_boundary",
+  "selection_evidence": {
+    "blocks": 1024,
+    "boundary_scalar_minus_rope": {
+      "contiguous_block_32_bootstrap_ci95": [
+        -0.056115438346751034,
+        -0.05275615271530114
+      ],
+      "iid_bootstrap_ci95": [
+        -0.056105456640943886,
+        -0.05284196483553387
+      ],
+      "mean_delta": -0.05447361245751381
+    },
+    "grid": {
+      "1.2e-03": {
+        "rope": 3.15574329928495,
+        "scalar-qkpre": 3.101269686827436
+      },
+      "6.0e-04": {
+        "rope": 3.165109697030857,
+        "scalar-qkpre": 3.1203293530270457
+      }
+    },
+    "start_batch": 6144
+  },
+  "sequence_batch": 32,
+  "training_seed": 123,
+  "training_steps": 100000
+}

@@ -99,6 +99,57 @@ class QKPreprojectionFormulaTest(unittest.TestCase):
         )
 
 
+class QKProjectionBiasTest(unittest.TestCase):
+    def test_default_is_bias_free_and_opt_in_is_zero_initialized(self):
+        default = Attention(8, 2, max_seq_len=12)
+        biased = Attention(8, 2, max_seq_len=12, qk_projection_bias=True)
+        self.assertIsNone(default.to_q.bias)
+        self.assertIsNone(default.to_k.bias)
+        self.assertIsNone(default.to_v.bias)
+        self.assertIsNotNone(biased.to_q.bias)
+        self.assertIsNotNone(biased.to_k.bias)
+        self.assertIsNone(biased.to_v.bias)
+
+    def test_transformer_opt_in_is_an_exact_nested_anchor(self):
+        common = {
+            "dim": 8,
+            "depth": 2,
+            "heads": 2,
+            "ff_mult": 2,
+            "vocab_size": 64,
+            "max_seq_len": 16,
+            "paired_initialization_seed": 123,
+        }
+        reference = Transformer(**common).eval()
+        biased = Transformer(**common, qk_projection_bias=True).eval()
+        for block in biased.blocks:
+            self.assertEqual(block.attn.to_q.bias.count_nonzero().item(), 0)
+            self.assertEqual(block.attn.to_k.bias.count_nonzero().item(), 0)
+        self.assertEqual(
+            count_parameters(biased)["total"]
+            - count_parameters(reference)["total"],
+            2 * common["dim"] * common["depth"],
+        )
+        tokens = torch.randint(0, common["vocab_size"], (2, 12))
+        torch.testing.assert_close(
+            biased(input_ids=tokens),
+            reference(input_ids=tokens),
+            rtol=0,
+            atol=0,
+        )
+
+    def test_config_requires_a_boolean(self):
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as handle:
+            json.dump({"qk_projection_bias": True}, handle)
+            handle.flush()
+            self.assertTrue(load_config(_cli(handle.name)).qk_projection_bias)
+        with tempfile.NamedTemporaryFile("w", suffix=".json") as handle:
+            json.dump({"qk_projection_bias": 1}, handle)
+            handle.flush()
+            with self.assertRaisesRegex(TypeError, "qk_projection_bias"):
+                load_config(_cli(handle.name))
+
+
 class QKPreprojectionTest(unittest.TestCase):
     def test_only_tied_scalar_is_active_and_anchor_is_exact(self):
         self.assertEqual(

@@ -68,6 +68,25 @@ AttentionImpl = Literal["sdpa", "flex"]
 sinusoidal_basis = interleaved_fourier_basis
 
 
+def standard_alibi_slopes(heads: int) -> torch.Tensor:
+    """Return the fixed ALiBi slopes from Press et al. in head order."""
+    if heads <= 0:
+        raise ValueError("heads must be positive")
+
+    def power_of_two_slopes(count: int) -> list[float]:
+        start = 2.0 ** (-2.0 ** -(math.log2(count) - 3.0))
+        return [start ** (index + 1) for index in range(count)]
+
+    if heads & (heads - 1) == 0:
+        values = power_of_two_slopes(heads)
+    else:
+        lower = 2 ** math.floor(math.log2(heads))
+        values = power_of_two_slopes(lower)
+        extra = power_of_two_slopes(2 * lower)[0::2][: heads - lower]
+        values.extend(extra)
+    return torch.tensor(values, dtype=torch.float32)
+
+
 def causal_mask(batch_idx, head_idx, query_idx, key_value_idx):
     del batch_idx, head_idx
     return query_idx >= key_value_idx
@@ -118,6 +137,7 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         "rope_sin",
         "rope_cos",
         "rope_inverse_frequency",
+        "alibi_slopes",
     )
 
     def __init__(
@@ -138,19 +158,51 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         position_content_coupling: str = "separate",
         qk_norm_mode: str = "legacy_layernorm",
         qk_preprojection_config: dict | None = None,
+        qk_projection_bias: bool = False,
+        rope_fraction: float = 1.0,
+        use_alibi: bool = False,
     ):
         super().__init__()
         self.dim = dim
         self.heads = heads
         self.is_causal = is_causal
         self.use_rope = use_rope
+        if dim % heads != 0:
+            raise ValueError("dim must be divisible by heads.")
         self.head_dim = dim // heads
+        if self.head_dim % 2 != 0:
+            raise ValueError("Position channels require an even head dimension.")
         self.rope_theta = rope_theta
+        if isinstance(rope_fraction, bool) or not isinstance(
+            rope_fraction, (int, float)
+        ):
+            raise TypeError("rope_fraction must be a number")
+        self.rope_fraction = float(rope_fraction)
+        if not 0.0 < self.rope_fraction <= 1.0:
+            raise ValueError("rope_fraction must be in (0, 1]")
+        rotary_width = self.head_dim * self.rope_fraction
+        if not math.isclose(rotary_width, round(rotary_width), abs_tol=1e-9):
+            raise ValueError("rope_fraction must select an integer head width")
+        self.rotary_dim = int(round(rotary_width))
+        if self.rotary_dim % 2:
+            raise ValueError("rope_fraction must select an even head width")
+        if not use_rope and self.rope_fraction != 1.0:
+            raise ValueError("partial rope_fraction requires use_rope=true")
+        if not isinstance(use_alibi, bool):
+            raise TypeError("use_alibi must be a boolean")
+        if use_alibi and use_rope:
+            raise ValueError("the ALiBi baseline requires use_rope=false")
+        if use_alibi and attn_impl != "flex":
+            raise ValueError("the ALiBi baseline requires attn_impl='flex'")
+        self.use_alibi = use_alibi
         self.qk_preprojection_config = normalize_qk_preprojection_config(
             qk_preprojection_config,
             model_dim=dim,
             rope_theta=rope_theta,
         )
+        if not isinstance(qk_projection_bias, bool):
+            raise TypeError("qk_projection_bias must be a boolean")
+        self.qk_projection_bias = qk_projection_bias
         self.max_seq_len = max_seq_len
         self.rel_extent = rel_extent or max_seq_len
         self.attn_impl = attn_impl
@@ -169,10 +221,6 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
             position_content_dim,
             position_content_coupling,
         )
-        if dim % heads != 0:
-            raise ValueError("dim must be divisible by heads.")
-        if self.head_dim % 2 != 0:
-            raise ValueError("Position channels require an even head dimension.")
         if attn_impl not in ("sdpa", "flex"):
             raise ValueError(f"Unknown attn_impl: {attn_impl!r}")
         if self.rel_extent <= 0:
@@ -218,8 +266,8 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         self._prepared_query_length: int | None = None
 
         # Split projections match the other experimental Transformer.
-        self.to_q = torch.nn.Linear(dim, dim, bias=False)
-        self.to_k = torch.nn.Linear(dim, dim, bias=False)
+        self.to_q = torch.nn.Linear(dim, dim, bias=qk_projection_bias)
+        self.to_k = torch.nn.Linear(dim, dim, bias=qk_projection_bias)
         self.to_v = torch.nn.Linear(dim, dim, bias=False)
         self.to_out = torch.nn.Linear(dim, dim, bias=True)
 
@@ -282,22 +330,33 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
 
         rope_sin, rope_cos = build_rope_cache(
             max_seq_len,
-            self.head_dim,
+            self.rotary_dim,
             self.rope_theta,
         )
         self.register_buffer("rope_sin", rope_sin, persistent=False)
         self.register_buffer("rope_cos", rope_cos, persistent=False)
         self.register_buffer(
             "rope_inverse_frequency",
-            build_rope_frequencies(self.head_dim, self.rope_theta),
+            build_rope_frequencies(self.rotary_dim, self.rope_theta),
+            persistent=False,
+        )
+        self.register_buffer(
+            "alibi_slopes",
+            standard_alibi_slopes(heads) if use_alibi else torch.empty(0),
             persistent=False,
         )
     def _apply_rope(self, q, k):
-        return apply_rotary(
-            q,
-            k,
+        rotary_q, rotary_k = apply_rotary(
+            q[..., : self.rotary_dim],
+            k[..., : self.rotary_dim],
             self.rope_sin,
             self.rope_cos,
+        )
+        if self.rotary_dim == self.head_dim:
+            return rotary_q, rotary_k
+        return (
+            torch.cat((rotary_q, q[..., self.rotary_dim :]), dim=-1),
+            torch.cat((rotary_k, k[..., self.rotary_dim :]), dim=-1),
         )
 
     def _split_heads(self, x):
@@ -346,7 +405,21 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
 
     @torch.compiler.disable
     def _flex_attention(self, q, k, v):
-        return _flex_attention_call(q, k, v, block_mask=self._block_mask(q))
+        if not self.use_alibi:
+            return _flex_attention_call(q, k, v, block_mask=self._block_mask(q))
+        slopes = self.alibi_slopes
+
+        def alibi_score(score, batch, head, query_index, key_index):
+            del batch
+            return score - slopes[head] * (query_index - key_index)
+
+        return _flex_attention_call(
+            q,
+            k,
+            v,
+            block_mask=self._block_mask(q),
+            score_mod=alibi_score,
+        )
 
     def forward(self, x):
         preprojection = None
@@ -623,6 +696,9 @@ class TransformerBlock(torch.nn.Module):
         position_content_coupling: str = "separate",
         qk_norm_mode: str = "legacy_layernorm",
         qk_preprojection_config: dict | None = None,
+        qk_projection_bias: bool = False,
+        rope_fraction: float = 1.0,
+        use_alibi: bool = False,
     ):
         super().__init__()
         self.attn = Attention(
@@ -642,6 +718,9 @@ class TransformerBlock(torch.nn.Module):
             position_content_coupling=position_content_coupling,
             qk_norm_mode=qk_norm_mode,
             qk_preprojection_config=qk_preprojection_config,
+            qk_projection_bias=qk_projection_bias,
+            rope_fraction=rope_fraction,
+            use_alibi=use_alibi,
         )
         self.ff = GeGLU(dim, hidden_dim=ff_hidden_dim)
         self.norm1 = torch.nn.LayerNorm(dim)
@@ -680,11 +759,31 @@ class Transformer(torch.nn.Module):
         ff_widened_layers: list[int] | tuple[int, ...] | None = None,
         qk_preprojection_config: dict | None = None,
         input_sinusoid_config: dict | None = None,
+        qk_projection_bias: bool = False,
+        rope_fraction: float = 1.0,
+        use_alibi: bool = False,
+        use_learned_absolute_position: bool = False,
     ):
         super().__init__()
 
         self.token_embedding = torch.nn.Embedding(vocab_size, dim)
         self.gradient_checkpointing = gradient_checkpointing
+        if not isinstance(use_learned_absolute_position, bool):
+            raise TypeError("use_learned_absolute_position must be a boolean")
+        if use_learned_absolute_position and use_rope:
+            raise ValueError(
+                "the learned absolute-position baseline requires use_rope=false"
+            )
+        if use_learned_absolute_position and use_alibi:
+            raise ValueError(
+                "learned absolute position and ALiBi are separate baselines"
+            )
+        self.use_learned_absolute_position = use_learned_absolute_position
+        self.absolute_position_embedding = (
+            torch.nn.Parameter(torch.empty(max_seq_len, dim))
+            if use_learned_absolute_position
+            else None
+        )
         normalized_qk_preprojection = normalize_qk_preprojection_config(
             qk_preprojection_config,
             model_dim=dim,
@@ -718,6 +817,13 @@ class Transformer(torch.nn.Module):
             if self.input_sinusoid_config["enabled"]
             else None
         )
+        if (
+            self.absolute_position_embedding is not None
+            and self.input_sinusoid is not None
+        ):
+            raise ValueError(
+                "learned absolute position and input sinusoid are separate baselines"
+            )
         base_ff_hidden_dim = ff_hidden_dim or dim * ff_mult
         widened_layers = set(ff_widened_layers or ())
         if any(layer_idx < 0 or layer_idx >= depth for layer_idx in widened_layers):
@@ -757,6 +863,9 @@ class Transformer(torch.nn.Module):
                 position_content_coupling=position_content_coupling,
                 qk_norm_mode=qk_norm_mode,
                 qk_preprojection_config=layer_qk_preprojection,
+                qk_projection_bias=qk_projection_bias,
+                rope_fraction=rope_fraction,
+                use_alibi=use_alibi,
             ))
         self.blocks = torch.nn.ModuleList(blocks)
         if (
@@ -839,6 +948,16 @@ class Transformer(torch.nn.Module):
             )
             if lm_head.bias is not None:
                 torch.nn.init.zeros_(lm_head.bias)
+            if self.absolute_position_embedding is not None:
+                torch.nn.init.normal_(
+                    self.absolute_position_embedding,
+                    mean=0.0,
+                    std=0.02,
+                    generator=self._named_generator(
+                        paired_initialization_seed,
+                        "absolute_position_embedding",
+                    ),
+                )
             for module in self.modules():
                 if isinstance(module, PositionChannel):
                     module.reset_output_parameters()
@@ -869,6 +988,10 @@ class Transformer(torch.nn.Module):
         diagnostic_x = None
         if input_ids is not None:
             diagnostic_x = self.in_proj(self.token_embedding(input_ids))
+            if self.absolute_position_embedding is not None:
+                diagnostic_x = diagnostic_x + self.absolute_position_embedding[
+                    : diagnostic_x.shape[1]
+                ].to(dtype=diagnostic_x.dtype)[None, :, :]
             if self.input_sinusoid is not None:
                 diagnostic_x = diagnostic_x + self.input_sinusoid(
                     diagnostic_x.shape[1],
@@ -879,6 +1002,11 @@ class Transformer(torch.nn.Module):
             if seq_len is not None:
                 for key, value in self.input_sinusoid.diagnostics(seq_len).items():
                     metrics[f"{prefix}/{key}"] = value
+        if self.absolute_position_embedding is not None and seq_len is not None:
+            positional = self.absolute_position_embedding[:seq_len].detach().float()
+            metrics["position/learned_absolute/rms"] = (
+                positional.square().mean().sqrt().item()
+            )
         for layer_idx, block in enumerate(self.blocks):
             actual_qk_summary = None
             normalized_diagnostic_x = None
@@ -1070,6 +1198,19 @@ class Transformer(torch.nn.Module):
                         metrics[f"{pre_prefix}/normalized_{branch}_rms"] = (
                             combined_normalized.square().mean().sqrt().item()
                         )
+            if block.attn.qk_projection_bias:
+                bias_prefix = f"architecture/layer_{layer_idx:02d}/qk_projection_bias"
+                q_bias = block.attn.to_q.bias.detach().float()
+                k_bias = block.attn.to_k.bias.detach().float()
+                metrics[f"{bias_prefix}/q_rms"] = (
+                    q_bias.square().mean().sqrt().item()
+                )
+                metrics[f"{bias_prefix}/k_rms"] = (
+                    k_bias.square().mean().sqrt().item()
+                )
+                metrics[f"{bias_prefix}/qk_diff_rms"] = (
+                    (q_bias - k_bias).square().mean().sqrt().item()
+                )
             if diagnostic_x is not None:
                 diagnostic_x = block(diagnostic_x)
             if seq_len is None:
@@ -1093,6 +1234,10 @@ class Transformer(torch.nn.Module):
     def forward(self, input_ids, targets=None, *, return_logits: bool = False):
         """Training path returns loss only so torch.compile need not keep vocab logits live."""
         x = self.in_proj(self.token_embedding(input_ids))
+        if self.absolute_position_embedding is not None:
+            x = x + self.absolute_position_embedding[: x.shape[1]].to(
+                dtype=x.dtype
+            )[None, :, :]
         if self.input_sinusoid is not None:
             x = x + self.input_sinusoid(
                 x.shape[1],
@@ -1141,14 +1286,20 @@ def count_parameters(model: torch.nn.Module) -> dict[str, int]:
     embed = sum(parameter.numel() for parameter in model.token_embedding.parameters())
     head = sum(parameter.numel() for parameter in model.out_proj.parameters())
     position_counts = count_position_parameters(model)
+    absolute_position_params = (
+        model.absolute_position_embedding.numel()
+        if model.absolute_position_embedding is not None
+        else 0
+    )
     return {
         "total": total,
         "embeddings": embed,
         "lm_head": head,
-        "position_params": position_counts["position_params"],
+        "position_params": position_counts["position_params"] + absolute_position_params,
         "qk_position_params": position_counts["qk_position_params"],
         "qk_preprojection_params": position_counts["qk_preprojection_params"],
         "input_sinusoid_params": position_counts["input_sinusoid_params"],
+        "absolute_position_params": absolute_position_params,
         "logit_bias_params": position_counts["logit_bias_params"],
         "non_embed": total - embed - head,
     }

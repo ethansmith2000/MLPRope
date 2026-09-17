@@ -1,0 +1,293 @@
+{
+  "all_training_metrics_finite": true,
+  "checkpoint_cleanup": {
+    "event_count": 7,
+    "reclaimed_bytes": 12904077645,
+    "runs_with_removed_checkpoints": [
+      "phase57-alibi-lr1p2e3-seed123-b32-s100000-h768d8",
+      "phase57-fixed-input-sinusoid-lr1p2e3-seed123-b32-s100000-h768d8",
+      "phase57-learned-absolute-lr1p2e3-seed123-b32-s100000-h768d8",
+      "phase57-nope-lr1p2e3-seed123-b32-s100000-h768d8",
+      "phase57-partial-rope-25-lr1p2e3-seed123-b32-s100000-h768d8",
+      "phase57-rope-lr1p2e3-seed123-b32-s100000-h768d8",
+      "phase57-scalar-qkpre-lr1p2e3-seed123-b32-s100000-h768d8"
+    ]
+  },
+  "context": 1024,
+  "final_holdout": {
+    "blocks": 1024,
+    "previously_inspected": false,
+    "start_batch": 7168
+  },
+  "inference_limit": "All arms use one training seed. Paired block intervals quantify final-holdout precision, not training-seed variability. The fixed input, partial-RoPE, and ALiBi cells are controlled implementations rather than claims of exact external recipe reproduction; ALiBi also uses a different attention kernel.",
+  "learning_rate": 0.0012,
+  "methods": {
+    "alibi": {
+      "block_nll_standard_error": 0.0110522747289651,
+      "elapsed_seconds": 19258.950670375023,
+      "label": "ALiBi",
+      "mean_nll": 3.137824052362703,
+      "metrics_finite": true,
+      "peak_allocated_mib": 29981.2080078125,
+      "peak_reserved_mib": 30156.0,
+      "position_parameters": 0,
+      "target_tokens_per_second": 169944.11253332667,
+      "total_parameters": 153495936,
+      "versus_rope": {
+        "contiguous_block_32_bootstrap_ci95": [
+          -0.045356101694051174,
+          -0.041637183295097205
+        ],
+        "iid_bootstrap_ci95": [
+          -0.04514406069938559,
+          -0.041822003744891846
+        ],
+        "mean_delta": -0.043501155683770776
+      },
+      "versus_scalar_qkpre": {
+        "contiguous_block_32_bootstrap_ci95": [
+          0.010749261296587065,
+          0.014335157960886134
+        ],
+        "iid_bootstrap_ci95": [
+          0.010908211595960893,
+          0.013987628815812059
+        ],
+        "mean_delta": 0.012440627324394882
+      }
+    },
+    "fixed-input-sinusoid": {
+      "block_nll_standard_error": 0.0110998957998063,
+      "elapsed_seconds": 14864.336852311157,
+      "label": "fixed input sinusoid",
+      "mean_nll": 3.1385046943323687,
+      "metrics_finite": true,
+      "peak_allocated_mib": 14279.783203125,
+      "peak_reserved_mib": 16258.0,
+      "position_parameters": 0,
+      "target_tokens_per_second": 220187.77645577316,
+      "total_parameters": 153495936,
+      "versus_rope": {
+        "contiguous_block_32_bootstrap_ci95": [
+          -0.04458754248335026,
+          -0.04109813658287749
+        ],
+        "iid_bootstrap_ci95": [
+          -0.04451111645903438,
+          -0.04112503551295959
+        ],
+        "mean_delta": -0.04282051371410489
+      },
+      "versus_scalar_qkpre": {
+        "contiguous_block_32_bootstrap_ci95": [
+          0.010909529935452156,
+          0.015319797256961462
+        ],
+        "iid_bootstrap_ci95": [
+          0.011416483268840238,
+          0.01481862260843627
+        ],
+        "mean_delta": 0.013121269294060767
+      }
+    },
+    "learned-absolute": {
+      "block_nll_standard_error": 0.011208343586877546,
+      "elapsed_seconds": 14821.950444239192,
+      "label": "learned absolute",
+      "mean_nll": 3.2614476651651785,
+      "metrics_finite": true,
+      "peak_allocated_mib": 14285.783203125,
+      "peak_reserved_mib": 16258.0,
+      "position_parameters": 786432,
+      "target_tokens_per_second": 220817.448574866,
+      "total_parameters": 154282368,
+      "versus_rope": {
+        "contiguous_block_32_bootstrap_ci95": [
+          0.07788021266460418,
+          0.08230631892220117
+        ],
+        "iid_bootstrap_ci95": [
+          0.07826449539570604,
+          0.08200927618308924
+        ],
+        "mean_delta": 0.08012245711870492
+      },
+      "versus_scalar_qkpre": {
+        "contiguous_block_32_bootstrap_ci95": [
+          0.13345695541065652,
+          0.13858864327776246
+        ],
+        "iid_bootstrap_ci95": [
+          0.13388721381488722,
+          0.13817936959676444
+        ],
+        "mean_delta": 0.13606424012687057
+      }
+    },
+    "nope": {
+      "block_nll_standard_error": 0.011160592068418044,
+      "elapsed_seconds": 14774.862239355221,
+      "label": "NoPE",
+      "mean_nll": 3.276222927728668,
+      "metrics_finite": true,
+      "peak_allocated_mib": 14276.78271484375,
+      "peak_reserved_mib": 16258.0,
+      "position_parameters": 0,
+      "target_tokens_per_second": 221521.20452818734,
+      "total_parameters": 153495936,
+      "versus_rope": {
+        "contiguous_block_32_bootstrap_ci95": [
+          0.09299083518853876,
+          0.09681973445694894
+        ],
+        "iid_bootstrap_ci95": [
+          0.09298773145710584,
+          0.09677847616549115
+        ],
+        "mean_delta": 0.09489771968219429
+      },
+      "versus_scalar_qkpre": {
+        "contiguous_block_32_bootstrap_ci95": [
+          0.14877021519932895,
+          0.15293433900515083
+        ],
+        "iid_bootstrap_ci95": [
+          0.14869597834476736,
+          0.15293153695820363
+        ],
+        "mean_delta": 0.15083950269035995
+      }
+    },
+    "partial-rope-25": {
+      "block_nll_standard_error": 0.011121417528927304,
+      "elapsed_seconds": 15231.310853539966,
+      "label": "25% partial RoPE",
+      "mean_nll": 3.1971927327103913,
+      "metrics_finite": true,
+      "peak_allocated_mib": 14274.53271484375,
+      "peak_reserved_mib": 16256.0,
+      "position_parameters": 0,
+      "target_tokens_per_second": 214882.70520323093,
+      "total_parameters": 153495936,
+      "versus_rope": {
+        "contiguous_block_32_bootstrap_ci95": [
+          0.014180230660713278,
+          0.01763908066204749
+        ],
+        "iid_bootstrap_ci95": [
+          0.014299632312031463,
+          0.017428825181559658
+        ],
+        "mean_delta": 0.01586752466391772
+      },
+      "versus_scalar_qkpre": {
+        "contiguous_block_32_bootstrap_ci95": [
+          0.06988432878279127,
+          0.07381855795392767
+        ],
+        "iid_bootstrap_ci95": [
+          0.07003802840190473,
+          0.07355700905900449
+        ],
+        "mean_delta": 0.07180930767208338
+      }
+    },
+    "rope": {
+      "block_nll_standard_error": 0.011056158668838327,
+      "elapsed_seconds": 14968.681467479095,
+      "label": "standard RoPE",
+      "mean_nll": 3.1813252080464736,
+      "metrics_finite": true,
+      "peak_allocated_mib": 14276.78271484375,
+      "peak_reserved_mib": 16258.0,
+      "position_parameters": 0,
+      "target_tokens_per_second": 218652.8778176481,
+      "total_parameters": 153495936,
+      "versus_rope": {
+        "contiguous_block_32_bootstrap_ci95": [
+          0.0,
+          0.0
+        ],
+        "iid_bootstrap_ci95": [
+          0.0,
+          0.0
+        ],
+        "mean_delta": 0.0
+      },
+      "versus_scalar_qkpre": {
+        "contiguous_block_32_bootstrap_ci95": [
+          0.05441654006717726,
+          0.0574063058651518
+        ],
+        "iid_bootstrap_ci95": [
+          0.05428383351827506,
+          0.057567752094473686
+        ],
+        "mean_delta": 0.05594178300816566
+      }
+    },
+    "scalar-qkpre": {
+      "block_nll_standard_error": 0.010977470821280255,
+      "elapsed_seconds": 15132.18837673124,
+      "label": "scalar pre-Q/K + RoPE",
+      "mean_nll": 3.125383425038308,
+      "metrics_finite": true,
+      "peak_allocated_mib": 14684.42333984375,
+      "peak_reserved_mib": 16678.0,
+      "position_parameters": 8,
+      "target_tokens_per_second": 216290.28125454788,
+      "total_parameters": 153495944,
+      "versus_rope": {
+        "contiguous_block_32_bootstrap_ci95": [
+          -0.05741689316928387,
+          -0.05442306038166862
+        ],
+        "iid_bootstrap_ci95": [
+          -0.057593628094764426,
+          -0.05427632938954048
+        ],
+        "mean_delta": -0.05594178300816566
+      },
+      "versus_scalar_qkpre": {
+        "contiguous_block_32_bootstrap_ci95": [
+          0.0,
+          0.0
+        ],
+        "iid_bootstrap_ci95": [
+          0.0,
+          0.0
+        ],
+        "mean_delta": 0.0
+      }
+    }
+  },
+  "primary_confirmation": {
+    "block_32_interval_excludes_zero": true,
+    "negative_mean": true,
+    "scalar_minus_rope": {
+      "contiguous_block_32_bootstrap_ci95": [
+        -0.05741689316928387,
+        -0.05442306038166862
+      ],
+      "iid_bootstrap_ci95": [
+        -0.057593628094764426,
+        -0.05427632938954048
+      ],
+      "mean_delta": -0.05594178300816566
+    }
+  },
+  "protocol": "paper/POSITIONAL_BASELINE_PROTOCOL.md",
+  "ranking_best_to_worst": [
+    "scalar-qkpre",
+    "alibi",
+    "fixed-input-sinusoid",
+    "rope",
+    "partial-rope-25",
+    "learned-absolute",
+    "nope"
+  ],
+  "scope": "phase57_recognized_positional_baselines",
+  "sequence_batch": 32,
+  "training_seed": 123,
+  "training_steps": 100000
+}

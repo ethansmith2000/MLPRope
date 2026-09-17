@@ -1,0 +1,58 @@
+{
+  "analysis_script_sha256": "2d873a089e36b1f1015beb63f72b085fd95cec0600a010460dee9ff3a079c940",
+  "arm": "qk-readout-r32",
+  "array_file": "seed456_qk-readout-r32.npz",
+  "array_file_sha256": "42a380025febb238c2f6d812094142e5256ef935842f15563b363fe3305bedb0",
+  "artifact_policy": {
+    "compressed_per_block_arrays": true,
+    "new_weights_or_checkpoints": false,
+    "source_weights_read_only": true
+  },
+  "carrier_cosines": [
+    1.0,
+    0.9733599424362183,
+    0.7693701982498169,
+    0.6322327852249146,
+    0.4862246513366699,
+    0.339521199464798,
+    0.1648247092962265,
+    0.02710348181426525
+  ],
+  "elapsed_seconds": 23.57796818204224,
+  "evaluated_at": "2026-09-13T19:20:52.679244+00:00",
+  "gpu": "NVIDIA GeForce RTX 5090",
+  "holdout": {
+    "blocks": 1024,
+    "start_batch": 4096
+  },
+  "mean_loss": [
+    3.1596573741099263,
+    3.159648259875399,
+    3.160025612161536,
+    3.1613792054262437,
+    3.1686455164361895,
+    3.226192808946534,
+    3.7278408581769646,
+    5.8513374740687665
+  ],
+  "offsets": [
+    0,
+    1,
+    4,
+    16,
+    64,
+    256,
+    1024,
+    4096
+  ],
+  "scope": "phase54_position_origin",
+  "seed": 456,
+  "software": {
+    "cuda": "12.8",
+    "python": "3.12.14",
+    "torch": "2.11.0+cu128"
+  },
+  "source_config_sha256": "d93ab8472ffa7708ce25a2b4754480e3569351bc75b39a100be23ce48cd5140d",
+  "source_run": "model-output/position_bias_phase50_training_seed_replication/phase50-qk-readout-r32-seed456-b32-s100000-h768d8",
+  "source_weights_sha256": "6155caf37226ac9f1952b303b07164f2dd0226ff3627e4e51a006acce7cf51ed"
+}

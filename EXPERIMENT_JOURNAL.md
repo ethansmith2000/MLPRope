@@ -3791,3 +3791,287 @@ then removes Phase-50's validated redundant recovery directories, reruns the
 weight diagnostic over all three rank-32 seeds, and evaluates the six
 counterfactuals through at most two concurrent `gpu-claim` jobs. It cannot
 consume a GPU while Phase 50 is active.
+
+## 2026-09-12 — Phases 50–51 completed: replication and mechanism result
+
+Phase 50 completed all seed-456/789 runs and combined them with the frozen
+seed-123 cohort. Calibrated rank 32 beat scalar pre-Q/K in every seed by
+`-0.010140`, `-0.006124`, and `-0.011046` NLL, with three-seed mean
+`-0.009103` and descriptive t interval `[-0.015612, -0.002595]`. It also beat
+the parameter-matched FFN control in every seed by `-0.009576`, `-0.006466`,
+and `-0.004215`; mean `-0.006752`, interval `[-0.013439, -0.000065]`. Both
+registered replication gates passed. The fresh-seed means were `-0.008585`
+against scalar and `-0.005340` against the FFN control.
+
+Phase 51 evaluated all six registered checkpoint interventions over those
+three rank-32 models. Mean-only increased NLL by `+0.011093`, mean-removed by
+`+3.475527`, direct-zero by `+3.512501`, scalar-zero by only `+0.000109`, and
+all-zero by `+3.516242`, all relative to the full model. Fresh re-evaluation
+reproduced saved full-model endpoints within `4e-5--6e-5`. The direct branch's
+large positional mean is therefore functionally essential; its small centered
+variation provides almost all improvement beyond that mean. The trained
+scalar endpoint is dispensable, but this intervention cannot test whether the
+scalar supplied useful optimization scaffolding. Validated Phase-50 recovery
+checkpoints were then removed, reclaiming 11.07 GiB while preserving final
+weights and compact evidence.
+
+## 2026-09-12 — Phase 52 bias/scaffold close-out registered
+
+Phase 52 freezes two 100k, seed-123, batch-32, context-1024 training arms. The
+first adds ordinary separate learned biases to `W_q` and `W_k` on top of the
+scalar pre-Q/K carrier. These add exactly `2 * 768 * 8 = 12,288` parameters,
+start at zero, use the base Adam learning rate, and receive no weight decay.
+The arm is exactly nested at the proven scalar parent at initialization.
+
+The second uses calibrated rank-32 dedicated Q/K readouts in
+`low_rank_qk_replace` mode: no scalar input carrier, no learned scalar gate,
+and the frozen readout LR multiplier `6.367487`. Its zero output factors make
+it exactly nested at plain RoPE at initialization. This distinguishes a
+dispensable endpoint component from a useful training scaffold.
+
+Both arms use the previously untouched validation blocks `[5120, 6143]` for
+the 1,024-block final evaluation. Retained Phase-49 RoPE, scalar, and rank-32
+weights are evaluated on the same new window. The descriptive match margin is
+`+0.003` NLL relative to trained rank 32. This is a one-seed discriminating
+close-out, not another mapper search or a replacement for Phase 50's
+three-seed evidence.
+
+The artifact policy is deliberately metric-only: no periodic recovery
+checkpoint and no final model are saved for either new arm. The retained
+evidence is resolved config, source/dataset provenance, optimizer and position
+diagnostics, logs, and per-block holdout losses. A two-job hard cap is enforced
+through `gpu-claim`; 133 tests passed (one expected CUDA skip), and both main
+configs passed model-construction dry runs before launch.
+
+## 2026-09-12 — Phase 52 completed: bias null and scalar scaffold
+
+Both preflights, both 100k training runs, all three retained-checkpoint
+evaluations, and the registered analyzer completed without error. On untouched
+validation blocks `[5120, 6143]`, the common references were RoPE `3.145657`,
+scalar pre-Q/K `3.110001`, and calibrated rank 32 `3.099160`.
+
+Scalar pre-Q/K plus ordinary separate Q/K projection biases reached `3.110102`:
+delta `+0.000101` versus scalar, with IID interval
+`[-0.000819, +0.001009]` and block-32 interval
+`[-0.000664, +0.000885]`. This was not parameter collapse. Endpoint Q-bias
+RMS ranged `0.0563--0.1074` and K-bias RMS `0.1004--0.2139` across layers;
+every bias moved materially from its zero initialization. Generic constant
+Q/K offsets therefore do not account for the projected carrier's gain.
+
+Rank 32 trained without the scalar anchor reached `3.107455`. It remained
+better than scalar by `-0.002546`, with block-32 interval
+`[-0.004212, -0.000910]`, but missed the frozen `0.003` materiality threshold.
+More importantly, it was worse than full rank 32 by `+0.008295`, with IID
+interval `[+0.006805, +0.009833]` and block-32 interval
+`[+0.006302, +0.010184]`. Relative to full rank 32's `-0.010841` gain over
+scalar on this window, the no-anchor run retained about 23%.
+
+This is not merely an early transient: no-anchor trailed the full rank-32
+reference at every 5k development evaluation from 5k through 100k. The gap
+was `+0.010478` at 5k and `+0.006023` at 100k. Both new optimization histories
+were finite; throughput was about 216.5k target tokens/s for the bias arm and
+210.5k for no-anchor. The result reconciles Phase 51's neutral endpoint scalar
+ablation with training: the scalar branch behaves as a useful homotopy or
+optimization scaffold, after which the trained network can become locally
+independent of it.
+
+Phase 52 closes the local architecture search. Full calibrated rank 32 remains
+the strongest extension; the scalar carrier remains the minimal method and
+the correct nested initialization for that extension. No Q/K-bias replacement,
+no no-anchor simplification, and no further local mapper or LR variants are
+promoted. Any stronger paper claim about the scaffold itself would require
+fresh no-anchor training seeds, but those are not required before testing the
+already replicated full method across corpus, backbone, scale, and modality.
+
+No periodic checkpoint or final model was written. The two completed main
+output trees occupy 2.1 MiB, the preflights 164 KiB, and the result/reference
+artifacts 96 KiB; workspace free space remains about 295 GiB.
+
+## 2026-09-12 — Phase 53 completed: three-seed mechanism evidence
+
+Phase 53 evaluated the retained RoPE, scalar pre-Q/K, and calibrated rank-32
+weights for seeds 123, 456, and 789. It was a frozen checkpoint analysis, not
+new training or method selection. The loss endpoint used all validation blocks
+`[4096, 5119]`; attention analysis used the predeclared 64-block subset at
+offsets `8 + 16j`. The durable launcher enforced the requested two-GPU cap and
+all nine evaluations completed successfully.
+
+The re-evaluated NLLs were RoPE `3.207211/3.199459/3.211929`, scalar
+`3.169648/3.165801/3.173230`, and rank 32
+`3.159455/3.159647/3.162242`. Every value reproduced its saved endpoint within
+`1.0e-4`. The mean contrasts were scalar-minus-RoPE `-0.036640` and
+rank32-minus-scalar `-0.009112`, with descriptive seed-level intervals
+`[-0.043208,-0.030071]` and `[-0.015551,-0.002672]`.
+
+Scalar-minus-RoPE was negative in every predeclared target-position bin and
+every seed. Its seed-mean benefit ranged from `-0.020661` at positions 1--15
+to `-0.037954` at positions 512--1023. Rank32-minus-scalar was negative in
+every seed-average bin (`-0.003882` to `-0.011827`), though seed 123 was
+slightly positive in the 16--31 bin; the correct result is broad
+position-stratified benefit, not universal per-seed dominance in every bin.
+
+The consistent coarse attention change was concentration. Relative to RoPE,
+scalar normalized entropy fell by `0.039706`, first-token mass rose by
+`0.012133`, distance-1--3 mass rose by `0.023981`, and distance-64--255 mass
+fell by `0.021888`; every direction agreed across seeds. Mean attended-distance
+fraction was not consistent (slightly positive at seed 123, negative at seeds
+456/789), so a generic ``shorter attention'' claim is rejected. Rank 32 and
+scalar had nearly identical aggregate entropy and distance-bin profiles.
+
+For the local score analysis, content and positional projected vectors shared
+the RMS denominator of the full trained Q/K vector, the learned coordinatewise
+gain, and the same RoPE rotation. Their four score products matched logits
+independently recomputed from full Q/K to maximum absolute error `4.005e-5`.
+Scalar's content-position/position-content/
+position-position centered RMS values were `0.344420/0.451185/0.318666`, and
+rank 32's were `0.550010/1.096074/1.147568`. Combined position-involving RMS
+was `0.836647` for scalar and `1.644923` for rank 32; local full-versus-
+content-only attention KL was `0.705940` and `1.913295`. These measurements
+show that both methods use content--position interactions and that rank 32
+moves substantially more local logit structure into the explicit carrier
+path. They are descriptive decompositions conditioned on each model's hidden
+state, not independent causal networks.
+
+No new weights or recovery checkpoints were created. The retained Phase-53
+artifacts are nine compact JSON/NPZ pairs plus aggregate JSON, CSV, report, and
+logs. The paper draft, evidence audit, and frozen experiment plan were updated
+from prospective language to the completed result. The next GPU experiment is
+the pinned second-corpus trio, followed by modern-backbone transfer; the local
+carrier design search remains closed.
+
+## 2026-09-13 — Phase 54 completed: carrier-origin sensitivity
+
+Before changing corpora, Phase 54 tested whether the retained scalar and
+rank-32 solutions were narrowly tied to the exact origin used for every
+training window. Across seeds 123, 456, and 789, the inference-only audit
+replaced `s(p)` by `s(p+c)` for offsets `0, 1, 4, 16, 64, 256, 1024, 4096` on
+the same 1,024 Phase-53 holdout blocks. Standard RoPE remained indexed by `p`
+because a common RoPE-origin shift cancels from Q/K inner products; the
+intervention therefore isolates absolute carrier phase.
+
+Small shifts were neutral. At offsets 1 and 4, scalar penalties were only
+`+0.000025` and `+0.000112` NLL; rank-32 penalties were `+0.000017` and
+`+0.000439`. Both methods retained most of their RoPE advantage at offset 64:
+scalar remained `-0.034338` and rank 32 `-0.037243` versus RoPE. At much larger
+shifts the checkpoint distribution shift became damaging. Scalar was
+`+0.096406` worse than RoPE at offset 1024; rank 32 already became `+0.015105`
+worse at offset 256 and degraded more sharply thereafter.
+
+The predeclared rule asked whether offset 1 or 4 caused a mean penalty of at
+least `0.01`. Neither method triggered it, so no random-origin training pair
+is inserted before the optimizer audit. The result rejects exact-neighboring-
+origin fragility but does not establish invariance to arbitrary absolute
+phase regions or to randomized-origin training. No new weights or checkpoints
+were created; the complete result bundle is below 1 MiB.
+
+## 2026-09-13 — Phase 55 launched: symmetric LR robustness
+
+Phase 55 tests whether the scalar carrier's advantage is a single-learning-
+rate artifact. It freezes four new seed-123 runs at peak AdamW learning rates
+`1.5e-4` and `6e-4`, with a matched RoPE and scalar arm at each value. The
+retained Phase-49 `3e-4` RoPE/scalar checkpoints form the center of the grid.
+All other architecture, initialization, data order, batch-32, context-1024,
+100k-step, warmup, schedule, and optimizer choices remain fixed.
+
+The final endpoint is the previously untouched validation window
+`[6144, 7167]`; the retained center checkpoints are re-evaluated there. The
+strong gate requires negative scalar-minus-RoPE deltas at both outer LRs and a
+better best-scalar endpoint than best RoPE across the three-point grid. This
+is a hyperparameter-sensitivity audit at one seed, not another seed
+replication.
+
+The durable supervisor pipeline runs four 20-step preflights, two retained
+reference evaluations, and then the four mature jobs with a hard two-GPU
+`gpu-claim` ceiling. Each live mature run may keep exactly one rolling 10k
+recovery checkpoint; no final weights or milestone checkpoints are saved.
+After every final evaluation and the aggregate analysis succeed, the cleanup
+script removes only those exact completion-marked recovery directories and
+records their paths and reclaimed sizes.
+
+## 2026-09-14 — Phase 55 completed: robust across the frozen LR grid
+
+All four outer-LR runs, both retained-reference evaluations, paired analysis,
+and recovery cleanup completed successfully. On validation blocks
+`[6144,7167]`, scalar-minus-RoPE was `-0.029164` at `1.5e-4`, `-0.036355` at
+`3e-4`, and `-0.044780` at `6e-4`. The corresponding block-32 intervals were
+`[-0.030885,-0.027493]`, `[-0.037887,-0.034763]`, and
+`[-0.046504,-0.043034]`. Thus both frozen robustness gates passed.
+
+Every new metric was finite. At the two new LRs, RoPE and scalar sustained
+roughly 214.7k--218.6k target tokens/s and reserved 15.9--16.3 GiB. The
+pipeline removed four completion-marked recovery checkpoints after analysis,
+reclaiming 6.86 GiB; no final weights were retained.
+
+Both methods attained their lowest tested loss at the upper `6e-4` boundary.
+This strengthens the method comparison but means the grid did not bracket a
+training-recipe optimum. Because this result now informs recipe selection,
+`[6144,7167]` is no longer called an untouched confirmation window in future
+experiments.
+
+## 2026-09-14 — Phase 56 launched: one-shot LR boundary close-out
+
+Phase 56 freezes exactly two new from-scratch runs, RoPE and scalar pre-Q/K,
+at peak LR `1.2e-3`. AdamW betas remain `(0.9,0.98)`; weight decay `0.01`,
+200-step warmup, linear decay, clip norm `1.0`, seed 123, batch 32, context
+1024, 100k updates, initialization, and data order are unchanged. Two 100-step
+preflights completed with finite losses before the mature jobs launched.
+
+Future common-LR selection compares the `6e-4` and `1.2e-3` RoPE development
+endpoints and requires both new arms to be finite. The Phase-55 evaluation
+window is reused only for paired selection evidence. Blocks `[7168,8191]`
+remain uninspected for later confirmation. The protocol explicitly stops LR
+expansion after this point and does not admit beta, warmup, decay, or
+method-specific LR tuning.
+
+The durable supervisor uses a hard two-job `gpu-claim` cap. Each mature run
+may retain only the latest 10k recovery state; after both final evaluations
+and analysis succeed, the exact recovery directories are deleted and the
+cleanup is recorded. No final weights are saved.
+
+## 2026-09-15 — Phase 56 completed: `1.2e-3` selected and LR axis closed
+
+Both 100k runs and the frozen analyzer completed without error. RoPE
+development NLL improved from `3.099196` at `6e-4` to `3.089271` at `1.2e-3`;
+scalar development NLL improved from `3.055308` to `3.035378`. Because both
+new runs were finite, the registered rule selects `1.2e-3` as the prospective
+common recipe.
+
+On the already inspected Phase-55 selection window `[6144,7167]`, the new
+endpoints were RoPE `3.155743` and scalar `3.101270`, a paired delta of
+`-0.054474`. Its IID interval was `[-0.056105,-0.052842]` and its block-32
+interval was `[-0.056115,-0.052756]`. This extends the same-direction scalar
+advantage to all four tested learning rates. It does not establish an
+optimizer optimum, and the protocol stops LR expansion here.
+
+The two runs sustained roughly 215.8k and 217.2k target tokens/s,
+respectively, with finite metrics. Automated cleanup removed both
+completion-marked recovery checkpoints and reclaimed 3.43 GiB. No final
+weights were retained. Validation blocks `[7168,8191]` remain uninspected for
+a later confirmatory paper endpoint.
+
+## 2026-09-15 — Phase 57 launched: recognized positional baselines
+
+Phase 57 freezes seven fresh seed-123, batch-32, context-1024, 100k runs at
+the Phase-56-selected peak LR `1.2e-3`: standard RoPE, scalar pre-Q/K + RoPE,
+NoPE, fixed input sinusoid without RoPE, learned absolute embeddings, 25%
+partial RoPE, and ALiBi. The final endpoint is validation blocks
+`[7168,8191]`, which were explicitly reserved and remain uninspected.
+
+Learned absolute position, partial RoPE, and ALiBi received constrained static
+implementations rather than reopening learned or dynamic RoPE. Focused tests
+cover exact full-RoPE compatibility, partial-coordinate isolation, learned
+table initialization and gradients, and ALiBi slopes/sign. The full suite
+passes 142 tests with one expected CUDA-only skip.
+
+All seven 100-step GPU preflights completed at their configured endpoint with
+finite metrics. ALiBi successfully exercised the actual FlexAttention score
+modifier; its preflight throughput was 172.2k target tokens/s versus roughly
+220--225k for the SDPA arms, and its 29.45 GiB reservation will be reported as
+part of the systems cost. The first mature pair, RoPE and scalar, launched
+through `gpu-claim` under the frozen hard concurrency cap of two.
+
+No final weights are saved. Each active run may retain only one rolling 10k
+recovery checkpoint; after exact completion and final evaluation are present,
+the launcher deletes that run's recovery state immediately and records the
+path and reclaimed bytes. Compact configs, provenance, metrics, summaries,
+per-block losses, and aggregate analyses are retained.

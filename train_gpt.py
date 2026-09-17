@@ -201,6 +201,14 @@ DEFAULT_CONFIG = {
     "ff_widened_layers": [],
     "use_rope": True,
     "rope_theta": 10000.0,
+    # Static recognized baselines. These do not restore learned/dynamic RoPE.
+    "rope_fraction": 1.0,
+    "use_alibi": False,
+    "use_learned_absolute_position": False,
+    # Optional ordinary learned biases on W_q and W_k. Kept separate from the
+    # positional schema because these are sequence-independent architecture
+    # parameters, not another sinusoidal intervention.
+    "qk_projection_bias": False,
     # Removed mechanisms remain accepted only in their inert historical form.
     "rope_frequency_mode": "fixed",
     "rope_frequency": {"mode": "fixed"},
@@ -313,6 +321,13 @@ def position_run_tag(cfg: dict) -> str:
     input_sinusoid = cfg.get("input_sinusoid", {})
     if input_sinusoid.get("enabled", False):
         extras.append("input-sinusoid")
+    if cfg.get("use_learned_absolute_position", False):
+        extras.append("learned-absolute")
+    if cfg.get("use_alibi", False):
+        extras.append("alibi")
+    rope_fraction = float(cfg.get("rope_fraction", 1.0))
+    if rope_fraction != 1.0:
+        extras.append(f"rope{int(round(100 * rope_fraction))}")
     tag = base if not extras else "+".join((base, *extras))
     if source == 2:
         canonical = {
@@ -331,6 +346,11 @@ def position_run_tag(cfg: dict) -> str:
                     "position_content_coupling"
                 ],
                 "rope_theta": cfg["rope_theta"],
+                "rope_fraction": rope_fraction,
+                "use_alibi": cfg.get("use_alibi", False),
+                "use_learned_absolute_position": cfg.get(
+                    "use_learned_absolute_position", False
+                ),
                 "extent": cfg.get("rel_extent") or cfg["model_position_extent"],
             },
         }
@@ -561,6 +581,41 @@ def load_config(cli_args):
     rope_theta = float(cfg["rope_theta"])
     if not isinstance(cfg["use_rope"], bool):
         raise TypeError("use_rope must be a boolean")
+    rope_fraction = cfg["rope_fraction"]
+    if isinstance(rope_fraction, bool) or not isinstance(
+        rope_fraction, (int, float)
+    ):
+        raise TypeError("rope_fraction must be a number")
+    rope_fraction = float(rope_fraction)
+    if not math.isfinite(rope_fraction) or not 0.0 < rope_fraction <= 1.0:
+        raise ValueError("rope_fraction must be finite and in (0, 1]")
+    if not cfg["use_rope"] and rope_fraction != 1.0:
+        raise ValueError("partial rope_fraction requires use_rope=true")
+    head_dim = model_dim // heads
+    rotary_width = head_dim * rope_fraction
+    if (
+        model_dim % heads
+        or not math.isclose(rotary_width, round(rotary_width), abs_tol=1e-9)
+        or int(round(rotary_width)) % 2
+    ):
+        raise ValueError(
+            "rope_fraction must select an even integer width within each head"
+        )
+    cfg["rope_fraction"] = rope_fraction
+    if not isinstance(cfg["use_alibi"], bool):
+        raise TypeError("use_alibi must be a boolean")
+    if cfg["use_alibi"] and cfg["use_rope"]:
+        raise ValueError("the ALiBi baseline requires use_rope=false")
+    if cfg["use_alibi"] and cfg["attn_impl"] != "flex":
+        raise ValueError("the ALiBi baseline requires attn_impl='flex'")
+    if not isinstance(cfg["use_learned_absolute_position"], bool):
+        raise TypeError("use_learned_absolute_position must be a boolean")
+    if cfg["use_learned_absolute_position"] and cfg["use_rope"]:
+        raise ValueError(
+            "the learned absolute-position baseline requires use_rope=false"
+        )
+    if not isinstance(cfg["qk_projection_bias"], bool):
+        raise TypeError("qk_projection_bias must be a boolean")
     rope_frequency_mode = cfg.pop("rope_frequency_mode")
     rope_frequency = cfg.pop("rope_frequency")
     if rope_frequency_mode != "fixed" or not isinstance(rope_frequency, dict):
@@ -620,6 +675,17 @@ def load_config(cli_args):
         model_dim=model_dim,
         rope_theta=rope_theta,
     )
+    if (
+        cfg["use_learned_absolute_position"]
+        and cfg["input_sinusoid"]["enabled"]
+    ):
+        raise ValueError(
+            "learned absolute position and input sinusoid are separate baselines"
+        )
+    if cfg["use_learned_absolute_position"] and cfg["use_alibi"]:
+        raise ValueError(
+            "learned absolute position and ALiBi are separate baselines"
+        )
     for removed_key in ("rotary_clock", "position_gain"):
         removed_config = cfg.pop(removed_key)
         if not isinstance(removed_config, dict):
@@ -670,6 +736,10 @@ def load_config(cli_args):
         enabled_sources.append(2)
     if cfg["input_sinusoid"]["enabled"]:
         enabled_sources.append(2)
+    if cfg["use_learned_absolute_position"] or cfg["use_alibi"]:
+        enabled_sources.append(2)
+    if cfg["rope_fraction"] != 1.0:
+        enabled_sources.append(2)
     if not cfg["use_rope"]:
         enabled_sources.append(2)
     # Baseline and wholly legacy active channels retain historical tags.
@@ -683,6 +753,9 @@ def load_config(cli_args):
             not qk_config["enabled"]
             and not cfg["qk_preprojection"]["enabled"]
             and not cfg["input_sinusoid"]["enabled"]
+            and not cfg["use_learned_absolute_position"]
+            and not cfg["use_alibi"]
+            and cfg["rope_fraction"] == 1.0
         )
         else "custom"
     )
@@ -961,6 +1034,10 @@ def make_model(args, vocab_size):
         logit_bias_config=args.logit_bias,
         attn_impl=args.attn_impl,
         paired_initialization_seed=args.paired_initialization_seed,
+        qk_projection_bias=getattr(args, "qk_projection_bias", False),
+        rope_fraction=args.rope_fraction,
+        use_alibi=args.use_alibi,
+        use_learned_absolute_position=args.use_learned_absolute_position,
     )
 
 
@@ -975,6 +1052,7 @@ POSITION_DECAY_EXEMPT = (
     "carrier_hypernetwork",
     "qk_preprojection",
     "input_sinusoid",
+    "absolute_position_embedding",
 )
 
 POSITION_PARAMETER_TAGS = POSITION_DECAY_EXEMPT
@@ -1681,6 +1759,10 @@ def main():
             "qk": args.qk,
             "logit_bias": args.logit_bias,
             "use_rope": args.use_rope,
+            "rope_fraction": args.rope_fraction,
+            "use_alibi": args.use_alibi,
+            "use_learned_absolute_position": args.use_learned_absolute_position,
+            "qk_projection_bias": args.qk_projection_bias,
             "qk_preprojection": args.qk_preprojection,
             "input_sinusoid": args.input_sinusoid,
             "post_position_qk_norm": args.post_position_qk_norm,

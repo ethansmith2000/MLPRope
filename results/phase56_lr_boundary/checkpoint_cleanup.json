@@ -1,0 +1,16 @@
+{
+  "reason": "Both Phase-56 evaluations and aggregate analysis completed; rolling states had recovery-only purpose.",
+  "reclaimed_bytes": 3684187982,
+  "recoverable": false,
+  "removed": [
+    {
+      "bytes": 1842090247,
+      "path": "model-output/position_bias_phase56_lr_boundary/phase56-rope-lr1p2e3-seed123-b32-s100000-h768d8/step_100000"
+    },
+    {
+      "bytes": 1842097735,
+      "path": "model-output/position_bias_phase56_lr_boundary/phase56-scalar-qkpre-lr1p2e3-seed123-b32-s100000-h768d8/step_100000"
+    }
+  ],
+  "scope": "phase56_completed_recovery_cleanup"
+}
