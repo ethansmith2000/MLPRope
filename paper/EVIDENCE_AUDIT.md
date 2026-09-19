@@ -1,6 +1,6 @@
 # Paper evidence audit
 
-_Updated 2026-09-15 after Phase 57 launch. This document maps proposed claims to
+_Updated 2026-09-18 after Phase 57 completion. This document maps proposed claims to
 completed evidence and remaining experiments. It is not a new search plan._
 
 ## Candidate hierarchy
@@ -50,7 +50,7 @@ and no-anchor rank 32 are controls or closed branches.
 | Scalar benefit is not a single-LR artifact | Phases 55--56: deltas `-0.029164/-0.036355/-0.044780/-0.054474` at `1.5e-4/3e-4/6e-4/1.2e-3`, all block-32 intervals below zero | strong at one seed; `1.2e-3` selected prospectively | no further optimizer expansion planned |
 | Corpus generalization | none | missing | pinned FineWeb-Edu matched comparison |
 | Modern decoder transfer | none | missing | matched modern-backbone comparison |
-| Broad comparison with recognized PE methods | Phase 57 active after seven successful preflights | running | await fresh learned absolute, classic sinusoid without RoPE, ALiBi, partial RoPE, NoPE, RoPE, and scalar endpoints |
+| Broad comparison with recognized PE methods | Phase 57: scalar `3.125383`, ALiBi `3.137824`, fixed input sinusoid `3.138505`, RoPE `3.181325`; scalar-minus-RoPE `-0.055942` | complete at one seed | controlled implementations are not exact external recipe reproductions; ALiBi used FlexAttention |
 | Two-dimensional transfer | none | optional/missing | ViT-S/16 screen then full recipe if positive |
 
 ## Completed canonical paper components
@@ -67,6 +67,14 @@ counterfactuals, the Q/K-bias control, and the scalar-scaffold training test.
 Phase 53 supplies the registered three-seed position-loss, attention-geometry,
 and exact local-logit analysis. Its endpoint re-evaluation reproduced every
 saved checkpoint within `1.0e-4` NLL.
+
+Phase 57 supplies the fresh seven-arm recognized positional-baseline table at
+the prospectively selected `1.2e-3` recipe. Scalar pre-Q/K + RoPE ranked first;
+its delta versus standard RoPE was `-0.055942`, with block-32 interval
+`[-0.057417,-0.054423]`. ALiBi and the fixed input sinusoid also beat RoPE but
+trailed scalar by `+0.012441` and `+0.013121`. This is a one-training-seed
+comparison; its paired block intervals are endpoint precision, not seed
+variability.
 
 ## Completed mechanism evidence
 
@@ -99,13 +107,10 @@ network ablations.
 
 ### Required for a credible generalization claim
 
-1. **Recognized baseline table at canonical M scale (Phase 57 active):** fresh
-   classic input sinusoid without RoPE, learned absolute embeddings, ALiBi,
-   partial RoPE, NoPE, RoPE, and scalar runs under the selected common recipe.
-2. **Modern M-scale decoder:** RoPE, scalar, and rank 32 with pre-RMSNorm,
+1. **Modern M-scale decoder:** RoPE, scalar, and rank 32 with pre-RMSNorm,
    SwiGLU, tied embeddings, bias-free linears, and no learned input projection.
    Treat this as bundle transfer, not an attribution ablation.
-3. **FineWeb-Edu M scale:** RoPE, scalar, and rank 32 at one paired seed. Pin
+2. **FineWeb-Edu M scale:** RoPE, scalar, and rank 32 at one paired seed. Pin
    the dataset revision and define document-hash train/development/final
    partitions before tokenization. Freeze a common token budget before launch.
 

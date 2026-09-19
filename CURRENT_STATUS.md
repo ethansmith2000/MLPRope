@@ -1,6 +1,6 @@
 # MLPRope current status
 
-_Authoritative as of 2026-09-15. Older mechanisms and protocols are preserved
+_Authoritative as of 2026-09-18. Older mechanisms and protocols are preserved
 in git history; compact experimental evidence remains under `results/`._
 
 ## Bottom line
@@ -144,15 +144,24 @@ scalar beat RoPE by `-0.054474`, with block-32 interval
 best of a bounded candidate set, not an optimizer-optimum claim. Blocks
 `[7168,8191]` remain uninspected for later confirmation.
 
-Phase 57 is now active. It trains fresh RoPE, scalar pre-Q/K + RoPE, NoPE,
-fixed input sinusoid without RoPE, learned absolute position, 25% partial
-RoPE, and ALiBi arms under that common `1.2e-3` recipe. All seven 100-step GPU
-preflights completed with finite metrics, including the actual ALiBi
-FlexAttention path. The first two 100k jobs (RoPE and scalar) launched under a
-hard two-GPU `gpu-claim` cap. The final endpoint is the previously uninspected
-window `[7168,8191]`; no result has been inspected. No final weights will be
-saved, and each completed run's single recovery checkpoint will be removed
-immediately after its final evaluation is verified.
+Phase 57 completed the fresh recognized-baseline table under the common
+`1.2e-3` recipe. Scalar pre-Q/K + RoPE ranked first at `3.125383`, beating
+standard RoPE by `-0.055942`; its contiguous-block-32 interval was
+`[-0.057417,-0.054423]`. ALiBi (`3.137824`) and the fixed input sinusoid
+without RoPE (`3.138505`) were the next-best arms, while RoPE reached
+`3.181325`. Partial RoPE, learned absolute position, and NoPE were worse. All
+metrics were finite. The final `[7168,8191]` window was untouched before this
+evaluation; the result still uses one training seed. Cleanup reclaimed 12.02
+GiB of recovery state, and no final weights were saved.
+
+Phase 58 is a narrow design scout motivated by the Phase-57 learned gates
+ending near `0.021--0.057`. Four matched 20k runs separate direct initialization
+at `1.0` versus `0.1`, an equivalent `alpha=0.1g` coordinate scaling that makes
+the functional Adam step about ten times smaller without changing relative
+AdamW decay, and fixed `alpha=0.1`. This does not reopen phase, frequency,
+per-frequency amplitude, or dynamic controllers. The protocol and untouched
+`[8192,9215]` endpoint were frozen before launch; preflights and main jobs run
+under a hard two-GPU cap with no checkpoints or final weights.
 
 ## Strongest completed evidence
 
@@ -166,6 +175,7 @@ immediately after its final evaluation is verified.
 | pre-Q/K + RoPE vs fixed RoPE | 100k, batch 32, 3 seeds | `-0.036654` mean |
 | pre-Q/K + RoPE vs fixed RoPE across peak LR | 100k, batch 32, 1 seed | `-0.029164/-0.036355/-0.044780` at `1.5e-4/3e-4/6e-4` |
 | pre-Q/K + RoPE vs fixed RoPE at boundary LR | 100k, batch 32, 1 seed | `-0.054474` at `1.2e-3`; block-32 CI excludes zero |
+| pre-Q/K + RoPE vs fixed RoPE, fresh recognized-baseline table | 100k, batch 32, 1 seed | `-0.055942`; best of seven arms |
 | global-gate vs per-layer-gate pre-Q/K | 100k, batch 32, 1 seed | `+0.000421`, interval crosses zero |
 | fixed-gate vs learned pre-Q/K | 100k, batch 32, 1 seed | `+0.006464` |
 | dedicated rank-32 Q/K residual vs scalar pre-Q/K | 20k, batch 32, 1 seed | `-0.009401` |
@@ -409,8 +419,8 @@ shape space:
 2. **mechanism:** Phase 53 has completed position-stratified loss, attention
    geometry, and exact local carrier-logit decomposition across three seeds;
    Phase 54 has completed the carrier-origin sensitivity audit;
-3. **required generalization:** another corpus, a modernized decoder backbone,
-   and recognized positional baselines at the canonical scale;
+3. **required generalization:** another corpus and a modernized decoder
+   backbone; the recognized positional-baseline table is complete;
 4. **reviewer-proofing:** the completed symmetric learning-rate robustness grid
    and a fresh matched larger-scale pair after transfer succeeds;
 5. **optional broader claim:** separable 2D pre-Q/K carriers in a ViT, followed
@@ -419,11 +429,11 @@ shape space:
 Phases 55 and 56 close optimizer sensitivity for the current paper stage. The
 prospective common recipe uses `1.2e-3`; beta, warmup, decay, and
 method-specific optimization remain outside scope.
-The next architecture-relevant priorities are the recognized positional
-baseline table and a modern-backbone RoPE/scalar pair. FineWeb-Edu remains a
-useful corpus-selection robustness test, but it follows those more diagnostic
-architecture controls. No refinement arm is admitted unless new evidence
-exposes a distinct, predeclared failure mode.
+The next architecture-relevant priority is a modern-backbone RoPE/scalar pair.
+FineWeb-Edu remains a useful corpus-selection robustness test. Phase 58 is the
+single bounded exception to the local-refinement freeze because Phase 57
+exposed a concrete initialization/optimizer-coordinate question; it has a
+predeclared stop rule and does not reopen the carrier-shape space.
 
 ## Repository and storage state
 

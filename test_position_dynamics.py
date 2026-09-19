@@ -195,6 +195,40 @@ class QKPreprojectionTest(unittest.TestCase):
         module.reset_output_parameters()
         self.assertEqual(module.gate.item(), 0.25)
 
+    def test_gate_output_scale_separates_amplitude_from_functional_step(self):
+        direct_config = _config(gate_init=0.1)
+        scaled_config = normalize_qk_preprojection_config(
+            {
+                "enabled": True,
+                "mode": "tied_scalar",
+                "gate_init": 1.0,
+                "gate_output_scale": 0.1,
+            },
+            model_dim=8,
+            rope_theta=10_000.0,
+        )
+        direct = QKPreprojectionPosition(
+            direct_config,
+            model_dim=8,
+            extent=16,
+        )
+        scaled = QKPreprojectionPosition(
+            scaled_config,
+            model_dim=8,
+            extent=16,
+        )
+        direct_output = direct(11, dtype=torch.float32).q_input
+        scaled_output = scaled(11, dtype=torch.float32).q_input
+        torch.testing.assert_close(scaled_output, direct_output, rtol=0, atol=0)
+        probe = torch.randn_like(direct_output)
+        (direct_output * probe).sum().backward()
+        (scaled_output * probe).sum().backward()
+        torch.testing.assert_close(
+            scaled.gate.grad,
+            direct.gate.grad * 0.1,
+        )
+        self.assertAlmostEqual(scaled.gate_value().item(), 0.1)
+
     def test_projected_carrier_evaluation_counterfactuals(self):
         config = normalize_qk_preprojection_config(
             {
@@ -457,6 +491,18 @@ class QKPreprojectionTest(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "learnable_gate"):
             normalize_qk_preprojection_config(
                 {"learnable_gate": 1}, model_dim=8, rope_theta=10_000.0
+            )
+        with self.assertRaisesRegex(TypeError, "gate_output_scale"):
+            normalize_qk_preprojection_config(
+                {"gate_output_scale": "0.1"},
+                model_dim=8,
+                rope_theta=10_000.0,
+            )
+        with self.assertRaisesRegex(ValueError, "gate_output_scale"):
+            normalize_qk_preprojection_config(
+                {"gate_output_scale": 0.0},
+                model_dim=8,
+                rope_theta=10_000.0,
             )
         with self.assertRaisesRegex(ValueError, "even model_dim"):
             normalize_qk_preprojection_config(

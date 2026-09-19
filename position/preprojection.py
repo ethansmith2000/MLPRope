@@ -76,6 +76,13 @@ QK_PREPROJECTION_DEFAULTS = {
     "basis_dim": None,
     "theta": None,
     "gate_init": 1.0,
+    # Fixed coordinate scale for the scalar anchor.  This is useful for
+    # separating the initial functional amplitude from the functional step
+    # size under adaptive optimization: gate_init=1, gate_output_scale=0.1
+    # starts at alpha=0.1 while Adam moves alpha about 10x more slowly than a
+    # directly optimized alpha initialized to 0.1.  It is not a constraint or
+    # a learned transform.
+    "gate_output_scale": 1.0,
     "learnable_gate": True,
     "rank": 32,
     # Optional rank calibration for the zero-initialized projected-space
@@ -200,6 +207,17 @@ def normalize_qk_preprojection_config(
     normalized["gate_init"] = float(gate_init)
     if not math.isfinite(normalized["gate_init"]):
         raise ValueError("qk_preprojection.gate_init must be finite")
+    gate_output_scale = normalized["gate_output_scale"]
+    if isinstance(gate_output_scale, bool) or not isinstance(
+        gate_output_scale, (int, float)
+    ):
+        raise TypeError("qk_preprojection.gate_output_scale must be a number")
+    gate_output_scale = float(gate_output_scale)
+    if not math.isfinite(gate_output_scale) or gate_output_scale <= 0:
+        raise ValueError(
+            "qk_preprojection.gate_output_scale must be finite and positive"
+        )
+    normalized["gate_output_scale"] = gate_output_scale
     if not isinstance(normalized["learnable_gate"], bool):
         raise TypeError("qk_preprojection.learnable_gate must be a boolean")
     rank = normalized["rank"]
@@ -347,7 +365,8 @@ class QKPreprojectionPosition(PreserveFP32BuffersMixin, torch.nn.Module):
         return module
 
     def gate_value(self) -> torch.Tensor:
-        return self.gate if self.gate is not None else self.fixed_gate
+        raw_gate = self.gate if self.gate is not None else self.fixed_gate
+        return raw_gate * float(self.config["gate_output_scale"])
 
     def gate_values(self) -> tuple[torch.Tensor, torch.Tensor]:
         value = self.gate_value()

@@ -70,6 +70,21 @@ FlexAttention score-bias path, and the 100k queue is active with a hard
 two-GPU cap. The final endpoint is the reserved `[7168,8191]` window. Exact
 implementation and artifact details are in `POSITIONAL_BASELINE_PROTOCOL.md`.
 
+Revision 2026-09-18: Phase 57 completed. Scalar pre-Q/K + RoPE ranked first at
+`3.125383`, ahead of ALiBi (`3.137824`), fixed input sinusoid without RoPE
+(`3.138505`), and standard RoPE (`3.181325`). Scalar-minus-RoPE was
+`-0.055942`, with contiguous-block-32 interval
+`[-0.057417,-0.054423]`. All metrics were finite; recovery cleanup reclaimed
+12.02 GiB and no final weights were saved.
+
+Phase 58 is a bounded 20k initialization scout, frozen in
+`GATE_INITIALIZATION_PROTOCOL.md`. It compares direct scalar initialization at
+`1.0` and `0.1`, the equivalent forward start `alpha=0.1g` with about 0.1x
+functional Adam movement, and fixed `alpha=0.1`. Its purpose is to distinguish
+initial amplitude from optimizer coordinate scale after Phase 57's learned
+gates became small. It does not reopen carrier phase, frequency, shape, or
+content conditioning.
+
 ## 1. Claim and method freeze
 
 The narrow primary claim is:
