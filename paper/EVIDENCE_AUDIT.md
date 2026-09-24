@@ -1,6 +1,6 @@
 # Paper evidence audit
 
-_Updated 2026-09-18 after Phase 57 completion. This document maps proposed claims to
+_Updated 2026-09-22 after Phase 60 completion. This document maps proposed claims to
 completed evidence and remaining experiments. It is not a new search plan._
 
 ## Candidate hierarchy
@@ -31,14 +31,14 @@ and no-anchor rank 32 are controls or closed branches.
 | Proposed claim | Evidence | Status | Remaining requirement |
 |---|---|---|---|
 | Scalar pre-Q/K improves RoPE | Phase 38: three batch-8 seeds, mean `-0.055334`; Phase 50 batch-32 seeds, mean `-0.036654` | strong | none for the canonical OpenWebText claim |
-| The gain survives scale | h1024/d12, delta `-0.040581` | positive, one seed/older recipe | fresh matched L-scale pair only if scale is a headline claim |
+| The gain survives scale | controlled h1024/d12: `-0.040581`; modern h1024/d12 Phase 61: `-0.003542`, block interval below zero and late curve consistently negative | directional transfer, but modern result is below registered materiality | do not claim scale-invariant effect size; another scale is not required |
 | The gain is not caused by QKNorm | no-QKNorm pair, delta `-0.049523` | positive, one seed | none unless adopting a new backbone changes the interaction |
 | Carrier and RoPE are complementary | Phase-42 mature `N/R/C/C+R` factorial | complete at one seed | report the positive but sub-additive interaction accurately |
 | Learned magnitude matters | fixed gate is `+0.006464` worse than learned | complete at one seed | do not claim no fixed scalar can work without a separately tuned fixed-alpha study |
 | Per-layer gates matter | global gate differs by only `+0.000421` | not supported | present global sharing as an equivalent simplification, not a necessity |
 | Repeated attention-local access matters | first-block-only `+0.002696`; input-only `+0.006635` | supported at one seed | phrase first-block result as modest; location result is stronger |
 | Pre-Q/K beats native head-space placement | fixed post-RoPE carrier is `+0.004578` worse | supported at one seed | retain ordering/QKNorm caveat |
-| Rank-32 improves scalar | Phase 50: all three seeds, mean `-0.009103` | strong at canonical architecture | at least one corpus or backbone transfer if emphasized beyond an extension |
+| Rank-32 improves scalar | Phase 50: all three controlled-backbone seeds, mean `-0.009103`; modern Phase 60: `-0.002222`, below registered materiality | strong at canonical architecture, weak transfer | retain as a controlled-backbone extension rather than a general primary claim |
 | Rank-32 is positional rather than generic capacity | beats matched FFN control in all seeds, mean `-0.006752` | supported | mechanism profiles strengthen interpretation but do not replace the control |
 | Rank 128 is necessary | only `-0.000750` vs rank 32, interval crosses zero | rejected | none; omit as a promoted method |
 | Ordinary Q/K bias explains rank 32 | bias arm vs scalar `+0.000101` despite active biases | rejected | none |
@@ -48,8 +48,9 @@ and no-anchor rank 32 are controls or closed branches.
 | Explicit carrier logits include meaningful content--position terms | Phase 53 exact conditioned-denominator decomposition | supported descriptively | retain distinction from a network-level causal ablation |
 | The carrier is not fragile to a neighboring phase-origin shift | Phase 54: offsets 1/4 cost at most `0.000439` mean NLL across both methods | supported at trained checkpoints | large offsets are damaging; do not claim randomized-origin training robustness |
 | Scalar benefit is not a single-LR artifact | Phases 55--56: deltas `-0.029164/-0.036355/-0.044780/-0.054474` at `1.5e-4/3e-4/6e-4/1.2e-3`, all block-32 intervals below zero | strong at one seed; `1.2e-3` selected prospectively | no further optimizer expansion planned |
+| Small mature gates imply a smaller initialization | Phase 58: direct init `0.1` was `+0.051794` worse than init `1.0`; slower `alpha=0.1g` was `+0.060008` worse | rejected at the 20k scout horizon | retain direct unconstrained init `1.0`; close this axis |
 | Corpus generalization | none | missing | pinned FineWeb-Edu matched comparison |
-| Modern decoder transfer | none | missing | matched modern-backbone comparison |
+| Modern decoder transfer | Phase 59: scalar `3.141150`, RoPE `3.153352`, delta `-0.012201`, block-32 interval `[-0.013890,-0.010483]` | positive, registered gate passed at one seed | another seed only if seed-robust modern transfer becomes a headline claim |
 | Broad comparison with recognized PE methods | Phase 57: scalar `3.125383`, ALiBi `3.137824`, fixed input sinusoid `3.138505`, RoPE `3.181325`; scalar-minus-RoPE `-0.055942` | complete at one seed | controlled implementations are not exact external recipe reproductions; ALiBi used FlexAttention |
 | Two-dimensional transfer | none | optional/missing | ViT-S/16 screen then full recipe if positive |
 
@@ -75,6 +76,23 @@ its delta versus standard RoPE was `-0.055942`, with block-32 interval
 trailed scalar by `+0.012441` and `+0.013121`. This is a one-training-seed
 comparison; its paired block intervals are endpoint precision, not seed
 variability.
+
+Phase 59 supplies the bundled modern-decoder transfer at the same M scale and
+100k budget. Scalar pre-Q/K + RoPE beat RoPE by `-0.012201` on the fresh final
+window, with block-32 interval `[-0.013890,-0.010483]`, passing the registered
+`-0.010` materiality gate. It led at every 5k development checkpoint, although
+the development advantage narrowed from `-0.028390` to `-0.007707`. This is
+positive architecture-bundle transfer at one training seed, not evidence for
+any individual backbone component or training-seed invariance.
+
+Phase 60 completed the conditional extension test on that backbone. Rank 32
+minus scalar was `-0.002222`, with block-32 interval
+`[-0.003978,-0.000465]`; rank 128 minus rank 32 was `-0.002188`, with interval
+`[-0.003882,-0.000520]`. The rank function-step match passed, but neither
+contrast met the registered `-0.003` materiality rule and rank 128 was not
+consistently better at late development checkpoints. Dedicated readout is
+therefore mechanistically active but not promoted on the modern bundle. The
+scalar carrier remains the paper's architecture-transfer candidate.
 
 ## Completed mechanism evidence
 
@@ -105,26 +123,32 @@ network ablations.
 
 ## Remaining language-model experiments
 
-### Required for a credible generalization claim
+### Completed generalization requirement
 
-1. **Modern M-scale decoder:** RoPE, scalar, and rank 32 with pre-RMSNorm,
-   SwiGLU, tied embeddings, bias-free linears, and no learned input projection.
-   Treat this as bundle transfer, not an attribution ablation.
-2. **FineWeb-Edu M scale:** RoPE, scalar, and rank 32 at one paired seed. Pin
-   the dataset revision and define document-hash train/development/final
-   partitions before tokenization. Freeze a common token budget before launch.
+1. **Modern M-scale decoder (Phase 59):** the frozen RoPE/scalar pair passed its
+   registered transfer gate. Treat this as bundle transfer, not an attribution
+   ablation. Phase 60 then found that calibrated rank-32 and rank-128 readouts
+   produced only sub-threshold gains, so the scalar method remains the modern
+   candidate and readout tuning is closed.
+
+2. **Modern L-scale decoder (Phase 61):** scalar beat RoPE by `-0.003542`, with
+   block-32 interval `[-0.005382,-0.001669]` and a consistently negative late
+   curve. Positive transfer passed; the `-0.010` materiality gate did not.
+   Treat this as directional scale transfer with a diminishing effect size.
 
 ### Strong reviewer-proofing, but schedulable after the required set
 
-1. **Fresh L-scale pair:** RoPE and scalar under a newly frozen matched token
-   budget. Include rank 32 only if it transfers on FineWeb-Edu or the modern
-   backbone.
-2. **Additional seeds on a new axis:** only after a one-seed paired result is
+1. **Additional seeds on a new axis:** only after a one-seed paired result is
    positive and material. Do not replicate failed transfers automatically.
 
 Context length is fixed at 1,024 by design. No context-size sweep, learned
 frequency search, mapper expansion, or blanket repetition of negative variants
 is part of the remaining paper work.
+
+A pinned FineWeb-Edu comparison is optional reviewer follow-up, not required
+core evidence. Architecture transfer, the existing three-seed result, and the
+existing controlled-backbone scale transfer are more directly relevant to the
+narrow method claim.
 
 ## Optional broader paper
 

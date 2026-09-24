@@ -85,6 +85,59 @@ initial amplitude from optimizer coordinate scale after Phase 57's learned
 gates became small. It does not reopen carrier phase, frequency, shape, or
 content conditioning.
 
+Revision 2026-09-19: Phase 58 completed with no promotion. Direct init `1.0`
+reached `3.371182`; direct init `0.1` trailed by `+0.051794`, with block-32
+interval `[+0.049574,+0.054039]`. The slower `alpha=0.1g` coordinate and fixed
+`alpha=0.1` were both about `+0.060` worse than init `1.0` and statistically
+tied with each other. Init `1.0` led at every 2k development checkpoint even
+as its learned gates declined. Retain the direct unconstrained scalar at init
+`1.0`; no further initialization or gate-LR sweep is planned.
+
+Revision 2026-09-21: Phase 59 freezes the modern-backbone transfer pair in
+`MODERN_BACKBONE_PROTOCOL.md`. It runs only RoPE and scalar pre-Q/K + RoPE
+initially; rank 32 is conditional on a material positive transfer. FineWeb-Edu
+is no longer required core evidence and is retained only as an optional
+reviewer follow-up. The fresh final window is `[9216,10239]`.
+
+Outcome 2026-09-21: Phase 59 passed. Scalar pre-Q/K + RoPE reached `3.141150`
+versus `3.153352` for RoPE, delta `-0.012201`, with block-32 interval
+`[-0.013890,-0.010483]`. The scalar led at every development checkpoint, but
+its development advantage narrowed over training. This supports transfer of
+the primary method to the bundled modern decoder at one seed and licenses a
+separately frozen modern rank-32 arm; it does not attribute the effect to an
+individual backbone change.
+
+Revision 2026-09-22: Phase 60 freezes a fresh scalar/rank-32/rank-128 cohort on
+the modern backbone. The readouts inherit their prior function-step
+calibrations without retuning and start as exact scalar no-ops. A new final
+window `[10240,11263]` avoids selecting readout rank on Phase 59's inspected
+endpoint. Rank 32 must materially beat scalar; rank 128 must materially beat
+rank 32 while their measured function steps remain matched.
+
+Outcome 2026-09-22: Phase 60 did not promote either readout. Rank 32 minus
+scalar was `-0.002222` and rank 128 minus rank 32 was `-0.002188`; both
+block-32 intervals excluded zero, but both missed the registered `-0.003`
+materiality threshold. Rank 32 beat scalar throughout the late development
+window, whereas rank 128 and rank 32 alternated ordering despite a passed
+function-step match. Retain scalar pre-Q/K + RoPE as the primary method; do
+not tune rank, readout LR, or carrier shape on the inspected final window.
+
+Revision 2026-09-23: Phase 61 freezes the fresh modern L-scale pair in
+`MODERN_LSCALE_PROTOCOL.md`: h1024/d12 standard RoPE versus scalar pre-Q/K +
+RoPE, batch 32, 100k steps, and the uninspected final window
+`[11264,12287]`. It carries only the primary scalar method across scale; the
+unpromoted projected readouts are excluded. Positive transfer requires a
+below-zero block interval and negative deltas at every 80k--100k development
+checkpoint; material transfer additionally requires `<= -0.010` NLL.
+
+Outcome 2026-09-24: Phase 61 passed positive transfer but not material
+transfer. Scalar pre-Q/K + RoPE reached `3.014530` versus RoPE's `3.018072`,
+delta `-0.003542`, with block-32 interval `[-0.005382,-0.001669]`. It led at
+all five registered late checkpoints. Its final gate and projected positional
+leverage did not collapse relative to modern M scale, so the smaller benefit
+is best reported as diminishing marginal value at scale. Stop scale expansion
+and do not tune the carrier against this final window.
+
 ## 1. Claim and method freeze
 
 The narrow primary claim is:
@@ -428,9 +481,9 @@ OpenWebText protocol:
 - 128-block development slice and disjoint 1024-block final holdout starting
   at block 2048.
 
-### 8.2 Second corpus
+### 8.2 Optional second corpus
 
-Use a pinned revision of the 10B-token FineWeb-Edu sample. Preserve the GPT-2
+If corpus robustness becomes necessary, use a pinned revision of the 10B-token FineWeb-Edu sample. Preserve the GPT-2
 tokenizer and chunking policy so the main change is data distribution. Create
 train/development/final partitions by deterministic document hash before
 concatenation, record the dataset revision and file hashes, and use the same
@@ -548,10 +601,10 @@ result.
    `1.2e-3` common recipe without further optimizer-family tuning.
 2. Complete the recognized positional baseline table on the canonical
    architecture and corpus.
-3. Run the modern-backbone M-scale `R`/`C+R` pair; add rank 32 only after the
-   scalar transfers.
-4. Run the pinned FineWeb-Edu M-scale transfer after the more diagnostic
-   architecture controls.
+3. Preserve the completed positive modern-backbone M-scale `R`/`C+R` result;
+   complete the separately frozen Phase-60 rank-32/rank-128 extension cohort.
+4. Treat pinned FineWeb-Edu M-scale transfer as optional reviewer follow-up,
+   not required core evidence.
 5. Run a fresh L-scale `R`/`C+R` pair with an appropriately increased token
    budget; optional S scale remains lower priority.
 

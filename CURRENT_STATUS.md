@@ -1,6 +1,6 @@
 # MLPRope current status
 
-_Authoritative as of 2026-09-18. Older mechanisms and protocols are preserved
+_Authoritative as of 2026-09-21. Older mechanisms and protocols are preserved
 in git history; compact experimental evidence remains under `results/`._
 
 ## Bottom line
@@ -154,14 +154,61 @@ metrics were finite. The final `[7168,8191]` window was untouched before this
 evaluation; the result still uses one training seed. Cleanup reclaimed 12.02
 GiB of recovery state, and no final weights were saved.
 
-Phase 58 is a narrow design scout motivated by the Phase-57 learned gates
-ending near `0.021--0.057`. Four matched 20k runs separate direct initialization
-at `1.0` versus `0.1`, an equivalent `alpha=0.1g` coordinate scaling that makes
-the functional Adam step about ten times smaller without changing relative
-AdamW decay, and fixed `alpha=0.1`. This does not reopen phase, frequency,
-per-frequency amplitude, or dynamic controllers. The protocol and untouched
-`[8192,9215]` endpoint were frozen before launch; preflights and main jobs run
-under a hard two-GPU cap with no checkpoints or final weights.
+Phase 58 completed the narrow gate-initialization audit. Direct initialization
+at `1.0` reached `3.371182`; direct initialization at `0.1` was substantially
+worse at `3.422976`, delta `+0.051794` with block-32 interval
+`[+0.049574,+0.054039]`. The slower coordinate `alpha=0.1g` (`3.431190`) and
+fixed `alpha=0.1` (`3.431287`) were statistically tied, while direct learning
+at `0.1` recovered about `0.0082` NLL relative to the slower coordinate. The
+unit-initialized control led at every 2k development checkpoint even though
+its gates fell to `0.107--0.278` by step 20k. Thus the small mature endpoint
+gates do not justify a small initialization: a strong early carrier appears
+to be useful optimization scaffolding while Q/K projections co-adapt. No arm
+passed the frozen promotion rule, so initialization `1.0` remains fixed and
+this axis is closed. All metrics were finite; no checkpoints or final weights
+were saved.
+
+Phase 59 completed the registered modern-backbone transfer. It tested a
+matched RoPE versus scalar pre-Q/K pair in a bundled modern decoder:
+pre-RMSNorm, bias-free SwiGLU at aligned `8d/3`, bias-free attention
+projections, tied embedding/head, and no learned input projection. On the
+previously uninspected `[9216,10239]` window, scalar reached `3.141150` versus
+RoPE's `3.153352`: delta `-0.012201`, with block-32 interval
+`[-0.013890,-0.010483]`. The registered materiality and uncertainty gates both
+passed. Scalar led at all 20 development checkpoints, although the development
+delta narrowed from `-0.028390` at 5k to `-0.007707` at 100k. This establishes
+positive one-seed transfer of the primary method to the declared modern
+bundle; it is not seed-level uncertainty or attribution to any one backbone
+component. This result licensed the separately frozen Phase-60 readout test;
+that extension has now completed without promotion. FineWeb-Edu remains an
+optional reviewer follow-up.
+
+Phase 60 completed the conditional modern dedicated-readout test. On the fresh
+`[10240,11263]` window, scalar, rank 32, and rank 128 reached `3.131003`,
+`3.128782`, and `3.126594`. Rank 32 minus scalar was `-0.002222`, with
+block-32 interval `[-0.003978,-0.000465]`: detectable on the endpoint stream
+and negative at every 80k--100k development checkpoint, but short of the
+registered `-0.003` materiality gate. Rank 128 minus rank 32 was `-0.002188`,
+with interval `[-0.003882,-0.000520]`; its function-step match passed, but it
+missed the same materiality gate and was not consistently better at late
+development checkpoints. The readouts strongly changed the Q/K positional
+geometry while their scalar anchors collapsed toward zero, so decoupling the
+positional readout is mechanistically active, but the modern-backbone payoff
+does not justify promoting the extra `0.59M`/`2.36M` position parameters and
+roughly `3.4--3.6%` throughput cost. The scalar method remains primary and
+readout tuning stops on this window. No final weights were saved; recovery
+cleanup reclaimed 3.23 GiB.
+
+Phase 61 completed the fresh modern larger-scale transfer pair at h1024/d12.
+On the untouched `[11264,12287]` window, scalar pre-Q/K + RoPE reached
+`3.014530` versus RoPE's `3.018072`: delta `-0.003542`, with block-32 interval
+`[-0.005382,-0.001669]`. Scalar led at every registered 80k--100k development
+checkpoint, so positive scale transfer passed, but the preregistered `-0.010`
+materiality gate failed. The final mean gate (`0.04650`) and projected carrier
+leverage were not smaller than at modern M scale, arguing against simple gate
+collapse or optimization failure. The result supports directional transfer
+with diminishing effect size rather than a strong scale-invariant gain. Both
+runs were finite; cleanup reclaimed 4.54 GiB and no final weights were saved.
 
 ## Strongest completed evidence
 
@@ -176,6 +223,10 @@ under a hard two-GPU cap with no checkpoints or final weights.
 | pre-Q/K + RoPE vs fixed RoPE across peak LR | 100k, batch 32, 1 seed | `-0.029164/-0.036355/-0.044780` at `1.5e-4/3e-4/6e-4` |
 | pre-Q/K + RoPE vs fixed RoPE at boundary LR | 100k, batch 32, 1 seed | `-0.054474` at `1.2e-3`; block-32 CI excludes zero |
 | pre-Q/K + RoPE vs fixed RoPE, fresh recognized-baseline table | 100k, batch 32, 1 seed | `-0.055942`; best of seven arms |
+| pre-Q/K + RoPE vs fixed RoPE, modern decoder bundle | 100k, batch 32, 1 seed | `-0.012201`; registered transfer gate passed |
+| pre-Q/K + RoPE vs fixed RoPE, modern h1024/d12 | 100k, batch 32, 1 seed | `-0.003542`; positive but below materiality gate |
+| modern calibrated rank-32 readout vs modern scalar pre-Q/K | 100k, batch 32, 1 seed | `-0.002222`; precise but below materiality gate |
+| modern calibrated rank-128 vs modern rank-32 readout | 100k, batch 32, 1 seed | `-0.002188`; late consistency gate failed |
 | global-gate vs per-layer-gate pre-Q/K | 100k, batch 32, 1 seed | `+0.000421`, interval crosses zero |
 | fixed-gate vs learned pre-Q/K | 100k, batch 32, 1 seed | `+0.006464` |
 | dedicated rank-32 Q/K residual vs scalar pre-Q/K | 20k, batch 32, 1 seed | `-0.009401` |
@@ -419,8 +470,8 @@ shape space:
 2. **mechanism:** Phase 53 has completed position-stratified loss, attention
    geometry, and exact local carrier-logit decomposition across three seeds;
    Phase 54 has completed the carrier-origin sensitivity audit;
-3. **required generalization:** another corpus and a modernized decoder
-   backbone; the recognized positional-baseline table is complete;
+3. **required generalization:** the modernized decoder backbone and recognized
+   positional-baseline table are complete; another corpus is optional;
 4. **reviewer-proofing:** the completed symmetric learning-rate robustness grid
    and a fresh matched larger-scale pair after transfer succeeds;
 5. **optional broader claim:** separable 2D pre-Q/K carriers in a ViT, followed
@@ -429,11 +480,15 @@ shape space:
 Phases 55 and 56 close optimizer sensitivity for the current paper stage. The
 prospective common recipe uses `1.2e-3`; beta, warmup, decay, and
 method-specific optimization remain outside scope.
-The next architecture-relevant priority is a modern-backbone RoPE/scalar pair.
-FineWeb-Edu remains a useful corpus-selection robustness test. Phase 58 is the
-single bounded exception to the local-refinement freeze because Phase 57
-exposed a concrete initialization/optimizer-coordinate question; it has a
-predeclared stop rule and does not reopen the carrier-shape space.
+The Phase-59 modern-backbone RoPE/scalar pair passed its transfer gate. Phase
+60 found small, statistically resolved dedicated-readout gains but neither
+rank cleared its preregistered promotion rule; the scalar method remains the
+modern-backbone candidate. A larger modern scale can follow if it remains
+scientifically central.
+FineWeb-Edu is optional rather than core evidence. Phase 58 was the single
+bounded exception to the local-refinement freeze; it resolved
+the initialization/optimizer-coordinate question negatively and did not
+reopen the carrier-shape space.
 
 ## Repository and storage state
 

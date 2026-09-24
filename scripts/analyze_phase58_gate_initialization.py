@@ -227,6 +227,29 @@ def analyze() -> dict:
         }
     ranking = sorted(ARMS, key=lambda arm: rows[arm]["mean_nll"])
     promoted = [arm for arm in ranking if rows[arm]["passes_promotion_rule"]]
+    secondary_contrasts = {
+        "alpha01_direct_minus_scaled": _contrast(
+            losses["alpha01-direct"], losses["alpha01-scaled"], 58_100
+        ),
+        "alpha01_direct_minus_fixed": _contrast(
+            losses["alpha01-direct"], losses["alpha01-fixed"], 58_110
+        ),
+        "alpha01_scaled_minus_fixed": _contrast(
+            losses["alpha01-scaled"], losses["alpha01-fixed"], 58_120
+        ),
+    }
+    parent_curve = {
+        point["step"]: point["mean_nll"]
+        for point in rows["alpha1-direct"]["development"]
+    }
+    for arm in ARMS:
+        rows[arm]["development_delta_vs_alpha1_direct"] = [
+            {
+                "step": point["step"],
+                "mean_nll_delta": point["mean_nll"] - parent_curve[point["step"]],
+            }
+            for point in rows[arm]["development"]
+        ]
     return {
         "scope": "phase58_scalar_gate_initialization_scout",
         "protocol": "paper/GATE_INITIALIZATION_PROTOCOL.md",
@@ -243,6 +266,7 @@ def analyze() -> dict:
         "methods": rows,
         "ranking_best_to_worst": ranking,
         "primary_contrast": rows["alpha01-direct"]["versus_alpha1_direct"],
+        "secondary_contrasts": secondary_contrasts,
         "promotion_candidates": promoted[:1],
         "all_training_metrics_finite": all(
             row["metrics_finite"]
@@ -284,6 +308,7 @@ def render(payload: dict) -> str:
             f"{'yes' if row['passes_promotion_rule'] else 'no'} |"
         )
     primary = payload["primary_contrast"]
+    secondary = payload["secondary_contrasts"]
     iid = primary["iid_bootstrap_ci95"]
     block = primary["contiguous_block_32_bootstrap_ci95"]
     candidates = payload["promotion_candidates"]
@@ -295,6 +320,8 @@ def render(payload: dict) -> str:
             f"- Direct alpha=0.1 minus direct alpha=1.0: `{primary['mean_delta']:+.6f}` NLL.",
             f"- IID 95% interval: `[{iid[0]:+.6f}, {iid[1]:+.6f}]`.",
             f"- Contiguous-block-32 95% interval: `[{block[0]:+.6f}, {block[1]:+.6f}]`.",
+            f"- Direct alpha=0.1 minus scaled alpha=0.1g: `{_ci_text(secondary['alpha01_direct_minus_scaled'])}`.",
+            f"- Scaled alpha=0.1g minus fixed alpha=0.1: `{_ci_text(secondary['alpha01_scaled_minus_fixed'])}`.",
             f"- Promotion candidate: `{candidates[0]}`." if candidates else "- No arm passed the frozen promotion rule.",
             f"- All training and optimizer metrics finite: **{payload['all_training_metrics_finite']}**.",
             "",

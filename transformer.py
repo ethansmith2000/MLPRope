@@ -63,6 +63,7 @@ def _flex_attention_call(*args, **kwargs):
 
 
 AttentionImpl = Literal["sdpa", "flex"]
+BackboneVariant = Literal["controlled", "modern"]
 
 # Re-export the interleaved Fourier helper under its historical name.
 sinusoidal_basis = interleaved_fourier_basis
@@ -159,6 +160,7 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         qk_norm_mode: str = "legacy_layernorm",
         qk_preprojection_config: dict | None = None,
         qk_projection_bias: bool = False,
+        output_bias: bool = True,
         rope_fraction: float = 1.0,
         use_alibi: bool = False,
     ):
@@ -202,6 +204,8 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         )
         if not isinstance(qk_projection_bias, bool):
             raise TypeError("qk_projection_bias must be a boolean")
+        if not isinstance(output_bias, bool):
+            raise TypeError("output_bias must be a boolean")
         self.qk_projection_bias = qk_projection_bias
         self.max_seq_len = max_seq_len
         self.rel_extent = rel_extent or max_seq_len
@@ -269,7 +273,7 @@ class Attention(PreserveFP32BuffersMixin, torch.nn.Module):
         self.to_q = torch.nn.Linear(dim, dim, bias=qk_projection_bias)
         self.to_k = torch.nn.Linear(dim, dim, bias=qk_projection_bias)
         self.to_v = torch.nn.Linear(dim, dim, bias=False)
-        self.to_out = torch.nn.Linear(dim, dim, bias=True)
+        self.to_out = torch.nn.Linear(dim, dim, bias=output_bias)
 
         conditioning_configs = (self.qk_config["conditioning"],)
 
@@ -676,6 +680,42 @@ class GeGLU(torch.nn.Module):
         return self.proj_out(value * self.act(gate))
 
 
+class SwiGLU(torch.nn.Module):
+    """Bias-free SwiGLU used by the bundled modern-backbone transfer."""
+
+    def __init__(
+        self,
+        dim: int,
+        hidden_dim: int | None = None,
+        align_multiple: int = 64,
+    ) -> None:
+        super().__init__()
+        hidden_dim = hidden_dim or math.ceil(dim * 8 / 3)
+        if align_multiple > 1:
+            hidden_dim = math.ceil(hidden_dim / align_multiple) * align_multiple
+        self.proj_in = torch.nn.Linear(dim, hidden_dim * 2, bias=False)
+        self.proj_out = torch.nn.Linear(hidden_dim, dim, bias=False)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        value, gate = self.proj_in(x).chunk(2, dim=-1)
+        return self.proj_out(value * F.silu(gate))
+
+
+class TiedOutputProjection(torch.nn.Module):
+    """Final RMSNorm plus a functional projection through the token table."""
+
+    def __init__(self, dim: int) -> None:
+        super().__init__()
+        self.norm = torch.nn.RMSNorm(dim, eps=1e-6)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        token_embedding_weight: torch.Tensor,
+    ) -> torch.Tensor:
+        return F.linear(self.norm(x), token_embedding_weight)
+
+
 class TransformerBlock(torch.nn.Module):
     def __init__(
         self,
@@ -699,8 +739,12 @@ class TransformerBlock(torch.nn.Module):
         qk_projection_bias: bool = False,
         rope_fraction: float = 1.0,
         use_alibi: bool = False,
+        backbone_variant: BackboneVariant = "controlled",
     ):
         super().__init__()
+        if backbone_variant not in {"controlled", "modern"}:
+            raise ValueError("backbone_variant must be 'controlled' or 'modern'")
+        self.backbone_variant = backbone_variant
         self.attn = Attention(
             dim,
             heads,
@@ -719,12 +763,18 @@ class TransformerBlock(torch.nn.Module):
             qk_norm_mode=qk_norm_mode,
             qk_preprojection_config=qk_preprojection_config,
             qk_projection_bias=qk_projection_bias,
+            output_bias=backbone_variant == "controlled",
             rope_fraction=rope_fraction,
             use_alibi=use_alibi,
         )
-        self.ff = GeGLU(dim, hidden_dim=ff_hidden_dim)
-        self.norm1 = torch.nn.LayerNorm(dim)
-        self.norm2 = torch.nn.LayerNorm(dim)
+        if backbone_variant == "modern":
+            self.ff = SwiGLU(dim, hidden_dim=ff_hidden_dim)
+            self.norm1 = torch.nn.RMSNorm(dim, eps=1e-6)
+            self.norm2 = torch.nn.RMSNorm(dim, eps=1e-6)
+        else:
+            self.ff = GeGLU(dim, hidden_dim=ff_hidden_dim)
+            self.norm1 = torch.nn.LayerNorm(dim)
+            self.norm2 = torch.nn.LayerNorm(dim)
 
     def forward(self, x):
         x = self.attn(self.norm1(x)) + x
@@ -763,9 +813,17 @@ class Transformer(torch.nn.Module):
         rope_fraction: float = 1.0,
         use_alibi: bool = False,
         use_learned_absolute_position: bool = False,
+        backbone_variant: BackboneVariant = "controlled",
     ):
         super().__init__()
 
+        if backbone_variant not in {"controlled", "modern"}:
+            raise ValueError("backbone_variant must be 'controlled' or 'modern'")
+        if backbone_variant == "modern" and qk_projection_bias:
+            raise ValueError("the modern backbone requires bias-free Q/K projections")
+        if backbone_variant == "modern" and ff_widened_layers:
+            raise ValueError("the modern backbone does not support selective FFN widening")
+        self.backbone_variant = backbone_variant
         self.token_embedding = torch.nn.Embedding(vocab_size, dim)
         self.gradient_checkpointing = gradient_checkpointing
         if not isinstance(use_learned_absolute_position, bool):
@@ -824,7 +882,11 @@ class Transformer(torch.nn.Module):
             raise ValueError(
                 "learned absolute position and input sinusoid are separate baselines"
             )
-        base_ff_hidden_dim = ff_hidden_dim or dim * ff_mult
+        base_ff_hidden_dim = ff_hidden_dim or (
+            math.ceil(math.ceil(dim * 8 / 3) / 64) * 64
+            if backbone_variant == "modern"
+            else dim * ff_mult
+        )
         widened_layers = set(ff_widened_layers or ())
         if any(layer_idx < 0 or layer_idx >= depth for layer_idx in widened_layers):
             raise ValueError("ff_widened_layers must contain valid layer indices")
@@ -866,6 +928,7 @@ class Transformer(torch.nn.Module):
                 qk_projection_bias=qk_projection_bias,
                 rope_fraction=rope_fraction,
                 use_alibi=use_alibi,
+                backbone_variant=backbone_variant,
             ))
         self.blocks = torch.nn.ModuleList(blocks)
         if (
@@ -881,14 +944,18 @@ class Transformer(torch.nn.Module):
             shared_gate = active_modules[0].gate
             for module in active_modules[1:]:
                 module.gate = shared_gate
-        self.in_proj = torch.nn.Sequential(
-            torch.nn.LayerNorm(dim),
-            torch.nn.Linear(dim, dim, bias=True),
-        )
-        self.out_proj = torch.nn.Sequential(
-            torch.nn.LayerNorm(dim),
-            torch.nn.Linear(dim, vocab_size, bias=True),
-        )
+        if backbone_variant == "modern":
+            self.in_proj = torch.nn.Identity()
+            self.out_proj = TiedOutputProjection(dim)
+        else:
+            self.in_proj = torch.nn.Sequential(
+                torch.nn.LayerNorm(dim),
+                torch.nn.Linear(dim, dim, bias=True),
+            )
+            self.out_proj = torch.nn.Sequential(
+                torch.nn.LayerNorm(dim),
+                torch.nn.Linear(dim, vocab_size, bias=True),
+            )
         self._init_weights(dim, paired_initialization_seed)
 
     @staticmethod
@@ -909,7 +976,7 @@ class Transformer(torch.nn.Module):
         dim,
         paired_initialization_seed: int | None = None,
     ):
-        embed_std = dim ** -0.5
+        embed_std = 0.02 if self.backbone_variant == "modern" else dim ** -0.5
         lm_head_std = 0.02
         with torch.no_grad():
             for module_name, module in self.named_modules():
@@ -936,18 +1003,21 @@ class Transformer(torch.nn.Module):
                 elif isinstance(module, torch.nn.LayerNorm):
                     torch.nn.init.ones_(module.weight)
                     torch.nn.init.zeros_(module.bias)
-            lm_head = self.out_proj[1]
-            torch.nn.init.normal_(
-                lm_head.weight,
-                mean=0.0,
-                std=lm_head_std,
-                generator=self._named_generator(
-                    paired_initialization_seed,
-                    "out_proj.1.lm_head_weight",
-                ),
-            )
-            if lm_head.bias is not None:
-                torch.nn.init.zeros_(lm_head.bias)
+                elif isinstance(module, torch.nn.RMSNorm):
+                    torch.nn.init.ones_(module.weight)
+            if self.backbone_variant == "controlled":
+                lm_head = self.out_proj[1]
+                torch.nn.init.normal_(
+                    lm_head.weight,
+                    mean=0.0,
+                    std=lm_head_std,
+                    generator=self._named_generator(
+                        paired_initialization_seed,
+                        "out_proj.1.lm_head_weight",
+                    ),
+                )
+                if lm_head.bias is not None:
+                    torch.nn.init.zeros_(lm_head.bias)
             if self.absolute_position_embedding is not None:
                 torch.nn.init.normal_(
                     self.absolute_position_embedding,
@@ -1254,7 +1324,11 @@ class Transformer(torch.nn.Module):
                 )
             else:
                 x = block(x)
-        logits = self.out_proj(x)
+        logits = (
+            self.out_proj(x, self.token_embedding.weight)
+            if self.backbone_variant == "modern"
+            else self.out_proj(x)
+        )
         if targets is None:
             return logits
         # CE in fp32 under bf16 autocast; default path drops logits from the return.
@@ -1284,6 +1358,8 @@ class Transformer(torch.nn.Module):
 def count_parameters(model: torch.nn.Module) -> dict[str, int]:
     total = sum(parameter.numel() for parameter in model.parameters())
     embed = sum(parameter.numel() for parameter in model.token_embedding.parameters())
+    # For the modern tied head this counts only the final RMSNorm; the shared
+    # vocabulary matrix is counted once under embeddings.
     head = sum(parameter.numel() for parameter in model.out_proj.parameters())
     position_counts = count_position_parameters(model)
     absolute_position_params = (
@@ -1313,15 +1389,17 @@ def suggest_matched_baselines(
 ) -> dict[str, int]:
     """Recommend a wider GeGLU hidden width spending the position budget.
 
-    A GeGLU hidden unit contributes ``3*dim + 2`` parameters per layer:
-    two input projections (including biases) and one output projection.
+    A controlled GeGLU hidden unit contributes ``3*dim + 2`` parameters per
+    layer. A modern bias-free SwiGLU unit contributes ``3*dim``.
     """
     dim = int(cfg["hidden_size"])
     depth = int(cfg["depth"])
     current_hidden = int(
         cfg.get("ff_hidden_dim") or dim * int(cfg["ff_mult"])
     )
-    per_hidden = 3 * dim + 2
+    per_hidden = 3 * dim + (
+        0 if cfg.get("backbone_variant", "controlled") == "modern" else 2
+    )
     extra_hidden = math.ceil(max(int(position_params), 0) / max(depth * per_hidden, 1))
     target = current_hidden + extra_hidden
     if align_multiple > 1:

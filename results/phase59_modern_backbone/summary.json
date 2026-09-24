@@ -1,0 +1,316 @@
+{
+  "checkpoint_cleanup": {
+    "event_count": 2,
+    "reclaimed_bytes": 2286705710,
+    "runs_with_removed_checkpoints": [
+      "phase59-modern-rope-lr1p2e3-seed123-b32-s100000-h768d8",
+      "phase59-modern-scalar-qkpre-lr1p2e3-seed123-b32-s100000-h768d8"
+    ]
+  },
+  "context": 1024,
+  "final_holdout": {
+    "blocks": 1024,
+    "previously_inspected": false,
+    "start_batch": 9216
+  },
+  "inference_limit": "This is a one-training-seed bundled architecture transfer. Paired block intervals quantify final-stream precision, not seed variability, and do not attribute the result to an individual backbone component.",
+  "learning_rate": 0.0012,
+  "methods": {
+    "rope": {
+      "block_nll_standard_error": 0.010939213774360803,
+      "development": [
+        {
+          "mean_nll": 3.718881716951728,
+          "step": 5000
+        },
+        {
+          "mean_nll": 3.539822146296501,
+          "step": 10000
+        },
+        {
+          "mean_nll": 3.45100025087595,
+          "step": 15000
+        },
+        {
+          "mean_nll": 3.3961728177964687,
+          "step": 20000
+        },
+        {
+          "mean_nll": 3.350566430017352,
+          "step": 25000
+        },
+        {
+          "mean_nll": 3.31580307520926,
+          "step": 30000
+        },
+        {
+          "mean_nll": 3.293293673545122,
+          "step": 35000
+        },
+        {
+          "mean_nll": 3.271609941497445,
+          "step": 40000
+        },
+        {
+          "mean_nll": 3.248875342309475,
+          "step": 45000
+        },
+        {
+          "mean_nll": 3.2297775857150555,
+          "step": 50000
+        },
+        {
+          "mean_nll": 3.212235962972045,
+          "step": 55000
+        },
+        {
+          "mean_nll": 3.1992095671594143,
+          "step": 60000
+        },
+        {
+          "mean_nll": 3.185459041967988,
+          "step": 65000
+        },
+        {
+          "mean_nll": 3.16937804967165,
+          "step": 70000
+        },
+        {
+          "mean_nll": 3.1560329869389534,
+          "step": 75000
+        },
+        {
+          "mean_nll": 3.1398349683731794,
+          "step": 80000
+        },
+        {
+          "mean_nll": 3.1233229655772448,
+          "step": 85000
+        },
+        {
+          "mean_nll": 3.108895754441619,
+          "step": 90000
+        },
+        {
+          "mean_nll": 3.0954142417758703,
+          "step": 95000
+        },
+        {
+          "mean_nll": 3.085003623738885,
+          "step": 100000
+        }
+      ],
+      "elapsed_seconds": 13133.443004171015,
+      "label": "modern + standard RoPE",
+      "mean_nll": 3.1533515564515255,
+      "metrics_finite": true,
+      "non_embedding_head_parameters": 56636928,
+      "optimizer_metrics_finite": null,
+      "peak_allocated_mib": 12684.55517578125,
+      "peak_reserved_mib": 12912.0,
+      "position_parameters": 0,
+      "target_tokens_per_second": 249206.95045164882,
+      "total_parameters": 95271168
+    },
+    "scalar-qkpre": {
+      "block_nll_standard_error": 0.010943194690005776,
+      "development": [
+        {
+          "delta_vs_rope": -0.028390346094965935,
+          "effective_gate_max": 0.6946573257446289,
+          "effective_gate_mean": 0.3198802676051855,
+          "effective_gate_min": 0.16766801476478577,
+          "mean_nll": 3.690491370856762,
+          "step": 5000
+        },
+        {
+          "delta_vs_rope": -0.02116069756448269,
+          "effective_gate_max": 0.5474799275398254,
+          "effective_gate_mean": 0.23412246070802212,
+          "effective_gate_min": 0.13289488852024078,
+          "mean_nll": 3.5186614487320185,
+          "step": 10000
+        },
+        {
+          "delta_vs_rope": -0.02130633220076561,
+          "effective_gate_max": 0.4495480954647064,
+          "effective_gate_mean": 0.1912747621536255,
+          "effective_gate_min": 0.11475220322608948,
+          "mean_nll": 3.4296939186751842,
+          "step": 15000
+        },
+        {
+          "delta_vs_rope": -0.0194837786257267,
+          "effective_gate_max": 0.3825523257255554,
+          "effective_gate_mean": 0.1649080403149128,
+          "effective_gate_min": 0.09398986399173737,
+          "mean_nll": 3.376689039170742,
+          "step": 20000
+        },
+        {
+          "delta_vs_rope": -0.015228774398565292,
+          "effective_gate_max": 0.3279389441013336,
+          "effective_gate_mean": 0.1445074314251542,
+          "effective_gate_min": 0.07926531136035919,
+          "mean_nll": 3.335337655618787,
+          "step": 25000
+        },
+        {
+          "delta_vs_rope": -0.012931467965245247,
+          "effective_gate_max": 0.2821788489818573,
+          "effective_gate_mean": 0.12785072159022093,
+          "effective_gate_min": 0.06762408465147018,
+          "mean_nll": 3.3028716072440147,
+          "step": 30000
+        },
+        {
+          "delta_vs_rope": -0.012889191508293152,
+          "effective_gate_max": 0.24291418492794037,
+          "effective_gate_mean": 0.11536334501579404,
+          "effective_gate_min": 0.05865068361163139,
+          "mean_nll": 3.280404482036829,
+          "step": 35000
+        },
+        {
+          "delta_vs_rope": -0.010757854208350182,
+          "effective_gate_max": 0.21174165606498718,
+          "effective_gate_mean": 0.1040083421394229,
+          "effective_gate_min": 0.053086645901203156,
+          "mean_nll": 3.260852087289095,
+          "step": 40000
+        },
+        {
+          "delta_vs_rope": -0.010927744209766388,
+          "effective_gate_max": 0.18379861116409302,
+          "effective_gate_mean": 0.09573804074898362,
+          "effective_gate_min": 0.04764823243021965,
+          "mean_nll": 3.2379475980997086,
+          "step": 45000
+        },
+        {
+          "delta_vs_rope": -0.010491292923688889,
+          "effective_gate_max": 0.16110269725322723,
+          "effective_gate_mean": 0.08745116600766778,
+          "effective_gate_min": 0.04387583211064339,
+          "mean_nll": 3.2192862927913666,
+          "step": 50000
+        },
+        {
+          "delta_vs_rope": -0.010429032146930695,
+          "effective_gate_max": 0.14307552576065063,
+          "effective_gate_mean": 0.0805412014015019,
+          "effective_gate_min": 0.039013687521219254,
+          "mean_nll": 3.2018069308251143,
+          "step": 55000
+        },
+        {
+          "delta_vs_rope": -0.010864222422242165,
+          "effective_gate_max": 0.12559755146503448,
+          "effective_gate_mean": 0.07419783109799027,
+          "effective_gate_min": 0.03654354438185692,
+          "mean_nll": 3.188345344737172,
+          "step": 60000
+        },
+        {
+          "delta_vs_rope": -0.009416773915290833,
+          "effective_gate_max": 0.11569220572710037,
+          "effective_gate_mean": 0.06822991790249944,
+          "effective_gate_min": 0.033636488020420074,
+          "mean_nll": 3.176042268052697,
+          "step": 65000
+        },
+        {
+          "delta_vs_rope": -0.009668007493019104,
+          "effective_gate_max": 0.1029706597328186,
+          "effective_gate_mean": 0.0638619177043438,
+          "effective_gate_min": 0.031587012112140656,
+          "mean_nll": 3.159710042178631,
+          "step": 70000
+        },
+        {
+          "delta_vs_rope": -0.009406233206391335,
+          "effective_gate_max": 0.09499062597751617,
+          "effective_gate_mean": 0.059059584280475974,
+          "effective_gate_min": 0.02857094816863537,
+          "mean_nll": 3.146626753732562,
+          "step": 75000
+        },
+        {
+          "delta_vs_rope": -0.008839763700962067,
+          "effective_gate_max": 0.08722458779811859,
+          "effective_gate_mean": 0.054766875226050615,
+          "effective_gate_min": 0.02580108866095543,
+          "mean_nll": 3.1309952046722174,
+          "step": 80000
+        },
+        {
+          "delta_vs_rope": -0.00856020487844944,
+          "effective_gate_max": 0.08040481805801392,
+          "effective_gate_mean": 0.05056395917199552,
+          "effective_gate_min": 0.02312486432492733,
+          "mean_nll": 3.1147627606987953,
+          "step": 85000
+        },
+        {
+          "delta_vs_rope": -0.008205387741327286,
+          "effective_gate_max": 0.07551851868629456,
+          "effective_gate_mean": 0.0468444749712944,
+          "effective_gate_min": 0.02194361388683319,
+          "mean_nll": 3.1006903667002916,
+          "step": 90000
+        },
+        {
+          "delta_vs_rope": -0.008010121062397957,
+          "effective_gate_max": 0.07006025314331055,
+          "effective_gate_mean": 0.04402453755028546,
+          "effective_gate_min": 0.020874230191111565,
+          "mean_nll": 3.0874041207134724,
+          "step": 95000
+        },
+        {
+          "delta_vs_rope": -0.007706532254815102,
+          "effective_gate_max": 0.06855566799640656,
+          "effective_gate_mean": 0.042519857408478856,
+          "effective_gate_min": 0.0199115052819252,
+          "mean_nll": 3.07729709148407,
+          "step": 100000
+        }
+      ],
+      "elapsed_seconds": 13197.851688221039,
+      "label": "modern + scalar pre-Q/K + RoPE",
+      "mean_nll": 3.14115042303456,
+      "metrics_finite": true,
+      "non_embedding_head_parameters": 56636936,
+      "optimizer_metrics_finite": true,
+      "peak_allocated_mib": 13092.19580078125,
+      "peak_reserved_mib": 13372.0,
+      "position_parameters": 8,
+      "target_tokens_per_second": 247990.76071760023,
+      "total_parameters": 95271176
+    }
+  },
+  "protocol": "paper/MODERN_BACKBONE_PROTOCOL.md",
+  "scalar_minus_rope": {
+    "contiguous_block_32_bootstrap_ci95": [
+      -0.013889693142846226,
+      -0.010482764727203178
+    ],
+    "iid_bootstrap_ci95": [
+      -0.013708006596425548,
+      -0.010668530419934543
+    ],
+    "mean_delta": -0.012201133416965604
+  },
+  "scope": "phase59_modern_backbone_transfer",
+  "sequence_batch": 32,
+  "training_seed": 123,
+  "training_steps": 100000,
+  "transfer_gate": {
+    "all_metrics_finite": true,
+    "block_32_interval_below_zero": true,
+    "materiality_threshold": -0.01,
+    "mean_pass": true,
+    "next": "eligible for a separately frozen modern rank-32 arm",
+    "pass": true
+  }
+}

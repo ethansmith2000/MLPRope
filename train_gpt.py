@@ -196,6 +196,9 @@ DEFAULT_CONFIG = {
     "n_head": 8,
     "ff_mult": 4,
     "ff_hidden_dim": None,
+    # Bundled paper-transfer axis. The default preserves the historical
+    # LayerNorm/GeGLU/untied architecture exactly.
+    "backbone_variant": "controlled",
     # Optional close parameter-match control: widen only selected FFN layers.
     "ff_widened_hidden_dim": None,
     "ff_widened_layers": [],
@@ -325,6 +328,8 @@ def position_run_tag(cfg: dict) -> str:
         extras.append("learned-absolute")
     if cfg.get("use_alibi", False):
         extras.append("alibi")
+    if cfg.get("backbone_variant", "controlled") == "modern":
+        extras.append("modern")
     rope_fraction = float(cfg.get("rope_fraction", 1.0))
     if rope_fraction != 1.0:
         extras.append(f"rope{int(round(100 * rope_fraction))}")
@@ -354,6 +359,8 @@ def position_run_tag(cfg: dict) -> str:
                 "extent": cfg.get("rel_extent") or cfg["model_position_extent"],
             },
         }
+        if cfg.get("backbone_variant", "controlled") == "modern":
+            canonical["model_context"]["backbone_variant"] = "modern"
         digest = hashlib.sha256(
             json.dumps(
                 canonical,
@@ -556,6 +563,17 @@ def load_config(cli_args):
     model_dim = int(cfg["hidden_size"])
     depth = int(cfg["depth"])
     heads = int(cfg["n_head"])
+    if cfg["backbone_variant"] not in {"controlled", "modern"}:
+        raise ValueError("backbone_variant must be 'controlled' or 'modern'")
+    ff_hidden = cfg["ff_hidden_dim"]
+    if ff_hidden is not None:
+        if isinstance(ff_hidden, bool) or not isinstance(ff_hidden, int):
+            raise TypeError("ff_hidden_dim must be an integer or null")
+        if ff_hidden <= 0:
+            raise ValueError("ff_hidden_dim must be positive")
+    elif cfg["backbone_variant"] == "modern":
+        ff_hidden = math.ceil(math.ceil(model_dim * 8 / 3) / 64) * 64
+    cfg["ff_hidden_dim"] = ff_hidden
     widened_hidden = cfg["ff_widened_hidden_dim"]
     if widened_hidden is not None:
         widened_hidden = int(widened_hidden)
@@ -578,6 +596,8 @@ def load_config(cli_args):
             "ff_widened_hidden_dim is required when ff_widened_layers is set"
         )
     cfg["ff_widened_layers"] = normalized_widened_layers
+    if cfg["backbone_variant"] == "modern" and normalized_widened_layers:
+        raise ValueError("the modern backbone does not support selective FFN widening")
     rope_theta = float(cfg["rope_theta"])
     if not isinstance(cfg["use_rope"], bool):
         raise TypeError("use_rope must be a boolean")
@@ -616,6 +636,8 @@ def load_config(cli_args):
         )
     if not isinstance(cfg["qk_projection_bias"], bool):
         raise TypeError("qk_projection_bias must be a boolean")
+    if cfg["backbone_variant"] == "modern" and cfg["qk_projection_bias"]:
+        raise ValueError("the modern backbone requires qk_projection_bias=false")
     rope_frequency_mode = cfg.pop("rope_frequency_mode")
     rope_frequency = cfg.pop("rope_frequency")
     if rope_frequency_mode != "fixed" or not isinstance(rope_frequency, dict):
@@ -1038,6 +1060,7 @@ def make_model(args, vocab_size):
         rope_fraction=args.rope_fraction,
         use_alibi=args.use_alibi,
         use_learned_absolute_position=args.use_learned_absolute_position,
+        backbone_variant=args.backbone_variant,
     )
 
 
@@ -1762,6 +1785,7 @@ def main():
             "rope_fraction": args.rope_fraction,
             "use_alibi": args.use_alibi,
             "use_learned_absolute_position": args.use_learned_absolute_position,
+            "backbone_variant": args.backbone_variant,
             "qk_projection_bias": args.qk_projection_bias,
             "qk_preprojection": args.qk_preprojection,
             "input_sinusoid": args.input_sinusoid,

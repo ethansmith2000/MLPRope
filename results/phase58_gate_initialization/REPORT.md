@@ -12,6 +12,8 @@
 - Direct alpha=0.1 minus direct alpha=1.0: `+0.051794` NLL.
 - IID 95% interval: `[+0.050108, +0.053492]`.
 - Contiguous-block-32 95% interval: `[+0.049574, +0.054039]`.
+- Direct alpha=0.1 minus scaled alpha=0.1g: `-0.008214 [-0.009897, -0.006586]`.
+- Scaled alpha=0.1g minus fixed alpha=0.1: `-0.000098 [-0.001435, +0.001164]`.
 - No arm passed the frozen promotion rule.
 - All training and optimizer metrics finite: **True**.
 

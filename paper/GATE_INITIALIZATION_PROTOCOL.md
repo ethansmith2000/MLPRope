@@ -1,6 +1,7 @@
 # Phase 58 protocol: scalar-carrier initialization audit
 
-Status: frozen before GPU preflight or outcome inspection on 2026-09-18.
+Status: frozen before GPU preflight or outcome inspection on 2026-09-18;
+completed on 2026-09-18 with no arm promoted.
 
 ## Question
 

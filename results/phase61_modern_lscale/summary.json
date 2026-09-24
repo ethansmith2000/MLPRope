@@ -1,0 +1,328 @@
+{
+  "checkpoint_cleanup": {
+    "event_count": 2,
+    "reclaimed_bytes": 4879989998,
+    "runs_with_removed_checkpoints": [
+      "phase61-modern-lscale-rope-lr1p2e3-seed123-b32-s100000-h1024d12",
+      "phase61-modern-lscale-scalar-qkpre-lr1p2e3-seed123-b32-s100000-h1024d12"
+    ]
+  },
+  "context": 1024,
+  "final_holdout": {
+    "blocks": 1024,
+    "start_batch": 11264
+  },
+  "inference_limit": "One training seed; paired block intervals measure final-stream precision, not seed variability or attribution within the modern bundle.",
+  "late_curve": {
+    "deltas": [
+      -0.003840029239654541,
+      -0.003680754452943802,
+      -0.0038622431457042694,
+      -0.003774881362915039,
+      -0.0031314147636294365
+    ],
+    "steps": [
+      80000,
+      85000,
+      90000,
+      95000,
+      100000
+    ]
+  },
+  "learning_rate": 0.0012,
+  "methods": {
+    "rope": {
+      "block_nll_standard_error": 0.010524257268751733,
+      "development": [
+        {
+          "mean_nll": 3.644291777163744,
+          "step": 5000
+        },
+        {
+          "mean_nll": 3.4430105462670326,
+          "step": 10000
+        },
+        {
+          "mean_nll": 3.3429500684142113,
+          "step": 15000
+        },
+        {
+          "mean_nll": 3.282608447596431,
+          "step": 20000
+        },
+        {
+          "mean_nll": 3.234431067481637,
+          "step": 25000
+        },
+        {
+          "mean_nll": 3.1947037391364574,
+          "step": 30000
+        },
+        {
+          "mean_nll": 3.169837271794677,
+          "step": 35000
+        },
+        {
+          "mean_nll": 3.143178580328822,
+          "step": 40000
+        },
+        {
+          "mean_nll": 3.1199049819260836,
+          "step": 45000
+        },
+        {
+          "mean_nll": 3.0976911317557096,
+          "step": 50000
+        },
+        {
+          "mean_nll": 3.078897124156356,
+          "step": 55000
+        },
+        {
+          "mean_nll": 3.0617839954793453,
+          "step": 60000
+        },
+        {
+          "mean_nll": 3.0458728224039078,
+          "step": 65000
+        },
+        {
+          "mean_nll": 3.028159834444523,
+          "step": 70000
+        },
+        {
+          "mean_nll": 3.012895254418254,
+          "step": 75000
+        },
+        {
+          "mean_nll": 2.994569271802902,
+          "step": 80000
+        },
+        {
+          "mean_nll": 2.9777727518230677,
+          "step": 85000
+        },
+        {
+          "mean_nll": 2.961588797159493,
+          "step": 90000
+        },
+        {
+          "mean_nll": 2.948152307420969,
+          "step": 95000
+        },
+        {
+          "mean_nll": 2.9368098536506295,
+          "step": 100000
+        }
+      ],
+      "elapsed_seconds": 27343.091264560935,
+      "label": "modern L + standard RoPE",
+      "mean_nll": 3.0180721497163177,
+      "metrics_finite": true,
+      "optimizer_metrics_finite": null,
+      "peak_allocated_mib": 22303.52880859375,
+      "peak_reserved_mib": 22588.0,
+      "position_parameters": 0,
+      "target_tokens_per_second": 119699.16818593319,
+      "total_parameters": 203321344
+    },
+    "scalar-qkpre": {
+      "block_nll_standard_error": 0.010559568774140871,
+      "development": [
+        {
+          "delta_vs_rope": -0.010358626022934914,
+          "effective_gate_max": 0.6350405216217041,
+          "effective_gate_mean": 0.3048849068582058,
+          "effective_gate_min": 0.15991012752056122,
+          "mean_nll": 3.633933151140809,
+          "step": 5000
+        },
+        {
+          "delta_vs_rope": -0.003048514947295189,
+          "effective_gate_max": 0.5356769561767578,
+          "effective_gate_mean": 0.22244489192962646,
+          "effective_gate_min": 0.12860247492790222,
+          "mean_nll": 3.4399620313197374,
+          "step": 10000
+        },
+        {
+          "delta_vs_rope": 0.0008942801505327225,
+          "effective_gate_max": 0.46302756667137146,
+          "effective_gate_mean": 0.18301096558570862,
+          "effective_gate_min": 0.11213696748018265,
+          "mean_nll": 3.343844348564744,
+          "step": 15000
+        },
+        {
+          "delta_vs_rope": -0.001535259187221527,
+          "effective_gate_max": 0.40791603922843933,
+          "effective_gate_mean": 0.15896055164436498,
+          "effective_gate_min": 0.10159164667129517,
+          "mean_nll": 3.2810731884092093,
+          "step": 20000
+        },
+        {
+          "delta_vs_rope": 9.38214361667633e-06,
+          "effective_gate_max": 0.36491283774375916,
+          "effective_gate_mean": 0.14096988054613271,
+          "effective_gate_min": 0.08714204281568527,
+          "mean_nll": 3.2344404496252537,
+          "step": 25000
+        },
+        {
+          "delta_vs_rope": -0.001003112643957138,
+          "effective_gate_max": 0.3279998302459717,
+          "effective_gate_mean": 0.1249026699612538,
+          "effective_gate_min": 0.07836674153804779,
+          "mean_nll": 3.1937006264925003,
+          "step": 30000
+        },
+        {
+          "delta_vs_rope": -0.004435241222381592,
+          "effective_gate_max": 0.29708167910575867,
+          "effective_gate_mean": 0.11467562429606915,
+          "effective_gate_min": 0.07139100879430771,
+          "mean_nll": 3.165402030572295,
+          "step": 35000
+        },
+        {
+          "delta_vs_rope": 0.002772059291601181,
+          "effective_gate_max": 0.26527780294418335,
+          "effective_gate_mean": 0.10584892146289349,
+          "effective_gate_min": 0.06549179553985596,
+          "mean_nll": 3.1459506396204233,
+          "step": 40000
+        },
+        {
+          "delta_vs_rope": -0.003215635195374489,
+          "effective_gate_max": 0.24313557147979736,
+          "effective_gate_mean": 0.09792607588072617,
+          "effective_gate_min": 0.05733208358287811,
+          "mean_nll": 3.116689346730709,
+          "step": 45000
+        },
+        {
+          "delta_vs_rope": -0.003289753571152687,
+          "effective_gate_max": 0.2192945033311844,
+          "effective_gate_mean": 0.09032950301965077,
+          "effective_gate_min": 0.052668262273073196,
+          "mean_nll": 3.094401378184557,
+          "step": 50000
+        },
+        {
+          "delta_vs_rope": -0.00493943877518177,
+          "effective_gate_max": 0.19582097232341766,
+          "effective_gate_mean": 0.08401010526965062,
+          "effective_gate_min": 0.04710474610328674,
+          "mean_nll": 3.073957685381174,
+          "step": 55000
+        },
+        {
+          "delta_vs_rope": -0.004419531673192978,
+          "effective_gate_max": 0.18223002552986145,
+          "effective_gate_mean": 0.07796556161095698,
+          "effective_gate_min": 0.04301415756344795,
+          "mean_nll": 3.0573644638061523,
+          "step": 60000
+        },
+        {
+          "delta_vs_rope": -0.0036385711282491684,
+          "effective_gate_max": 0.1673280894756317,
+          "effective_gate_mean": 0.07259096950292587,
+          "effective_gate_min": 0.041955191642045975,
+          "mean_nll": 3.0422342512756586,
+          "step": 65000
+        },
+        {
+          "delta_vs_rope": -0.0025023706257343292,
+          "effective_gate_max": 0.15377579629421234,
+          "effective_gate_mean": 0.06760210543870926,
+          "effective_gate_min": 0.03640151396393776,
+          "mean_nll": 3.0256574638187885,
+          "step": 70000
+        },
+        {
+          "delta_vs_rope": -0.0018680170178413391,
+          "effective_gate_max": 0.13911375403404236,
+          "effective_gate_mean": 0.06244421564042568,
+          "effective_gate_min": 0.0329115055501461,
+          "mean_nll": 3.0110272374004126,
+          "step": 75000
+        },
+        {
+          "delta_vs_rope": -0.003840029239654541,
+          "effective_gate_max": 0.13151915371418,
+          "effective_gate_mean": 0.05878679050753514,
+          "effective_gate_min": 0.03171861916780472,
+          "mean_nll": 2.9907292425632477,
+          "step": 80000
+        },
+        {
+          "delta_vs_rope": -0.003680754452943802,
+          "effective_gate_max": 0.12135389447212219,
+          "effective_gate_mean": 0.054877704164634146,
+          "effective_gate_min": 0.02726076729595661,
+          "mean_nll": 2.974091997370124,
+          "step": 85000
+        },
+        {
+          "delta_vs_rope": -0.0038622431457042694,
+          "effective_gate_max": 0.11368761211633682,
+          "effective_gate_mean": 0.05090787820518017,
+          "effective_gate_min": 0.025561142712831497,
+          "mean_nll": 2.9577265540137887,
+          "step": 90000
+        },
+        {
+          "delta_vs_rope": -0.003774881362915039,
+          "effective_gate_max": 0.10840946435928345,
+          "effective_gate_mean": 0.04809601775680979,
+          "effective_gate_min": 0.023244686424732208,
+          "mean_nll": 2.944377426058054,
+          "step": 95000
+        },
+        {
+          "delta_vs_rope": -0.0031314147636294365,
+          "effective_gate_max": 0.10568495094776154,
+          "effective_gate_mean": 0.04649681209897002,
+          "effective_gate_min": 0.02216503955423832,
+          "mean_nll": 2.933678438887,
+          "step": 100000
+        }
+      ],
+      "elapsed_seconds": 27153.36241755297,
+      "label": "modern L + scalar pre-Q/K + RoPE",
+      "mean_nll": 3.014530395856127,
+      "metrics_finite": true,
+      "optimizer_metrics_finite": true,
+      "peak_allocated_mib": 23118.80224609375,
+      "peak_reserved_mib": 23408.0,
+      "position_parameters": 12,
+      "target_tokens_per_second": 120535.5428793689,
+      "total_parameters": 203321356
+    }
+  },
+  "protocol": "paper/MODERN_LSCALE_PROTOCOL.md",
+  "registered_decisions": {
+    "all_metrics_finite": true,
+    "material_scale_transfer": false,
+    "materiality_threshold": -0.01,
+    "next": "scale transfer supports the primary method; stop local tuning",
+    "positive_scale_transfer": true
+  },
+  "scalar_minus_rope": {
+    "contiguous_block_32_bootstrap_ci95": [
+      -0.00538220665184781,
+      -0.0016687603754689982
+    ],
+    "iid_bootstrap_ci95": [
+      -0.0050507447507698085,
+      -0.0019948966131778448
+    ],
+    "mean_delta": -0.0035417538601905107
+  },
+  "scope": "phase61_modern_lscale_transfer",
+  "sequence_batch": 32,
+  "training_seed": 123,
+  "training_steps": 100000
+}
